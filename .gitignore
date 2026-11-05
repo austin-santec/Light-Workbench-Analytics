@@ -1,0 +1,31 @@
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+.local/
+*.log
+*.tmp
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.db
+*.sqlite*
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+# Preserve the supplied reference locally; its runtime has no supplied license.
+Claude-generated analytics dashboard sample/
