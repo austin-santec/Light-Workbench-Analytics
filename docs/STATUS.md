@@ -1,41 +1,37 @@
-# Milestone 2 status
+# Milestone 3 status
 
-Updated November 5, 2026. Milestones 0–2 are complete. Milestone 3 is not started and requires separate authorization.
+Updated November 5, 2026. **Stage A is complete; Stage B is pending by explicit user instruction. No database connection was opened.** Milestone 4 is not started.
 
-## Completed work
+## Completed Stage A
 
-- Started clean on `main` at approved M1 baseline `94849723fc7c839c956e14aaa4331942d1313085`, matching the supplied `origin/main`. The existing **Analightics** directory spelling is unchanged.
-- Added independent `backend/` packaging and a conventional CPython 3.14.7 x64 virtual environment (Python requirement: 3.12+). Dependencies are declared in `pyproject.toml`, with a tested version-constraint snapshot. FastAPI TestClient uses current Starlette's recommended HTTPX2, avoiding the deprecated HTTPX compatibility path.
-- Added a small app factory, Pydantic settings/DTOs, three versioned GET endpoints, six deterministic DEMO runs, exact optional filters, bounded offset/limit pagination and explicit empty results. No KPI calculations or duplicate frontend mock engine.
-- The launcher binds only to loopback (default `127.0.0.1:8000`), rejects external host configuration, keeps CORS absent by default and disables request access logs. Optional sanitized settings example is committed; actual `.env` files remain ignored.
-- Added consistent validation/404/405/500 JSON errors. Unexpected exceptions are caught before Uvicorn can emit their raw text; local diagnostics retain exception type/stack locations without input values, source lines or locals. Response validation failures receive the same sanitized 500.
-- Documented Windows setup, contracts/examples/errors and proposed future API boundaries. Consulted only the related repository's database/data architecture docs at pinned commit `810ec42c46ed656eda90ddb5f14dec11fa77a2d8`; no production application execution or modification.
-- Frontend `src/`, `public/`, package manifests, browser scripts and design assets are unchanged from M1. The only frontend tooling adjustment excludes `backend/**` from ESLint to avoid linting JavaScript bundled in Python's virtual environment. Git ignores also exclude Python build/egg metadata.
+- Started clean on `main` at approved M2 baseline `5610652d6ede76fc98f1b5515f35d7951a87850e`, matching `origin/main`. Preserved the existing **Analightics** directory and the separate source repository's two pre-existing documentation edits.
+- Read-only review of the related local source at `02ec8f831b71a0c593cdf8cc2b3576723c978373`: six SQL migrations, migration runner, reporting repositories/service/lifecycle policy and four architecture documents. Recorded actual dbo objects, types, FKs, assignment ownership, roles/current views, history and eligibility distinctions in `REPORTING_DATABASE.md`. No source application/utilities were imported or run.
+- Added internal `app/reporting/`: environment-only, disabled-by-default approval configuration; optional lazy pyodbc adapter; read-only repository protocol/implementation; schema metadata; internal typed run models; local diagnostic emitting sanitized states/counts only. No new HTTP routes, automatic startup probes or React API wiring.
+- Exact approved target matching, explicit non-production/dedicated-identity declarations, fixed encrypted certificate-validated ODBC 18 connections, Windows or explicit SQL authentication, bounded login/query timeouts and deterministic cursor/connection cleanup. Permissions enforce read-only access; intent hints and SQL text tests are secondary guards.
+- Added current-database/effective-permission gates, exact migration ID/name/checksum checks and consumed-column checks. Reads return a bounded run page joined through its historical assignment to unit/switch context; explicit projection, required UTC period, bound values, stable ordering, capped limit/offset and one extra row for `has_more`. No counts/KPIs, JSON snapshots, measurement history, ORM or source writer code.
+- Updated setup, API boundary, durable instructions, milestone plan and notices. Optional pyodbc extra/constraint added; application service version and existing synthetic API contracts remain unchanged.
 
 ## Verification evidence
 
 | Check | Result |
 | --- | --- |
-| Backend install | Documented editable install with development extras and tested constraints succeeded; `pip check` passed. No database/hardware packages were added. |
-| Runtime | CPython 3.14.7, MSC AMD64, 64-bit. Python 3.12/3.13 and non-Windows hosts were not exercised. |
-| Backend tests | **42 passed**, no warnings: import/startup, liveness/info, demo/schema/UTC normalization, deterministic order, filters, empty results, pagination boundaries, invalid/unknown parameters, missing routes, methods, response validation, sanitized error logs, configuration, CORS and isolation. |
-| Isolation | Fresh-process import guards reject database/hardware/OP815 modules, socket connection attempts and DLL loads during app import/startup/route calls. Only Windows asyncio's internal loopback socket-pair construction is exempted. Tests use in-process TestClient; no database or hardware access. This is targeted regression coverage, not a security sandbox. |
-| Backend lint/format | `ruff check .` and `ruff format --check .` passed. |
-| Real HTTP startup | `python -m app` started successfully; listener verified at `127.0.0.1:8000`. Liveness, system info, filtered synthetic runs, `/openapi.json` and `/docs` returned 200. |
-| Frontend checks | Existing `npm.cmd run typecheck`, `npm.cmd run lint`, `npm.cmd run build` passed. No source/assets/dependency changes or visual design differences. |
-| Browser regression | Existing suite passed in real headless Edge against loopback production preview on 4174: **14 check groups**, 24 screen/theme/width captures plus narrow query chart. Four screens at 1440/768/390 px in light/dark; direct routes, active navigation, filters/table/unit/query controls, theme persistence, keyboard/focus, targeted contrast and no page overflow. |
-| Browser error/diagnostics | Delayed and failed lazy import/reload recovery passed. Normal flows had no console/page errors, missing assets or failed requests. The deliberate simulated 503 is isolated. |
-| Preserved references | All seven original Claude files still match their saved SHA-256 manifest; originals remain ignored. M0/M1 screenshots and visual reference documentation are unchanged. |
-| Git/publication | `git diff --check` and staged public-content audit passed before the focused commit/push. Virtual environment, runtime metadata, secrets, local evidence, original runtime and production data are excluded. The completion handoff/Git history records the resulting SHA and push outcome. |
+| Driver prerequisites only | CPython 3.14.7 x64, pyodbc 5.4.0 binary wheel installed/imported, local 64-bit Microsoft ODBC Driver 18 enumerated. No `connect()` against a real driver/server. Python 3.12/3.13 and other operating systems were not exercised. |
+| Offline backend suite | **122 passed**, no warnings: existing 42 foundation tests plus reporting configuration/approval/target gates, binding, UTC/date/page bounds, ordering, cleanup, login/query/fetch failures, missing/incompatible schema, permissions, sanitized logs, metadata projections, no-write SQL and local diagnostic behavior. |
+| Default isolation | Fresh-process guards block database/hardware imports, network connections and DLL loads while importing the HTTP app, constructing disabled reporting and exercising synthetic routes. Only Windows asyncio's internal socket-pair construction is exempted. Tests require no SQL Server or connected hardware. |
+| Source metadata cross-check | Offline text review matched all six normalized migration checksums and all 23 consumed column signatures against source DDL, including the nullable station field. No SQL was executed; this is not live schema verification. |
+| Backend lint/format/dependencies | Ruff lint/format checks and `pip check` passed. Documented optional editable install with tested constraints succeeded. |
+| Local diagnostic | `python -m app.reporting` returned `{"reporting": "disabled"}` without loading the driver or connecting. Enabled/compatible/incompatible/error paths were exercised only with fakes. |
+| Frontend | Existing TypeScript, lint and production build passed; `src/`, `public/`, frontend dependencies, browser scripts and design assets are unchanged from M2. No visual differences introduced. |
+| Browser regression | Existing real headless Edge suite passed against loopback production preview 4174: 14 groups, 24 screen/theme/width captures plus narrow query chart. Four screens, both themes, 1440/768/390 px; navigation, filters/table/unit/query controls, theme persistence, keyboard/focus/contrast, responsive overflow, loading/error/reload recovery. No normal-flow console/page errors, missing assets or failed requests. |
+| Preserved files | All seven original Claude references match their saved SHA-256 manifest. Reviewed source files and both pre-existing source documentation edits retain their hashes; source Git status is unchanged. |
+| Public/Git audit | `git diff --check` and staged audit passed before the focused commit/push. No secrets, actual connection details, real records/exports, source migration/writer files, vendor binaries, venv or original runtime files staged. Resulting SHA/push evidence is in the completion handoff/Git history. |
 
-Ignored local evidence: `.local/milestone2/` contains HTTP smoke results, frontend browser results/captures and read-only architecture context. Temporary verification servers are stopped after checks.
+Ignored evidence is in `.local/milestone3/`: schema text cross-check, source/reference hashes, browser results/captures and publication review. The temporary frontend verification server is stopped after checks. M0–M2 evidence remains in Git history and the existing design references.
 
-## Limits and next decisions
+## Pending Stage B and unresolved questions
 
-The frontend continues using its own synthetic fixtures; it does not consume the API. Liveness reports process responsiveness only; system info explicitly says the data source is disconnected. There is no SQL execution interface, ORM, database initialization, migrations, metrics, authentication, hosting or hardware/DLL integration. No separate production repository/database/workflows were changed.
+The user selected **complete Stage A; leave Stage B pending**. No server/database/identity was approved or configured for real access. No SQL objects, source application files, database permissions or production/hardware workflows were modified. No live compatibility, read-only identity, TLS, timeout behavior or query plan/cost is proven.
 
-The standard Swagger UI uses public CDN assets; its HTML/OpenAPI endpoints were verified by HTTP, not an interactive Swagger browser session. App licensing remains an owner decision; the original Claude runtime's unclear redistribution license remains contained by keeping it local and unshipped.
+Before Stage B, explicitly approve the exact non-production target and separate identity; have administrators provision/review narrow effective permissions and certificate trust; verify actual migration history, consumed columns/relationships and database settings; then run bounded reads and inspect plans without test writes or destructive setup. Use the acceptance checklist in `REPORTING_DATABASE.md`. There is no production-access authorization.
 
-Proposed M3: review schema, least-privilege access, sensitive fields and metric vocabulary, then design narrowly bounded server-side read-only access/tests against an approved non-production environment. Production access, API consumption by the frontend and final production DTOs require explicit review. See `PLAN.md` and `API_CONTRACTS.md`.
-
-M0/M1 evidence remains in Git history and `docs/design/`; their accepted dashboard behavior and limitations still apply. No further milestone was begun.
+M4 must resolve the lifecycle helper's production/complete/included policy versus the report service's production/included/not-superseded rule before final metrics. Also review partial/extra-only runs, unique units, attempts/current effective values, elapsed versus active timing availability, assignment-scoped replacement events/verification and stale saved analysis versus final disposition. Existing global date queries may need an administrator-reviewed index/plan strategy; current filters/caps/timeouts are not performance proof. No final KPI formulas or dashboard real-data integration were begun.

@@ -1,6 +1,8 @@
-# API contracts — Milestone 2
+# API contracts — Milestones 2–3
 
-Local base: `http://127.0.0.1:8000`. API version: `v1`; service version: `0.1.0`. All three implemented operations are GET, return JSON with HTTP 200 on success, and use Pydantic response models in `backend/app/schemas.py`. `/docs` and `/openapi.json` expose the generated specification. No authentication, SQL execution, resource-detail lookup, production metrics or frontend API integration exists.
+Local base: `http://127.0.0.1:8000`. API version: `v1`; service version: `0.1.0`. All three implemented operations are GET, return JSON with HTTP 200 on success, and use Pydantic response models in `backend/app/schemas.py`. `/docs` and `/openapi.json` expose the generated specification. No authentication, HTTP SQL execution, resource-detail lookup, production metrics or frontend API integration exists.
+
+Milestone 3 Stage A adds only an internal, offline-tested reporting repository and local diagnostic; neither is registered with FastAPI or imported at HTTP startup. No real serials, operator identities or reporting records are served. These three HTTP contracts remain unchanged, including `data_source: not_connected`: the HTTP application does not consume reporting data. No database-readiness HTTP endpoint was added. Local diagnostic states are documented in [REPORTING_DATABASE.md](REPORTING_DATABASE.md); Stage B remains pending by user instruction.
 
 ## Implemented operations
 
@@ -83,4 +85,4 @@ The separate Light Workbench [database architecture](https://github.com/austin-s
 | Quality and replacements | Reviewed criteria snapshots, events versus unique replaced channels, assignment scope, recommendation usage versus verified work, saved no-recovery analyses versus final manufacturing disposition, current versus stale historical analyses |
 | Saved reports | Allowlisted report definitions, reviewed read models, bounded filters/results and disclosure/export rules; no arbitrary SQL execution implied by the sample Queries screen |
 
-Future architecture remains **React → FastAPI → read-only SQL Server**. Review permissions, schema and metric definitions before any access implementation. React's colors, SVG geometry, chart formatting and view state remain client concerns; its synthetic presentation contracts are not production DTOs. Milestone 3 is not authorized by this document.
+Future architecture remains **React → FastAPI → read-only SQL Server**. Milestone 3's source/migration review and internal query boundary are documented separately in `REPORTING_DATABASE.md`, with a newer local source baseline. React's colors, SVG geometry, chart formatting and view state remain client concerns; its synthetic presentation contracts are not production DTOs. Final schemas/metrics and real-data API consumption remain deferred. No later milestone is authorized by this document.

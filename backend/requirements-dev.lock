@@ -1,5 +1,6 @@
 # Tested dependency constraints: Windows, CPython 3.14.7 x64, November 5, 2026.
 # Install with: python -m pip install -e ".[dev]" -c requirements-dev.lock
+# Add the reporting extra only when needed: -e ".[dev,reporting]"
 # Refresh intentionally from a clean venv; exclude the editable project/local paths.
 annotated-doc==0.0.5
 annotated-types==0.8.0
@@ -17,6 +18,7 @@ packaging==26.3
 pluggy==1.7.0
 pydantic==2.14.3
 pydantic-settings==2.16.2
+pyodbc==5.4.0
 pydantic_core==2.50.4
 Pygments==2.21.0
 pytest==9.2.0

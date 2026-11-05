@@ -43,6 +43,15 @@ ctypes.CDLL = no_connection
 if hasattr(ctypes, 'WinDLL'):
     ctypes.WinDLL = no_connection
 from app.main import app
+from app.reporting.adapter import ReportingError, SqlServerAdapter
+from app.reporting.config import ReportingSettings
+from app.reporting.repository import SqlServerReportingRepository
+try:
+    SqlServerReportingRepository(SqlServerAdapter(ReportingSettings())).check_schema()
+except ReportingError as error:
+    assert error.code == 'disabled'
+else:
+    raise AssertionError('Disabled reporting unexpectedly succeeded')
 with TestClient(app) as client:
     for route in ['/api/v1/health/live', '/api/v1/system/info', '/api/v1/demo/runs']:
         assert client.get(route).status_code == 200

@@ -1,6 +1,6 @@
 # Light Workbench Analytics
 
-A browser-based analytics design foundation for Light Workbench. Milestones 0 and 1 retain the supplied Claude dashboard and type its synthetic data. Milestone 2 adds an isolated local FastAPI foundation with six fictional example runs. The frontend still runs independently using its own fixtures. No SQL connection, authentication, production metrics, hardware integration, or hosting is implemented.
+A browser-based analytics design foundation for Light Workbench. Milestones 0–2 retain the Claude dashboard and establish an independent synthetic FastAPI foundation. Milestone 3 Stage A adds an offline-tested, opt-in SQL Server reporting adapter. Real integration (Stage B) is pending; no database connection was made. The frontend still runs independently using its own fixtures. No authentication, final production metrics, hardware integration, or hosting is implemented.
 
 ## Run locally
 
@@ -59,18 +59,33 @@ Invoke-RestMethod http://127.0.0.1:8000/api/v1/health/live
 
 ```text
 backend/
-  app/main.py            App factory, HTTP models, optional explicit CORS
+  app/main.py            App factory, middleware, routes, optional explicit CORS
   app/__main__.py        Validated loopback-only local launcher
   app/api.py             Three versioned GET routes
   app/core/              Settings and sanitized error handling/logging
   app/schemas.py         Pydantic request/response transport contracts
   app/services/demo.py   Six deterministic fictional runs; filter/page only
+  app/reporting/         Disabled-by-default, local-only SQL reporting/diagnostic
   tests/                 In-process API, configuration and isolation checks
   pyproject.toml         Runtime/development dependencies and check configuration
   requirements-dev.lock Tested dependency constraints
 ```
 
-See [API contracts](docs/API_CONTRACTS.md) for query parameters, response examples, errors and proposed future API boundaries. There is no SQL execution interface, database setup, or hardware dependency.
+See [API contracts](docs/API_CONTRACTS.md) for query parameters, response examples, errors and proposed future API boundaries. There is no HTTP SQL execution interface, automatic database setup, or hardware dependency.
+
+## Optional reporting foundation — Stage A only
+
+Read [reporting database guidance](docs/REPORTING_DATABASE.md) before configuring any target. The repository supports schema/permission checks and a bounded run-metadata page with unit/switch identity context. No reporting route is exposed through FastAPI. Synthetic endpoints remain unchanged.
+
+From `backend/`, installing the optional 64-bit adapter and checking the default disabled state is safe without SQL Server:
+
+```powershell
+.venv\Scripts\python.exe -m pip install -e ".[dev,reporting]" -c requirements-dev.lock
+.venv\Scripts\python.exe -m app.reporting
+# {"reporting": "disabled"}
+```
+
+Microsoft ODBC Driver 18 and pyodbc 5.4.0 were locally enumerated/imported on CPython 3.14 x64; no connection was opened. The main test suite uses fake database connections. Reporting configuration uses separate `LWA_REPORTING_*` environment variables only, never the source application's configuration or the HTTP app's `.env` file. Do not enable it or run `--verify` until the specific non-production target and dedicated read-only identity are approved. The user left Stage B pending. DBA provisioning, real TLS/permissions/schema verification and bounded reads are still required for integration acceptance.
 
 ## Frontend
 
@@ -101,4 +116,4 @@ docs/                    Design audit, proposed plan, status, notices
 
 Future architecture: **React → FastAPI → read-only SQL Server**. The browser must never access SQL Server. The separate Light Workbench repository and its database/hardware workflows are untouched.
 
-See [design reference](docs/DESIGN_REFERENCE.md), [status and evidence](docs/STATUS.md), [proposed milestones](docs/PLAN.md), and [third-party notices](docs/THIRD_PARTY.md). Milestone 2 is complete; Milestone 3 requires separate review and authorization.
+See [design reference](docs/DESIGN_REFERENCE.md), [status and evidence](docs/STATUS.md), [proposed milestones](docs/PLAN.md), and [third-party notices](docs/THIRD_PARTY.md). Milestone 3 Stage A is complete; Stage B is pending. Milestone 4 is not started and requires separate authorization.

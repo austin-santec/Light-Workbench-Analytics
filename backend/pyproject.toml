@@ -16,6 +16,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.3,<10", "httpx2>=2,<3", "ruff>=0.14,<1"]
+reporting = ["pyodbc>=5.4,<6"]
 
 [tool.setuptools.packages.find]
 include = ["app*"]
