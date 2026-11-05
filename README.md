@@ -1,6 +1,6 @@
 # Light Workbench Analytics
 
-A browser-based analytics design foundation for Light Workbench. Milestones 0 and 1 retain the supplied Claude dashboard while consolidating the frontend and typing its entirely synthetic data. No backend, SQL connection, authentication, or hosting is implemented.
+A browser-based analytics design foundation for Light Workbench. Milestones 0 and 1 retain the supplied Claude dashboard and type its synthetic data. Milestone 2 adds an isolated local FastAPI foundation with six fictional example runs. The frontend still runs independently using its own fixtures. No SQL connection, authentication, production metrics, hardware integration, or hosting is implemented.
 
 ## Run locally
 
@@ -27,6 +27,50 @@ npm.cmd run test:browser
 ```
 
 The browser check uses installed Microsoft Edge through `playwright-core`; it does not download a browser. Other environments can set `BROWSER_PATH` to a compatible Chromium executable. `BASE_URL` overrides the test URL; `QA_OUTPUT` overrides ignored `.local/qa/` for screenshots/results. The suite includes keyboard/contrast checks plus isolated delayed/failed imports to verify loading and reload recovery.
+
+## Backend (independent local process)
+
+Use conventional **64-bit Python 3.12+** (validated with CPython 3.14.7 x64). Keep its environment separate from the production application's Python. From the repository root in Windows PowerShell:
+
+```powershell
+# Select an installed 64-bit interpreter; substitute another 3.12+ version if needed.
+py -0p
+py -3.14 -m venv backend/.venv
+Set-Location backend
+.venv\Scripts\python.exe -m pip install -e ".[dev]" -c requirements-dev.lock
+.venv\Scripts\python.exe -m app
+```
+
+Open <http://127.0.0.1:8000/docs> for interactive API documentation; <http://127.0.0.1:8000/openapi.json> is the machine-readable contract. Swagger's UI loads its standard assets from a public CDN; JSON endpoints and in-process tests do not require that CDN. Stop with Ctrl+C. Run the frontend separately using the commands above; it does not call the API.
+
+FastAPI, Pydantic/Pydantic Settings and Uvicorn are the runtime stack. pytest, FastAPI TestClient, HTTPX2 and Ruff are development tools. Current Starlette recommends [HTTPX2 for TestClient](https://starlette.dev/testclient/); the deprecated HTTPX dependency is not needed. `pyproject.toml` declares dependencies; `requirements-dev.lock` constrains the tested resolution without machine-specific paths. Refresh that snapshot intentionally in a clean environment, then rerun checks. Python 3.12/3.13 have not been tested here.
+
+No configuration file is required. Optional `backend/.env` settings are illustrated in the sanitized [.env.example](backend/.env.example). Run from `backend/` so only that directory's `.env` is read. Environment variables override the file. Defaults: `LWA_APP_NAME="Light Workbench Analytics API"`, `LWA_ENVIRONMENT=development`, `LWA_LOG_LEVEL=info`, `LWA_HOST=127.0.0.1`, `LWA_PORT=8000`, `LWA_CORS_ORIGINS=[]`. Environment accepts `development`/`test`; host accepts loopback only (`127.0.0.1`/`::1`), port 1024–65535, and CORS accepts explicit loopback origins with ports. Keep CORS empty for this milestone. Use the supplied launcher; do not override Uvicorn to expose the process externally. Access logs are disabled to avoid echoing query values.
+
+In a second PowerShell terminal, from `backend/`:
+
+```powershell
+.venv\Scripts\python.exe -m pytest -q
+.venv\Scripts\python.exe -m ruff check .
+.venv\Scripts\python.exe -m ruff format --check .
+.venv\Scripts\python.exe -m pip check
+Invoke-RestMethod http://127.0.0.1:8000/api/v1/health/live
+```
+
+```text
+backend/
+  app/main.py            App factory, HTTP models, optional explicit CORS
+  app/__main__.py        Validated loopback-only local launcher
+  app/api.py             Three versioned GET routes
+  app/core/              Settings and sanitized error handling/logging
+  app/schemas.py         Pydantic request/response transport contracts
+  app/services/demo.py   Six deterministic fictional runs; filter/page only
+  tests/                 In-process API, configuration and isolation checks
+  pyproject.toml         Runtime/development dependencies and check configuration
+  requirements-dev.lock Tested dependency constraints
+```
+
+See [API contracts](docs/API_CONTRACTS.md) for query parameters, response examples, errors and proposed future API boundaries. There is no SQL execution interface, database setup, or hardware dependency.
 
 ## Frontend
 
@@ -57,4 +101,4 @@ docs/                    Design audit, proposed plan, status, notices
 
 Future architecture: **React → FastAPI → read-only SQL Server**. The browser must never access SQL Server. The separate Light Workbench repository and its database/hardware workflows are untouched.
 
-See [design reference](docs/DESIGN_REFERENCE.md), [status and evidence](docs/STATUS.md), [proposed milestones](docs/PLAN.md), and [third-party notices](docs/THIRD_PARTY.md). Milestone 2 is not started and requires authorization.
+See [design reference](docs/DESIGN_REFERENCE.md), [status and evidence](docs/STATUS.md), [proposed milestones](docs/PLAN.md), and [third-party notices](docs/THIRD_PARTY.md). Milestone 2 is complete; Milestone 3 requires separate review and authorization.
