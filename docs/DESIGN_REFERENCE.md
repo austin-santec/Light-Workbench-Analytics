@@ -21,7 +21,7 @@ The sample ran over local HTTP with its bundled scripts. All four screens were o
 ## Adaptation
 
 - Converted the four template trees to ordinary React TSX screens with direct bindings and state. Removed all custom runtime/browser evaluation requirements. No iframe or original vendor/runtime script ships in the app.
-- Reused original layout, navigation icons, cards, SVG charts, heatmaps, tables, synthetic fixture values and presentation calculations. Retained calculation modules in `src/mock/*.js` with typed state/activity boundaries for the incremental migration. TypeScript checks the application and boundaries, not all legacy calculation internals.
+- Reused original layout, navigation icons, cards, SVG charts, heatmaps, tables, synthetic fixture values and presentation calculations. M0 retained JavaScript calculation modules with typed boundaries; M1 migrated all four to strict TypeScript with explicit contracts and pure functions.
 - Added Vite, Tailwind, a manually adapted shadcn/ui button for theme switching, TanStack activity table, and Recharts for the query result bar chart. Routes are browser hashes and support direct reloads without a server router. Route imports have an actual loading fallback.
 - Replaced serials/operators with explicit `DEMO-*` identifiers and demo operator names. Removed connection/role/migration claims, automatic refresh claims and executed-query timings. All schema/SQL is illustrative text, with execution disabled.
 - Original files are ignored and protected from Vite file serving. They remain available locally but are **not published** because `support.js` licensing is unspecified and the originals contain production-like connection labels. A fresh clone runs independently. Versioned adapted screenshots in `docs/design/` preserve a distributable visual reference.
@@ -52,3 +52,14 @@ The sample's green/amber semantic status tones and orange heatmap ramp remain; o
 - Query result bars use Recharts with the same horizontal layout, series colors and data. Narrow tables/charts scroll within panels. Narrow navigation uses two columns; the unit channel map uses six columns for readable cells.
 
 Visual comparison is qualitative, not a pixel-diff assertion. Screens were inspected against the original at desktop and narrow sizes; recognizable information hierarchy and design identity were retained.
+
+## Milestone 1 refinements
+
+The accepted M0 screenshots in `docs/design/` remain unchanged. M1 reference captures are in `docs/design/milestone1/`; full before/after browser matrices remain local in `.local/milestone1/`.
+
+- One shared shell/sidebar now renders the same frame, icons, active states and offline block. Specialized analytical cards/charts remain screen-local. The configuration list is a semantic table with selectable buttons; its density, values and histogram arrangement remain recognizable.
+- Native disabled previews share a visible explanation and styling. Saved views are static preview text; the Unit sidebar now says Example units instead of implying collected browsing history.
+- Scope descriptions clarify that Overview range/purpose affect counts/yields/outcomes/activity; average time follows range/configuration only. Historical charts and sparklines stay fixed. Failure channel count and Unit wavelength selection affect their own charts; query title search does not change result data.
+- Shared segmented controls retain button/pressed semantics. Keyboard navigation, skip-to-content, page focus, empty-state resets, schema disclosure relationships, and horizontally scrollable panels are accessible without mouse hover.
+- Workbench surfaces and brand red remain. Selected navigation text uses darker red in light mode and a lighter Workbench red in dark mode; dark chart strokes/focus indicators are lighter for visibility. Disabled previews are visibly muted. These and the short scope notes are deliberate visual differences, not a redesign.
+- Failed route imports retain navigation and show an actionable reload state. Synthetic calculation outputs were compared with the accepted baseline across 452 states; no numerical changes were introduced.

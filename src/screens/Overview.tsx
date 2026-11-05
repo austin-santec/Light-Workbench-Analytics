@@ -1,67 +1,19 @@
+import { ConfigurationTable } from './ConfigurationTable';
+import { TIME_RANGES, PRODUCTION_ONLY, togglePurpose } from '../mock/presentation';
+import { PreviewButton, PreviewSelect } from '../components/PreviewControl';
+import { SegmentedControl } from '../components/SegmentedControl';
 import { Fragment, useState } from 'react';
 import { RecentActivity } from '../components/RecentActivity';
 import { css } from '../lib/css';
 import { getOverviewValues } from '../mock/overview';
 import type { OverviewState } from '../types';
 
-export default function Overview({ dark }: { dark: boolean }) {
+export default function Overview() {
  const [state, setState] = useState<OverviewState>({ range: 'today', cfg: 0, purp: { production: true, engineering: false, training: false, calibration: false } });
- const values = getOverviewValues(state, patch => setState(current => ({ ...current, ...patch })), dark);
- const { accent, themeClass, d, ranges, kpis, purposes, scope, resetPurpose, cfgRows, sel, hist, meanX, meanLX, outSegs, outLegend, linePath, areaPath, lineGrid, dots, avgY, lastX, lastY, bars, barGrid, stations, cells, legendCells, runs } = values;
+ const resetPurpose = () => setState(current => ({ ...current, purp: { ...PRODUCTION_ONLY } }));
+ const values = getOverviewValues(state);
+ const { accent, d, kpis, purposes, scope, cfgRows, sel, hist, meanX, meanLX, outSegs, outLegend, linePath, areaPath, lineGrid, dots, avgY, lastX, lastY, bars, barGrid, stations, cells, legendCells, runs } = values;
  return (<>
-
-
-<div className={"lw " + String(themeClass)} style={css("display:flex;flex-wrap:wrap;min-height:100vh;background:var(--bg);color:var(--ink);font-family:'Geist',system-ui,sans-serif;font-size:14px;line-height:1.45")}>
-
-
-  <aside style={css("flex:1 1 236px;max-width:100%;background:var(--panel);border-right:1px solid var(--line);padding:22px 14px;display:flex;flex-direction:column;gap:24px")}>
-    <div style={css("display:flex;align-items:center;gap:11px;padding:0 8px")}>
-      <svg width="32" height="32" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" style={css("fill:" + String(accent))}></rect><path d="M6 20.5h6.5L16 10l3.5 10.5H26" style={css("fill:none;stroke:#fff;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round")}></path></svg>
-      <div style={css("display:flex;flex-direction:column;line-height:1.15")}>
-        <span style={css("font-weight:600;font-size:15px")}>Light Workbench</span>
-        <span style={css("font-size:12.5px;color:var(--muted)")}>Analytics</span>
-      </div>
-    </div>
-
-    <nav aria-label="Main" style={css("display:flex;flex-direction:column;gap:2px")}>
-      <span style={css("padding:0 10px 6px;font-size:11.5px;font-weight:600;color:var(--muted);letter-spacing:0.06em;text-transform:uppercase")}>Analyze</span>
-      <a href="#/" aria-current="page" style={css("display:flex;align-items:center;gap:11px;min-height:44px;padding:0 10px;border-radius:9px;text-decoration:none;font-weight:600;background:color-mix(in srgb," + String(accent) + " 11%,var(--panel));color:" + String(accent))}>
-        <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" style={css("fill:none;stroke:currentColor;stroke-width:1.9;stroke-linejoin:round")}><rect x="3" y="3" width="7.5" height="9" rx="1.6"></rect><rect x="13.5" y="3" width="7.5" height="5" rx="1.6"></rect><rect x="3" y="15" width="7.5" height="6" rx="1.6"></rect><rect x="13.5" y="11" width="7.5" height="10" rx="1.6"></rect></svg>
-        Overview
-      </a>
-      <a href="#/failures" className="nav-a" style={css("display:flex;align-items:center;gap:11px;min-height:44px;padding:0 10px;border-radius:9px;text-decoration:none;font-weight:500;color:var(--ink2)")}>
-        <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" style={css("fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round")}><path d="M4 8h13l-3-3.2M20 16H7l3 3.2"></path></svg>
-        Failures & replacements
-      </a>
-      <a href="#/unit" className="nav-a" style={css("display:flex;align-items:center;gap:11px;min-height:44px;padding:0 10px;border-radius:9px;text-decoration:none;font-weight:500;color:var(--ink2)")}>
-        <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" style={css("fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round")}><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="M15.5 15.5L21 21"></path></svg>
-        Unit lookup
-      </a>
-      <a href="#/queries" className="nav-a" style={css("display:flex;align-items:center;gap:11px;min-height:44px;padding:0 10px;border-radius:9px;text-decoration:none;font-weight:500;color:var(--ink2)")}>
-        <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" style={css("fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round")}><path d="M8 8l-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14"></path></svg>
-        Query console
-      </a>
-    </nav>
-
-    <nav aria-label="Saved views" style={css("display:flex;flex-direction:column;gap:2px")}>
-      <span style={css("padding:0 10px 6px;font-size:11.5px;font-weight:600;color:var(--muted);letter-spacing:0.06em;text-transform:uppercase")}>Saved views</span>
-      <a aria-disabled="true" title="Saved views are a design preview" className="nav-a" style={css("display:flex;align-items:center;gap:10px;min-height:40px;padding:0 10px;border-radius:9px;text-decoration:none;color:var(--ink2);font-size:13.5px")}><span style={css("width:8px;height:8px;border-radius:2px;background:var(--o1)")}></span>OSX-150 · SM · 48ch daily</a>
-      <a aria-disabled="true" title="Saved views are a design preview" className="nav-a" style={css("display:flex;align-items:center;gap:10px;min-height:40px;padding:0 10px;border-radius:9px;text-decoration:none;color:var(--ink2);font-size:13.5px")}><span style={css("width:8px;height:8px;border-radius:2px;background:var(--o3)")}></span>Station 2 · this week</a>
-      <a aria-disabled="true" title="Saved views are a design preview" className="nav-a" style={css("display:flex;align-items:center;gap:10px;min-height:40px;padding:0 10px;border-radius:9px;text-decoration:none;color:var(--ink2);font-size:13.5px")}><span style={css("width:8px;height:8px;border-radius:2px;background:var(--o2)")}></span>Multimode · last 30 days</a>
-    </nav>
-
-    <div style={css("margin-top:auto;display:flex;flex-direction:column;gap:8px;padding:14px;border-radius:12px;background:var(--panel2);border:1px solid var(--line2)")}>
-      <div style={css("display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600")}>
-        <span style={css("width:8px;height:8px;border-radius:50%;background:#2FB36B;box-shadow:0 0 0 3px color-mix(in srgb,#2FB36B 25%,transparent)")}></span>
-        Synthetic data · offline
-      </div>
-      <div style={css("font-family:'Geist Mono',monospace;font-size:12px;color:var(--muted);line-height:1.6")}>Milestone 0 · browser only<br  />Deterministic demo fixtures<br  />No database connection</div>
-      <span style={css("align-self:flex-start;font-size:11.5px;font-weight:600;color:var(--warn-fg);background:var(--warn-bg);padding:3px 9px;border-radius:999px")}>Sample data</span>
-    </div>
-  </aside>
-
-
-  <main tabIndex={-1} id="content" style={css("flex:999 1 560px;min-width:0;padding:26px 34px 44px;display:flex;flex-direction:column;gap:18px")}>
 
     <header style={css("display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:14px")}>
       <div style={css("display:flex;flex-direction:column;gap:4px")}>
@@ -70,50 +22,45 @@ export default function Overview({ dark }: { dark: boolean }) {
       </div>
       <div style={css("display:flex;flex-wrap:wrap;align-items:center;gap:8px")}>
         <span style={css("display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);padding-right:6px")}><span style={css("width:7px;height:7px;border-radius:50%;background:#2FB36B")}></span>Demo snapshot · Nov 5, 2026</span>
-        <button type="button" style={css("min-height:44px;padding:0 14px;border-radius:9px;border:1px solid var(--line);background:var(--panel);font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:8px")} disabled title="Design preview — available in a future milestone">
+        <PreviewButton type="button" style={css("min-height:44px;padding:0 14px;border-radius:9px;border:1px solid var(--line);background:var(--panel);font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:8px")}>
           <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true" style={css("fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round")}><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"></path></svg>
           Refresh
-        </button>
-        <button type="button" style={css("min-height:44px;padding:0 14px;border-radius:9px;border:1px solid var(--line);background:var(--panel);font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:8px")} disabled title="Design preview — available in a future milestone">
+        </PreviewButton>
+        <PreviewButton type="button" style={css("min-height:44px;padding:0 14px;border-radius:9px;border:1px solid var(--line);background:var(--panel);font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:8px")}>
           <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true" style={css("fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round")}><path d="M12 4v11M7 10l5 5 5-5M5 20h14"></path></svg>
           Export
-        </button>
-        <button type="button" style={css("min-height:44px;padding:0 16px;border-radius:9px;border:1px solid " + String(accent) + ";background:" + String(accent) + ";color:#fff;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:8px")} disabled title="Design preview — available in a future milestone">
+        </PreviewButton>
+        <PreviewButton type="button" style={css("min-height:44px;padding:0 16px;border-radius:9px;border:1px solid " + String(accent) + ";background:" + String(accent) + ";color:#fff;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:8px")}>
           <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true" style={css("fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round")}><path d="M10 14l4-4M8.5 11.5l-2 2a3.5 3.5 0 0 0 5 5l2-2M15.5 12.5l2-2a3.5 3.5 0 0 0-5-5l-2 2"></path></svg>
           Share view
-        </button>
+        </PreviewButton>
       </div>
     </header>
 
-
-    <p className="preview-note">Range and run purpose affect summary cards and recent activity. Charts retain their labeled demo periods. Other global controls are design previews.</p>
-    <section aria-label="Filters" style={css("display:flex;flex-wrap:wrap;align-items:center;gap:10px 12px;padding:10px;background:var(--panel);border:1px solid var(--line);border-radius:14px")}>
-      <div role="group" aria-label="Time range" style={css("display:flex;flex-wrap:wrap;background:var(--panel2);border:1px solid var(--line2);border-radius:10px;padding:3px;gap:2px")}>
-        {ranges.map((r, index0) => <Fragment key={index0}>
-          <button type="button" aria-pressed={r.pressed === 'true'} onClick={r.pick} style={css(r.style)}>{r.label}</button>
-        </Fragment>)}
-      </div>
+    <p id="overview-scope" className="preview-note">Summary range/purpose: counts, yields, outcomes and activity. Average time follows range/configuration only. Historical charts and sparklines stay fixed; configuration selects its histogram. Other controls are disabled previews.</p>
+    <section aria-label="Summary filters and global previews" aria-describedby="overview-scope" style={css("display:flex;flex-wrap:wrap;align-items:center;gap:10px 12px;padding:10px;background:var(--panel);border:1px solid var(--line);border-radius:14px")}>
+      <SegmentedControl label="Time range" options={TIME_RANGES} value={state.range} onChange={range => setState(current => ({ ...current, range }))} size="summary" describedBy="overview-scope" />
       <span aria-hidden="true" style={css("width:1px;height:28px;background:var(--line)")}></span>
       <label style={css("display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);font-weight:500")}>Model
-        <select style={css("min-height:40px;padding:0 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel);font-size:13.5px;font-weight:500")} disabled title="Design preview — available in a future milestone"><option >All models</option><option >OSX-150</option><option >OSX-100</option></select>
+        <PreviewSelect style={css("min-height:40px;padding:0 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel);font-size:13.5px;font-weight:500")}><option >All models</option><option >OSX-150</option><option >OSX-100</option></PreviewSelect>
       </label>
       <label style={css("display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);font-weight:500")}>Mode
-        <select style={css("min-height:40px;padding:0 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel);font-size:13.5px;font-weight:500")} disabled title="Design preview — available in a future milestone"><option >SM + MM</option><option >SM</option><option >MM</option></select>
+        <PreviewSelect style={css("min-height:40px;padding:0 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel);font-size:13.5px;font-weight:500")}><option >SM + MM</option><option >SM</option><option >MM</option></PreviewSelect>
       </label>
       <label style={css("display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);font-weight:500")}>Channels
-        <select style={css("min-height:40px;padding:0 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel);font-size:13.5px;font-weight:500")} disabled title="Design preview — available in a future milestone"><option >All</option><option >48</option><option >36</option><option >24</option></select>
+        <PreviewSelect style={css("min-height:40px;padding:0 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel);font-size:13.5px;font-weight:500")}><option >All</option><option >48</option><option >36</option><option >24</option></PreviewSelect>
       </label>
       <label style={css("display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);font-weight:500")}>Station
-        <select style={css("min-height:40px;padding:0 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel);font-size:13.5px;font-weight:500")} disabled title="Design preview — available in a future milestone"><option >All stations</option><option >Station 1</option><option >Station 2</option><option >Station 3</option><option >Station 4</option></select>
+        <PreviewSelect style={css("min-height:40px;padding:0 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel);font-size:13.5px;font-weight:500")}><option >All stations</option><option >Station 1</option><option >Station 2</option><option >Station 3</option><option >Station 4</option></PreviewSelect>
       </label>
       <label style={css("display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);font-weight:500")}>Operator
-        <select style={css("min-height:40px;padding:0 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel);font-size:13.5px;font-weight:500")} disabled title="Design preview — available in a future milestone"><option >Anyone</option><option >Demo operator A</option><option >Demo operator B</option><option >Demo operator C</option></select>
+        <PreviewSelect style={css("min-height:40px;padding:0 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel);font-size:13.5px;font-weight:500")}><option >Anyone</option><option >Demo operator A</option><option >Demo operator B</option><option >Demo operator C</option></PreviewSelect>
       </label>
       <div style={css("flex-basis:100%;height:0")} aria-hidden="true"></div>
-      <div role="group" aria-label="Run purpose" style={css("display:flex;flex-wrap:wrap;align-items:center;gap:6px")}>
+      <div role="group" aria-label="Run purpose" aria-describedby="overview-scope" style={css("display:flex;flex-wrap:wrap;align-items:center;gap:6px")}>
         <span style={css("font-size:12.5px;color:var(--muted);font-weight:500;padding:0 4px 0 2px")}>Run purpose</span>
         {purposes.map((p, index1) => <Fragment key={index1}>
-          <button type="button" aria-pressed={p.pressed === 'true'} onClick={p.toggle} style={css(p.style)}>
+          <button type="button" aria-pressed={p.pressed} onClick={() => setState(current => ({ ...current, purp: togglePurpose(current.purp, p.value) }))} style={css(p.style)}>
             <span style={css("width:14px;height:14px;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;border:1.5px solid " + String(p.boxBorder) + ";background:" + String(p.boxBg))}><svg width="10" height="10" viewBox="0 0 16 16" aria-hidden="true" style={css("fill:none;stroke:#fff;stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round;opacity:" + String(p.checkOp))}><path d="M3 8.5l3.2 3L13 4.5"></path></svg></span>
             {p.label}
             <span style={css("font-size:11.5px;font-weight:500;color:var(--muted);font-variant-numeric:tabular-nums")}>{p.count}</span>
@@ -121,7 +68,7 @@ export default function Overview({ dark }: { dark: boolean }) {
         </Fragment>)}
       </div>
       <label style={css("margin-left:auto;display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);font-weight:500")}>Analysis status
-        <select style={css("min-height:40px;padding:0 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel);font-size:13.5px;font-weight:500")} disabled title="Design preview — available in a future milestone"><option >Included only</option><option >Included + pending</option><option >Everything, incl. voided and superseded</option></select>
+        <PreviewSelect style={css("min-height:40px;padding:0 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel);font-size:13.5px;font-weight:500")}><option >Included only</option><option >Included + pending</option><option >Everything, incl. voided and superseded</option></PreviewSelect>
       </label>
     </section>
 
@@ -133,7 +80,6 @@ export default function Overview({ dark }: { dark: boolean }) {
         <button type="button" onClick={resetPurpose} style={css("margin-left:auto;min-height:34px;padding:0 12px;border-radius:8px;border:1px solid currentColor;background:transparent;color:inherit;font-weight:600;font-size:12.5px;cursor:pointer")}>Back to production only</button>
       </div>
     </>}
-
 
     <section aria-label="Key metrics" style={css("display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px")}>
       {kpis.map((k, index2) => <Fragment key={index2}>
@@ -152,7 +98,6 @@ export default function Overview({ dark }: { dark: boolean }) {
       </Fragment>)}
     </section>
 
-
     <section style={css("display:flex;flex-wrap:wrap;gap:12px")}>
       <div style={css("flex:3 1 640px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 18px 10px;display:flex;flex-direction:column;gap:12px")}>
         <div style={css("display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;gap:10px")}>
@@ -162,39 +107,7 @@ export default function Overview({ dark }: { dark: boolean }) {
           </div>
           <a href="#/queries" className="lnk" style={css("font-size:13px;display:inline-flex;align-items:center;min-height:32px;white-space:nowrap")}>Open in console</a>
         </div>
-        <div style={css("overflow-x:auto")}>
-          <div role="table" aria-label="Test time by configuration" style={css("min-width:720px")}>
-            <div role="row" style={css("display:grid;grid-template-columns:1.9fr 0.7fr 0.85fr 0.85fr 0.85fr 0.9fr 1.3fr 0.8fr;gap:10px;padding:0 10px 9px;border-bottom:1px solid var(--line);font-size:12px;color:var(--muted);font-weight:500")}>
-              <span role="columnheader">Configuration</span>
-              <span role="columnheader" style={css("text-align:right")}>Units</span>
-              <span role="columnheader" style={css("text-align:right")}>Average</span>
-              <span role="columnheader" style={css("text-align:right")}>Median</span>
-              <span role="columnheader" style={css("text-align:right")}>P90</span>
-              <span role="columnheader" style={css("text-align:right")}>Per channel</span>
-              <span role="columnheader">Avg, last 14 days</span>
-              <span role="columnheader" style={css("text-align:right")}>vs prior</span>
-            </div>
-            {cfgRows.map((c, index3) => <Fragment key={index3}>
-              <button type="button" className="row-btn" aria-pressed={c.pressed === 'true'} onClick={c.pick} style={css(c.style)}>
-                <span style={css("display:flex;align-items:center;gap:9px;min-width:0")}>
-                  <span style={css("width:3px;height:22px;border-radius:2px;background:" + String(c.mark))}></span>
-                  <span style={css("font-weight:600")}>{c.model}</span>
-                  <span style={css("font-size:12px;font-weight:600;padding:1px 6px;border-radius:5px;background:var(--panel2);border:1px solid var(--line2);color:var(--ink2)")}>{c.mode}</span>
-                  <span style={css("color:var(--ink2)")}>{c.ch} ch</span>
-                </span>
-                <span style={css("text-align:right;color:var(--ink2)")}>{c.units}</span>
-                <span style={css("text-align:right;font-weight:600")}>{c.avg}</span>
-                <span style={css("text-align:right;color:var(--ink2)")}>{c.med}</span>
-                <span style={css("text-align:right;color:var(--ink2)")}>{c.p90}</span>
-                <span style={css("text-align:right;color:var(--ink2)")}>{c.perCh}</span>
-                <svg viewBox="0 0 120 24" preserveAspectRatio="none" aria-hidden="true" style={css("width:100%;height:22px;display:block")}>
-                  <polyline points={c.spark} vectorEffect="non-scaling-stroke" style={css("fill:none;stroke:" + String(c.sparkColor) + ";stroke-width:1.5;stroke-linejoin:round")}></polyline>
-                </svg>
-                <span style={css("text-align:right;font-weight:600;color:" + String(c.dColor))}>{c.delta}</span>
-              </button>
-            </Fragment>)}
-          </div>
-        </div>
+        <ConfigurationTable rows={cfgRows} onSelect={cfg => setState(current => ({ ...current, cfg }))} />
       </div>
 
       <div style={css("flex:2 1 380px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:10px")}>
@@ -207,7 +120,7 @@ export default function Overview({ dark }: { dark: boolean }) {
           <div style={css("flex:1 1 80px;padding:8px 10px;border-radius:9px;background:var(--panel2)")}><div style={css("font-size:11.5px;color:var(--muted)")}>Median</div><div style={css("font-size:17px;font-weight:650;font-variant-numeric:tabular-nums")}>{sel.med}</div></div>
           <div style={css("flex:1 1 80px;padding:8px 10px;border-radius:9px;background:var(--panel2)")}><div style={css("font-size:11.5px;color:var(--muted)")}>Slowest 10%</div><div style={css("font-size:17px;font-weight:650;font-variant-numeric:tabular-nums")}>{sel.p90}+</div></div>
         </div>
-        <svg viewBox="0 0 400 200" role="img" aria-label={sel.aria} style={css("width:100%;height:auto;display:block")}>
+        <svg id="configuration-histogram" viewBox="0 0 400 200" role="img" aria-label={sel.aria} style={css("width:100%;height:auto;display:block")}>
           <line x1="12" x2="388" y1="160" y2="160" style={css("stroke:var(--line);stroke-width:1")}></line>
           {hist.map((h, index4) => <Fragment key={index4}>
             <g >
@@ -222,7 +135,6 @@ export default function Overview({ dark }: { dark: boolean }) {
         </svg>
       </div>
     </section>
-
 
     <section style={css("display:flex;flex-wrap:wrap;gap:12px")}>
       <div style={css("flex:1 1 480px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:10px")}>
@@ -286,7 +198,6 @@ export default function Overview({ dark }: { dark: boolean }) {
       </div>
     </section>
 
-
     <section style={css("display:flex;flex-wrap:wrap;gap:12px")}>
       <div style={css("flex:1 1 320px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:14px")}>
         <div style={css("display:flex;justify-content:space-between;align-items:flex-start;gap:10px")}>
@@ -294,7 +205,7 @@ export default function Overview({ dark }: { dark: boolean }) {
             <h2 style={css("margin:0;font-size:16px;font-weight:600")}>Unit outcomes</h2>
             <span style={css("font-size:12.5px;color:var(--muted)")}>{d.outCaption}</span>
           </div>
-          <a href="#/failures" className="lnk" style={css("font-size:13px;display:inline-flex;align-items:center;min-height:32px")}>Details</a>
+          <a href="#/failures" className="lnk" style={css("font-size:13px;display:inline-flex;align-items:center;min-height:32px")}>Failure examples</a>
         </div>
         <div role="img" aria-label={d.outAria} style={css("display:flex;height:16px;border-radius:5px;overflow:hidden;gap:2px")}>
           {outSegs.map((s, index9) => <Fragment key={index9}>
@@ -377,11 +288,9 @@ export default function Overview({ dark }: { dark: boolean }) {
       </div>
     </section>
 
-
     <RecentActivity data={runs} />
 
     <footer style={css("font-size:12px;color:var(--muted);line-height:1.55;max-width:900px")}>Entirely synthetic demonstration. Metric definitions and manufacturing disposition require review before production use.</footer>
-  </main>
-</div>
+
 </>);
 }

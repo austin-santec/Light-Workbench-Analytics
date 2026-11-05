@@ -1,10 +1,10 @@
 import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
-interface Row { model: string; mode: string; ch: string; sec: string; time: string }
+import type { QueryResult } from '../mock/contracts';
 
-export function QueryChart({ rows }: { rows: Row[] }) {
-  const data = rows.map(r => ({ ...r, label: `${r.model} · ${r.mode} · ${r.ch} ch`, seconds: Number(r.sec) }));
-  return <div className="table-scroll"><div role="img" aria-label="Synthetic average test time by configuration, between 7 and 16 minutes" style={{ width: '100%', minWidth: 500, height: 290 }}>
+export function QueryChart({ rows }: { rows: readonly QueryResult[] }) {
+  const data = rows.map(r => ({ ...r, label: `${r.model} · ${r.mode} · ${r.ch} ch`, seconds: r.avgSeconds }));
+  return <div className="table-scroll" tabIndex={0} role="region" aria-label="Query chart, scroll horizontally on narrow screens"><div role="img" aria-label="Synthetic average test time by configuration, between 7 and 16 minutes; the table view contains exact values" style={{ width: '100%', minWidth: 500, height: 290 }}>
     <ResponsiveContainer width="100%" height="100%" minWidth={0}>
       <BarChart data={data} layout="vertical" margin={{ top: 4, bottom: 0, left: 0, right: 42 }} accessibilityLayer>
         <CartesianGrid horizontal={false} stroke="var(--grid)" />

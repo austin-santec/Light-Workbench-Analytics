@@ -1,73 +1,33 @@
-import { Fragment, useState } from 'react';
+import { WAVELENGTH_OPTIONS } from '../mock/presentation';
+import { serialFromHash } from '../lib/routes';
+import { PreviewButton } from '../components/PreviewControl';
+import { SegmentedControl } from '../components/SegmentedControl';
+import { Fragment, useRef, useState } from 'react';
 import { css } from '../lib/css';
 import { getUnitValues } from '../mock/unit';
 import type { UnitState } from '../types';
 
-export default function Unit({ dark }: { dark: boolean }) {
- const [serial, setSerial] = useState(() => new URLSearchParams(location.hash.split('?')[1] || '').get('serial') || 'DEMO-18793');
+export default function Unit() {
+ const lookup = useRef<HTMLInputElement>(null);
+ const [serial, setSerial] = useState(() => serialFromHash());
  const found = ['DEMO-18793', 'DEMO-SW-001'].includes(serial.trim().toUpperCase());
  const [state, setState] = useState<UnitState>({ wl: 'both' });
- const values = getUnitValues(state, patch => setState(current => ({ ...current, ...patch })), dark);
- const { accent, themeClass, wlOpts, ilBars, ilGrid, warnY, failY, bandY, failH, cells, steps, extras, repl, attempts } = values;
+ const values = getUnitValues(state);
+ const { accent, chartDescription, ilBars, ilGrid, warnY, failY, bandY, failH, cells, steps, extras, repl, attempts } = values;
  return (<>
-
-
-<div className={"lw " + String(themeClass)} style={css("display:flex;flex-wrap:wrap;min-height:100vh;background:var(--bg);color:var(--ink);font-family:'Geist',system-ui,sans-serif;font-size:14px;line-height:1.45")}>
-
-  <aside style={css("flex:1 1 236px;max-width:100%;background:var(--panel);border-right:1px solid var(--line);padding:22px 14px;display:flex;flex-direction:column;gap:24px")}>
-    <div style={css("display:flex;align-items:center;gap:11px;padding:0 8px")}>
-      <svg width="32" height="32" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" style={css("fill:" + String(accent))}></rect><path d="M6 20.5h6.5L16 10l3.5 10.5H26" style={css("fill:none;stroke:#fff;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round")}></path></svg>
-      <div style={css("display:flex;flex-direction:column;line-height:1.15")}>
-        <span style={css("font-weight:600;font-size:15px")}>Light Workbench</span>
-        <span style={css("font-size:12.5px;color:var(--muted)")}>Analytics</span>
-      </div>
-    </div>
-    <nav aria-label="Main" style={css("display:flex;flex-direction:column;gap:2px")}>
-      <span style={css("padding:0 10px 6px;font-size:11.5px;font-weight:600;color:var(--muted);letter-spacing:0.06em;text-transform:uppercase")}>Analyze</span>
-      <a href="#/" className="nav-a" style={css("display:flex;align-items:center;gap:11px;min-height:44px;padding:0 10px;border-radius:9px;text-decoration:none;font-weight:500;color:var(--ink2)")}>
-        <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" style={css("fill:none;stroke:currentColor;stroke-width:1.9;stroke-linejoin:round")}><rect x="3" y="3" width="7.5" height="9" rx="1.6"></rect><rect x="13.5" y="3" width="7.5" height="5" rx="1.6"></rect><rect x="3" y="15" width="7.5" height="6" rx="1.6"></rect><rect x="13.5" y="11" width="7.5" height="10" rx="1.6"></rect></svg>
-        Overview
-      </a>
-      <a href="#/failures" className="nav-a" style={css("display:flex;align-items:center;gap:11px;min-height:44px;padding:0 10px;border-radius:9px;text-decoration:none;font-weight:500;color:var(--ink2)")}>
-        <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" style={css("fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round")}><path d="M4 8h13l-3-3.2M20 16H7l3 3.2"></path></svg>
-        Failures & replacements
-      </a>
-      <a href="#/unit" aria-current="page" style={css("display:flex;align-items:center;gap:11px;min-height:44px;padding:0 10px;border-radius:9px;text-decoration:none;font-weight:600;background:color-mix(in srgb," + String(accent) + " 11%,var(--panel));color:" + String(accent))}>
-        <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" style={css("fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round")}><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="M15.5 15.5L21 21"></path></svg>
-        Unit lookup
-      </a>
-      <a href="#/queries" className="nav-a" style={css("display:flex;align-items:center;gap:11px;min-height:44px;padding:0 10px;border-radius:9px;text-decoration:none;font-weight:500;color:var(--ink2)")}>
-        <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" style={css("fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round")}><path d="M8 8l-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14"></path></svg>
-        Query console
-      </a>
-    </nav>
-    <nav aria-label="Recently viewed units" style={css("display:flex;flex-direction:column;gap:2px")}>
-      <span style={css("padding:0 10px 6px;font-size:11.5px;font-weight:600;color:var(--muted);letter-spacing:0.06em;text-transform:uppercase")}>Recently viewed</span>
-      <a href="#/unit?serial=DEMO-18793" className="nav-a" style={css("display:flex;align-items:center;justify-content:space-between;min-height:40px;padding:0 10px;border-radius:9px;text-decoration:none;color:var(--ink2);font-size:13px;font-family:'Geist Mono',monospace")}>DEMO-18793<span style={css("width:7px;height:7px;border-radius:50%;background:var(--o3)")}></span></a>
-      <a href="#/unit?serial=DEMO-18801" className="nav-a" style={css("display:flex;align-items:center;justify-content:space-between;min-height:40px;padding:0 10px;border-radius:9px;text-decoration:none;color:var(--ink2);font-size:13px;font-family:'Geist Mono',monospace")}>DEMO-18801<span style={css("width:7px;height:7px;border-radius:50%;background:var(--o2)")}></span></a>
-      <a href="#/unit?serial=DEMO-18761" className="nav-a" style={css("display:flex;align-items:center;justify-content:space-between;min-height:40px;padding:0 10px;border-radius:9px;text-decoration:none;color:var(--ink2);font-size:13px;font-family:'Geist Mono',monospace")}>DEMO-18761<span style={css("width:7px;height:7px;border-radius:50%;background:var(--o3)")}></span></a>
-    </nav>
-    <div style={css("margin-top:auto;display:flex;flex-direction:column;gap:8px;padding:14px;border-radius:12px;background:var(--panel2);border:1px solid var(--line2)")}>
-      <div style={css("display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600")}><span style={css("width:8px;height:8px;border-radius:50%;background:#2FB36B;box-shadow:0 0 0 3px color-mix(in srgb,#2FB36B 25%,transparent)")}></span>Synthetic data · offline</div>
-      <div style={css("font-family:'Geist Mono',monospace;font-size:12px;color:var(--muted);line-height:1.6")}>Milestone 0 · browser only<br  />Deterministic demo fixtures<br  />No database connection</div>
-      <span style={css("align-self:flex-start;font-size:11.5px;font-weight:600;color:var(--warn-fg);background:var(--warn-bg);padding:3px 9px;border-radius:999px")}>Sample data</span>
-    </div>
-  </aside>
-
-  <main tabIndex={-1} id="content" style={css("flex:999 1 560px;min-width:0;padding:26px 34px 44px;display:flex;flex-direction:column;gap:18px")}>
 
     <div style={css("display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:10px")}>
       <nav aria-label="Breadcrumb" style={css("display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)")}>
-        <a href="#/" className="lnk">Overview</a><span aria-hidden="true">/</span><span >Units</span><span aria-hidden="true">/</span><span style={css("color:var(--ink);font-weight:500")}>DEMO-18793</span>
+        <a href="#/" className="lnk">Overview</a><span aria-hidden="true">/</span><span >Units</span><span aria-hidden="true">/</span><span style={css("color:var(--ink);font-weight:500")}>{found ? 'DEMO-18793' : serial.trim() || 'Lookup'}</span>
       </nav>
       <label style={css("display:flex;align-items:center;gap:8px;min-height:44px;padding:0 12px;border-radius:9px;border:1px solid var(--line);background:var(--panel);color:var(--muted);font-size:13px")}>
         <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true" style={css("fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round")}><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="M15.5 15.5L21 21"></path></svg>
         <span style={css("position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)")}>Look up a unit</span>
-        <input type="search" value={serial} onChange={event => setSerial(event.target.value)} placeholder="Try DEMO-18793 or DEMO-SW-001" style={css("border:none;background:transparent;outline:none;width:240px;font-size:13px;color:var(--ink)")} />
+        <input ref={lookup} type="search" aria-describedby="unit-lookup-help" value={serial} onChange={event => setSerial(event.target.value)} placeholder="Try DEMO-18793 or DEMO-SW-001" style={css("border:none;background:transparent;outline:none;width:240px;font-size:13px;color:var(--ink)")} />
       </label>
     </div>
 
-
+    <p id="unit-lookup-help" className="preview-note">Lookup searches the single fixture DEMO-18793 / DEMO-SW-001. Export and copy actions are disabled previews.</p>
     {found ? <>
     <section style={css("background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px;display:flex;flex-direction:column;gap:16px")}>
       <div style={css("display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;gap:14px")}>
@@ -79,8 +39,8 @@ export default function Unit({ dark }: { dark: boolean }) {
           <span style={css("font-size:13.5px;color:var(--ink2)")}>OSX-150 · single mode (1310 / 1550 nm) · 48 front-panel channels · 52 physical ports</span>
         </div>
         <div style={css("display:flex;flex-wrap:wrap;gap:8px")}>
-          <button type="button" style={css("min-height:44px;padding:0 14px;border-radius:9px;border:1px solid var(--line);background:var(--panel);font-weight:500;cursor:pointer")} disabled title="Design preview — available in a future milestone">Export raw CSV</button>
-          <button type="button" style={css("min-height:44px;padding:0 14px;border-radius:9px;border:1px solid var(--line);background:var(--panel);font-weight:500;cursor:pointer")} disabled title="Design preview — available in a future milestone">Copy link</button>
+          <PreviewButton type="button" style={css("min-height:44px;padding:0 14px;border-radius:9px;border:1px solid var(--line);background:var(--panel);font-weight:500;cursor:pointer")}>Export raw CSV</PreviewButton>
+          <PreviewButton type="button" style={css("min-height:44px;padding:0 14px;border-radius:9px;border:1px solid var(--line);background:var(--panel);font-weight:500;cursor:pointer")}>Copy link</PreviewButton>
         </div>
       </div>
       <dl style={css("margin:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px 18px;padding-top:14px;border-top:1px solid var(--line2)")}>
@@ -92,7 +52,6 @@ export default function Unit({ dark }: { dark: boolean }) {
         <div ><dt style={css("font-size:12px;color:var(--muted)")}>Limits used</dt><dd style={css("margin:2px 0 0;font-weight:500")}>warn 2.25 · fail 2.5 dB</dd></div>
       </dl>
     </section>
-
 
     <section aria-label="What happened" style={css("background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:14px")}>
       <h2 style={css("margin:0;font-size:16px;font-weight:600")}>What happened</h2>
@@ -107,18 +66,13 @@ export default function Unit({ dark }: { dark: boolean }) {
       </ol>
     </section>
 
-
     <section style={css("background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:10px")}>
       <div style={css("display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;gap:10px")}>
         <div style={css("display:flex;flex-direction:column;gap:3px")}>
           <h2 style={css("margin:0;font-size:16px;font-weight:600")}>Insertion loss by logical channel</h2>
           <span style={css("font-size:12.5px;color:var(--muted)")}>Current attempt per channel, through the effective port map. Channels 19 and 41 show their post-replacement reading.</span>
         </div>
-        <div role="group" aria-label="Wavelength" style={css("display:flex;background:var(--panel2);border:1px solid var(--line2);border-radius:10px;padding:3px;gap:2px")}>
-          {wlOpts.map((o, index1) => <Fragment key={index1}>
-            <button type="button" aria-pressed={o.pressed === 'true'} onClick={o.pick} style={css(o.style)}>{o.label}</button>
-          </Fragment>)}
-        </div>
+        <SegmentedControl label="Wavelength" options={WAVELENGTH_OPTIONS} value={state.wl} onChange={wl => setState({ wl })} describedBy="wavelength-scope" />
       </div>
       <div style={css("display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12px;color:var(--ink2)")}>
         <span style={css("display:inline-flex;align-items:center;gap:6px")}><span style={css("width:10px;height:10px;border-radius:2px;background:var(--o2)")}></span>1310 nm</span>
@@ -126,7 +80,8 @@ export default function Unit({ dark }: { dark: boolean }) {
         <span style={css("display:inline-flex;align-items:center;gap:6px")}><span style={css("width:14px;border-top:1.5px dashed var(--warn-fg)")}></span>Warning 2.25 dB</span>
         <span style={css("display:inline-flex;align-items:center;gap:6px")}><span style={css("width:14px;border-top:2px solid var(--bad-fg)")}></span>Fail 2.5 dB</span>
       </div>
-      <svg viewBox="0 0 1000 250" role="img" aria-label="Insertion loss for 48 channels at 1310 and 1550 nm. Most channels read 1.6 to 2.2 dB. Channels 7, 12, 30 and 45 exceed the 2.5 dB fail limit; channel 30 is worst at 2.91 dB." style={css("width:100%;height:auto;display:block")}>
+      <p id="wavelength-scope" className="preview-note">Wavelength selection highlights this chart only; the channel map and tables keep both readings.</p>
+      <svg viewBox="0 0 1000 250" role="img" aria-label={chartDescription} style={css("width:100%;height:auto;display:block")}>
         {ilGrid.map((g, index2) => <Fragment key={index2}>
           <g >
             <line x1="44" x2="988" y1={g.y} y2={g.y} style={css("stroke:var(--grid);stroke-width:1")}></line>
@@ -147,7 +102,6 @@ export default function Unit({ dark }: { dark: boolean }) {
       </svg>
     </section>
 
-
     <section style={css("display:flex;flex-wrap:wrap;gap:12px")}>
       <div style={css("flex:2 1 560px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:12px")}>
         <div style={css("display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;gap:10px")}>
@@ -162,9 +116,9 @@ export default function Unit({ dark }: { dark: boolean }) {
             <span style={css("display:inline-flex;align-items:center;gap:6px")}><span style={css("width:10px;height:10px;border-radius:3px;border:2px solid " + String(accent))}></span>Replaced</span>
           </div>
         </div>
-        <div className="unit-channel-map" style={css("display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:5px")}>
+        <div className="unit-channel-map" role="list" aria-label="48 synthetic channels and their current readings" style={css("display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:5px")}>
           {cells.map((c, index4) => <Fragment key={index4}>
-            <div title={c.title} style={css("min-height:54px;border-radius:7px;padding:5px 6px;display:flex;flex-direction:column;justify-content:space-between;background:" + String(c.bg) + ";color:" + String(c.fg) + ";border:" + String(c.border))}>
+            <div role="listitem" aria-label={c.title} title={c.title} style={css("min-height:54px;border-radius:7px;padding:5px 6px;display:flex;flex-direction:column;justify-content:space-between;background:" + String(c.bg) + ";color:" + String(c.fg) + ";border:" + String(c.border))}>
               <span style={css("display:flex;justify-content:space-between;font-size:10.5px;line-height:1")}><span style={css("opacity:0.8")}>{c.n}</span><span style={css("font-weight:600")}>{c.port}</span></span>
               <span style={css("font-size:12.5px;font-weight:650;font-family:'Geist Mono',monospace;text-align:right;line-height:1")}>{c.v}</span>
             </div>
@@ -197,14 +151,13 @@ export default function Unit({ dark }: { dark: boolean }) {
       </div>
     </section>
 
-
     <section style={css("display:flex;flex-wrap:wrap;gap:12px")}>
       <div style={css("flex:1 1 460px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 18px 8px;display:flex;flex-direction:column;gap:10px")}>
         <div style={css("display:flex;flex-direction:column;gap:3px")}>
           <h2 style={css("margin:0;font-size:16px;font-weight:600")}>Replacement history</h2>
           <span style={css("font-size:12.5px;color:var(--muted)")}>CHANNEL_REPLACEMENTS, oldest first.</span>
         </div>
-        <div style={css("overflow-x:auto")}>
+        <div className="table-scroll" role="region" tabIndex={0} aria-label="Unit history table, scroll horizontally on narrow screens">
           <div role="table" aria-label="Replacement history" style={css("min-width:460px")}>
             <div role="row" style={css("display:grid;grid-template-columns:0.7fr 0.6fr 1.1fr 1.5fr 0.9fr;gap:10px;padding:0 4px 8px;border-bottom:1px solid var(--line);font-size:12px;color:var(--muted);font-weight:500")}>
               <span role="columnheader">Time</span><span role="columnheader">Ch</span><span role="columnheader">Port move</span><span role="columnheader">Source</span><span role="columnheader" style={css("text-align:right")}>Gain</span>
@@ -227,7 +180,7 @@ export default function Unit({ dark }: { dark: boolean }) {
           <h2 style={css("margin:0;font-size:16px;font-weight:600")}>Measurement attempts on failing channels</h2>
           <span style={css("font-size:12.5px;color:var(--muted)")}>Every attempt is kept; the current one is the highest attempt number.</span>
         </div>
-        <div style={css("overflow-x:auto")}>
+        <div className="table-scroll" role="region" tabIndex={0} aria-label="Unit history table, scroll horizontally on narrow screens">
           <div role="table" aria-label="Measurement attempts" style={css("min-width:520px")}>
             <div role="row" style={css("display:grid;grid-template-columns:0.5fr 0.7fr 0.6fr 0.8fr 0.8fr 1.1fr;gap:10px;padding:0 4px 8px;border-bottom:1px solid var(--line);font-size:12px;color:var(--muted);font-weight:500")}>
               <span role="columnheader">Ch</span><span role="columnheader">Attempt</span><span role="columnheader">Port</span><span role="columnheader" style={css("text-align:right")}>1310 nm</span><span role="columnheader" style={css("text-align:right")}>1550 nm</span><span role="columnheader">Result</span>
@@ -247,11 +200,9 @@ export default function Unit({ dark }: { dark: boolean }) {
       </div>
     </section>
 
-
-</> : <section className="empty-state" role="status"><h1>No unit fixture found</h1><p>This demo contains one detailed synthetic unit: DEMO-18793 (switch DEMO-SW-001).</p><button type="button" className="lnk" onClick={() => setSerial('DEMO-18793')}>Load example unit</button></section>}
+</> : <section className="empty-state" role="status"><h1>No unit fixture found</h1><p>This demo contains one detailed synthetic unit: DEMO-18793 (switch DEMO-SW-001).</p><button type="button" className="lnk empty-action" onClick={() => { setSerial('DEMO-18793'); lookup.current?.focus(); }}>Load example unit</button></section>}
 
     <footer style={css("font-size:12px;color:var(--muted);line-height:1.55;max-width:900px")}>Synthetic unit example. Readings, limits, attempts and replacement events are illustrative; this is not a manufacturing disposition.</footer>
-  </main>
-</div>
+
 </>);
 }

@@ -4,8 +4,8 @@
 
 - Work directly in this existing project directory. Its **Analightics** spelling is intentional; do not rename, move, recreate, or nest another checkout.
 - Approved frontend: React, TypeScript, Vite, Tailwind CSS, shadcn/ui, Recharts, TanStack Table. Add dependencies only when required by authorized scope.
-- Milestone 0 is the current scope. Later milestones in `docs/PLAN.md` are proposed, not authorization to implement them.
-- No FastAPI, authentication, deployment/hosting, advanced reports, or production database integration in Milestone 0.
+- Milestones 0 and 1 establish the current frontend foundation. The Milestone 1 request authorizes frontend consolidation and its audited commit/push. Later milestones in `docs/PLAN.md` require separate authorization.
+- No FastAPI, authentication, deployment/hosting, advanced reports, or production database integration in Milestone 1.
 
 ## Visual authority
 
@@ -13,7 +13,7 @@
 - Preserve its navigation, hierarchy, typography, cards, chart/table arrangements, spacing, and responsive intent. Do not replace it with a generic dashboard.
 - Use the verified Light Workbench red/gray light and dark palette documented in the design reference.
 - Keep original reference files unchanged and ignored. Do not redistribute `support.js` or bundled vendor files without resolving licensing. Adapted React screens and sanitized screenshots are the versioned reference on a fresh clone.
-- The sample's remaining JavaScript mock calculations are temporary presentation logic. Migrate incrementally when authorized; keep new application code in TypeScript.
+- Application-owned mock calculations are strict TypeScript pure functions with explicit fixture/presentation contracts. Preserve accepted demo values; never treat them as validated production analytics. Keep application code in TypeScript and retain shared layout/control components.
 
 ## Data and architecture safety
 
@@ -28,7 +28,7 @@
 - Primary branch: `main`. Expected origin: `https://github.com/austin-santec/Light-Workbench-Analytics.git`.
 - Inspect the current worktree before editing; preserve user files and changes. Make focused commits; never force-push or erase remote history.
 - This repository is public. Audit every staged file for sensitive content and third-party redistribution rights before any push. Stop a push if the remote has unexpected history or publication is uncertain.
-- Initial commit/push is authorized by the Milestone 0 request after its audit. Future publication follows the user's active authorization.
+- The Milestone 1 request authorizes one focused commit and push to `origin/main` after checks, publication audit and expected-history verification. Future publication follows the user's active authorization.
 - Git metadata writes may require execution outside the Windows sandbox. Prefer a command-local `-c safe.directory=<absolute-project-path>` ownership exception over changing global Git settings.
 
 ## Verification and documentation

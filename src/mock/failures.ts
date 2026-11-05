@@ -1,12 +1,10 @@
+import type { FailuresState, ChannelCount, RecoveryReason } from '../types';
+import type { FailuresValues, FailureDistribution, FailureUnitFixture } from './contracts';
+import { ACCENT } from './presentation';
+
 // Adapted Claude sample logic. All fixtures are synthetic, never production metrics.
-/**
- * @param {import('../types').FailuresState} state
- * @param {(patch: Partial<import('../types').FailuresState>) => void} setState
- * @param {boolean} dark
- */
-export function getFailuresValues(state, setState, dark) {
-    const accent = '#e60013';
-    const themeClass = dark ? 'dark' : '';
+export function getFailuresValues(state: FailuresState): FailuresValues {
+    const accent = ACCENT;
 
     const kpis = [
       { label: 'Units needing replacement', value: '838', sub: '65.3% of 1,284 units', pct: 65.3, bar: 'var(--o2)', color: 'var(--ink)' },
@@ -17,7 +15,7 @@ export function getFailuresValues(state, setState, dark) {
     ];
 
     // weekly stacked bars
-    const wk = [['Sep 14', 96, 170, 6], ['Sep 21', 92, 178, 7], ['Sep 28', 101, 169, 5], ['Oct 5', 99, 181, 6], ['Oct 12', 104, 187, 7], ['Oct 19', 98, 190, 6], ['Oct 26', 107, 192, 6], ['Nov 2', 70, 124, 4]];
+    const wk: [week: string, firstPass: number, recovered: number, noRecovery: number][] = [['Sep 14', 96, 170, 6], ['Sep 21', 92, 178, 7], ['Sep 28', 101, 169, 5], ['Oct 5', 99, 181, 6], ['Oct 12', 104, 187, 7], ['Oct 19', 98, 190, 6], ['Oct 26', 107, 192, 6], ['Nov 2', 70, 124, 4]];
     const X0 = 44, X1 = 664, Y1 = 200, H = 170, MAX = 320;
     const step = (X1 - X0) / wk.length;
     const weeks = wk.map((w, i) => {
@@ -28,7 +26,7 @@ export function getFailuresValues(state, setState, dark) {
     const wGrid = [0, 80, 160, 240, 320].map(v => ({ y: (Y1 - H * v / MAX).toFixed(1), ty: (Y1 - H * v / MAX + 4).toFixed(1), label: String(v) }));
 
     // reasons
-    const R = [
+    const R: [title: string, count: number, description: string, code: string, color: string][] = [
       ['No viable recovery', 16, 'Extra ports exist, but none bring the channel under 2.5 dB at both wavelengths.', 'fail_no_viable_recovery', 'var(--o3)'],
       ['Ran out of extra ports', 8, 'More failing channels than usable extra ports on the switch.', 'not_applicable_no_extra_ports', 'var(--o1)'],
       ['Needs engineering review', 3, 'The analysis could not decide on its own and flagged the run for a person.', 'review_required', 'var(--muted)']
@@ -36,13 +34,13 @@ export function getFailuresValues(state, setState, dark) {
     const reasons = R.map(r => ({ title: r[0], count: String(r[1]), share: Math.round(r[1] / 27 * 100) + '%', w: (r[1] / 16 * 100).toFixed(0), text: r[2], code: r[3], color: r[4] }));
 
     // failures-per-unit, by channel count
-    const FP = {
+    const FP: Record<ChannelCount, FailureDistribution> = {
       48: { units: 412, extras: 4, c: [142, 96, 71, 46, 27, 14, 9, 7] },
       36: { units: 236, extras: 3, c: [88, 62, 41, 22, 12, 6, 3, 2] },
       24: { units: 188, extras: 2, c: [81, 51, 30, 15, 7, 3, 1, 0] }
     };
     const cur = state.ch;
-    const f = /** @type {{ units: number, extras: number, c: number[] }} */ (FP[cur]);
+    const f = FP[cur];
     const over = f.c.slice(f.extras + 1).reduce((a, b) => a + b, 0);
     const FX0 = 40, FX1 = 664, FY1 = 180, FH = 130;
     const fmax = Math.max.apply(null, f.c);
@@ -59,23 +57,18 @@ export function getFailuresValues(state, setState, dark) {
       caption: 'OSX-150 · SM · ' + cur + ' channels, ' + f.units + ' units. ' + over + ' had more failures than the ' + f.extras + ' usable extras.',
       aria: 'Histogram of failed channels per unit for ' + cur + '-channel units. ' + f.c[0] + ' units had none; ' + over + ' units had more than ' + f.extras + ' failures.'
     };
-    const chOpts = [48, 36, 24].map(n => ({
-      label: n + ' ch', pressed: n === cur ? 'true' : 'false',
-      style: 'min-height:36px;padding:0 12px;border-radius:8px;border:none;cursor:pointer;font-size:13px;font-weight:' + (n === cur ? '600;background:var(--panel);color:var(--ink);box-shadow:0 1px 2px rgba(14,22,33,0.12),0 0 0 1px var(--line)' : '500;background:transparent;color:var(--muted)'),
-      pick: () => setState({ ch: n })
-    }));
 
     const tc = [[19, 96], [33, 81], [41, 70], [8, 52], [27, 47]];
     const topCh = tc.map(([n, c]) => ({ n: String(n), count: String(c), w: (c / 96 * 100).toFixed(0) }));
-    const tp = [[19, 88, ''], [33, 74, ''], [41, 63, ''], [50, 41, 'EXTRA'], [12, 39, '']];
+    const tp: [port: number, count: number, tag: string][] = [[19, 88, ''], [33, 74, ''], [41, 63, ''], [50, 41, 'EXTRA'], [12, 39, '']];
     const topPort = tp.map(([n, c, t]) => ({ n: String(n), count: String(c), w: (c / 88 * 100).toFixed(0), tag: t, tagFg: 'var(--warn-fg)', bar: t ? 'var(--o3)' : accent }));
 
-    const why = {
+    const why: Record<RecoveryReason, { reason: string; bg: string; fg: string }> = {
       viable: { reason: 'No viable recovery', bg: 'var(--bad-bg)', fg: 'var(--bad-fg)' },
       extras: { reason: 'Ran out of extras', bg: 'var(--warn-bg)', fg: 'var(--warn-fg)' },
       review: { reason: 'Needs review', bg: 'var(--panel2)', fg: 'var(--ink2)' }
     };
-    const rows = [
+    const rows: FailureUnitFixture[] = [
       ['DEMO-18793', 'OSX-150 · SM · 48', 'St 2', 'Nov 4', ['7', '12', '19', '30', '41', '45'], 2, '2.91 dB', 'extras'],
       ['DEMO-18761', 'OSX-150 · SM · 48', 'St 1', 'Nov 2', ['19', '33'], 3, '2.63 dB', 'viable'],
       ['DEMO-18741', 'OSX-100 · SM · 48', 'St 3', 'Oct 30', ['8', '19', '22', '40'], 1, '2.77 dB', 'extras'],
@@ -84,7 +77,7 @@ export function getFailuresValues(state, setState, dark) {
       ['DEMO-18690', 'OSX-100 · MM · 48', 'St 2', 'Oct 22', ['11', '28'], 2, 'not run', 'review'],
       ['DEMO-18668', 'OSX-150 · SM · 24', 'St 1', 'Oct 20', ['3', '9', '17'], 2, '2.84 dB', 'extras']
     ];
-    const units = rows.map(r => ({ unit: String(r[0]), cfg: String(r[1]), st: String(r[2]), when: String(r[3]), chs: /** @type {string[]} */ (r[4]), extras: String(r[5]), after: String(r[6]), afterColor: r[6] === 'not run' ? 'var(--muted)' : 'var(--bad-fg)', reason: why[r[7]].reason, bg: why[r[7]].bg, fg: why[r[7]].fg }));
+    const units = rows.map(r => ({ unit: r[0], cfg: r[1], st: r[2], when: r[3], chs: r[4], extras: String(r[5]), after: r[6], afterColor: r[6] === 'not run' ? 'var(--muted)' : 'var(--bad-fg)', reason: why[r[7]].reason, bg: why[r[7]].bg, fg: why[r[7]].fg }));
 
-    return { accent, themeClass, kpis, weeks, wGrid, reasons, fbars, fp, chOpts, topCh, topPort, units };
+    return { accent, kpis, weeks, wGrid, reasons, fbars, fp, topCh, topPort, units };
 }

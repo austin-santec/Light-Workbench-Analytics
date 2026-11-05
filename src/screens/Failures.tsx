@@ -1,52 +1,16 @@
+import { CHANNEL_OPTIONS } from '../mock/presentation';
+import { PreviewButton, PreviewSelect } from '../components/PreviewControl';
+import { SegmentedControl } from '../components/SegmentedControl';
 import { Fragment, useState } from 'react';
 import { css } from '../lib/css';
 import { getFailuresValues } from '../mock/failures';
 import type { FailuresState } from '../types';
 
-export default function Failures({ dark }: { dark: boolean }) {
+export default function Failures() {
  const [state, setState] = useState<FailuresState>({ ch: 48 });
- const values = getFailuresValues(state, patch => setState(current => ({ ...current, ...patch })), dark);
- const { accent, themeClass, kpis, weeks, wGrid, reasons, fbars, fp, chOpts, topCh, topPort, units } = values;
+ const values = getFailuresValues(state);
+ const { accent, kpis, weeks, wGrid, reasons, fbars, fp, topCh, topPort, units } = values;
  return (<>
-
-
-<div className={"lw " + String(themeClass)} style={css("display:flex;flex-wrap:wrap;min-height:100vh;background:var(--bg);color:var(--ink);font-family:'Geist',system-ui,sans-serif;font-size:14px;line-height:1.45")}>
-
-  <aside style={css("flex:1 1 236px;max-width:100%;background:var(--panel);border-right:1px solid var(--line);padding:22px 14px;display:flex;flex-direction:column;gap:24px")}>
-    <div style={css("display:flex;align-items:center;gap:11px;padding:0 8px")}>
-      <svg width="32" height="32" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" style={css("fill:" + String(accent))}></rect><path d="M6 20.5h6.5L16 10l3.5 10.5H26" style={css("fill:none;stroke:#fff;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round")}></path></svg>
-      <div style={css("display:flex;flex-direction:column;line-height:1.15")}>
-        <span style={css("font-weight:600;font-size:15px")}>Light Workbench</span>
-        <span style={css("font-size:12.5px;color:var(--muted)")}>Analytics</span>
-      </div>
-    </div>
-    <nav aria-label="Main" style={css("display:flex;flex-direction:column;gap:2px")}>
-      <span style={css("padding:0 10px 6px;font-size:11.5px;font-weight:600;color:var(--muted);letter-spacing:0.06em;text-transform:uppercase")}>Analyze</span>
-      <a href="#/" className="nav-a" style={css("display:flex;align-items:center;gap:11px;min-height:44px;padding:0 10px;border-radius:9px;text-decoration:none;font-weight:500;color:var(--ink2)")}>
-        <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" style={css("fill:none;stroke:currentColor;stroke-width:1.9;stroke-linejoin:round")}><rect x="3" y="3" width="7.5" height="9" rx="1.6"></rect><rect x="13.5" y="3" width="7.5" height="5" rx="1.6"></rect><rect x="3" y="15" width="7.5" height="6" rx="1.6"></rect><rect x="13.5" y="11" width="7.5" height="10" rx="1.6"></rect></svg>
-        Overview
-      </a>
-      <a href="#/failures" aria-current="page" style={css("display:flex;align-items:center;gap:11px;min-height:44px;padding:0 10px;border-radius:9px;text-decoration:none;font-weight:600;background:color-mix(in srgb," + String(accent) + " 11%,var(--panel));color:" + String(accent))}>
-        <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" style={css("fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round")}><path d="M4 8h13l-3-3.2M20 16H7l3 3.2"></path></svg>
-        Failures & replacements
-      </a>
-      <a href="#/unit" className="nav-a" style={css("display:flex;align-items:center;gap:11px;min-height:44px;padding:0 10px;border-radius:9px;text-decoration:none;font-weight:500;color:var(--ink2)")}>
-        <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" style={css("fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round")}><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="M15.5 15.5L21 21"></path></svg>
-        Unit lookup
-      </a>
-      <a href="#/queries" className="nav-a" style={css("display:flex;align-items:center;gap:11px;min-height:44px;padding:0 10px;border-radius:9px;text-decoration:none;font-weight:500;color:var(--ink2)")}>
-        <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" style={css("fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round")}><path d="M8 8l-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14"></path></svg>
-        Query console
-      </a>
-    </nav>
-    <div style={css("margin-top:auto;display:flex;flex-direction:column;gap:8px;padding:14px;border-radius:12px;background:var(--panel2);border:1px solid var(--line2)")}>
-      <div style={css("display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600")}><span style={css("width:8px;height:8px;border-radius:50%;background:#2FB36B;box-shadow:0 0 0 3px color-mix(in srgb,#2FB36B 25%,transparent)")}></span>Synthetic data · offline</div>
-      <div style={css("font-family:'Geist Mono',monospace;font-size:12px;color:var(--muted);line-height:1.6")}>Milestone 0 · browser only<br  />Deterministic demo fixtures<br  />No database connection</div>
-      <span style={css("align-self:flex-start;font-size:11.5px;font-weight:600;color:var(--warn-fg);background:var(--warn-bg);padding:3px 9px;border-radius:999px")}>Sample data</span>
-    </div>
-  </aside>
-
-  <main tabIndex={-1} id="content" style={css("flex:999 1 560px;min-width:0;padding:26px 34px 44px;display:flex;flex-direction:column;gap:18px")}>
 
     <header style={css("display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:14px")}>
       <div style={css("display:flex;flex-direction:column;gap:4px")}>
@@ -56,22 +20,22 @@ export default function Failures({ dark }: { dark: boolean }) {
       </div>
       <div style={css("display:flex;flex-wrap:wrap;align-items:center;gap:8px")}>
         <label style={css("display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);font-weight:500")}>Period
-          <select style={css("min-height:44px;padding:0 10px;border-radius:9px;border:1px solid var(--line);background:var(--panel);font-size:13.5px;font-weight:500")} disabled title="Design preview — available in a future milestone"><option >Last 30 days</option><option >This week</option><option >Yesterday</option><option >Today</option></select>
+          <PreviewSelect style={css("min-height:44px;padding:0 10px;border-radius:9px;border:1px solid var(--line);background:var(--panel);font-size:13.5px;font-weight:500")}><option >Last 30 days</option><option >This week</option><option >Yesterday</option><option >Today</option></PreviewSelect>
         </label>
         <label style={css("display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);font-weight:500")}>Run purpose
-          <select style={css("min-height:44px;padding:0 10px;border-radius:9px;border:1px solid var(--line);background:var(--panel);font-size:13.5px;font-weight:500")} disabled title="Design preview — available in a future milestone"><option >Production</option><option >Engineering</option><option >Production + engineering</option><option >Training</option><option >Calibration</option><option >All purposes</option></select>
+          <PreviewSelect style={css("min-height:44px;padding:0 10px;border-radius:9px;border:1px solid var(--line);background:var(--panel);font-size:13.5px;font-weight:500")}><option >Production</option><option >Engineering</option><option >Production + engineering</option><option >Training</option><option >Calibration</option><option >All purposes</option></PreviewSelect>
         </label>
         <label style={css("display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);font-weight:500")}>Model
-          <select style={css("min-height:44px;padding:0 10px;border-radius:9px;border:1px solid var(--line);background:var(--panel);font-size:13.5px;font-weight:500")} disabled title="Design preview — available in a future milestone"><option >All models</option><option >OSX-150</option><option >OSX-100</option></select>
+          <PreviewSelect style={css("min-height:44px;padding:0 10px;border-radius:9px;border:1px solid var(--line);background:var(--panel);font-size:13.5px;font-weight:500")}><option >All models</option><option >OSX-150</option><option >OSX-100</option></PreviewSelect>
         </label>
-        <button type="button" style={css("min-height:44px;padding:0 14px;border-radius:9px;border:1px solid var(--line);background:var(--panel);font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:8px")} disabled title="Design preview — available in a future milestone">
+        <PreviewButton type="button" style={css("min-height:44px;padding:0 14px;border-radius:9px;border:1px solid var(--line);background:var(--panel);font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:8px")}>
           <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true" style={css("fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round")}><path d="M12 4v11M7 10l5 5 5-5M5 20h14"></path></svg>
           Export CSV
-        </button>
+        </PreviewButton>
       </div>
     </header>
 
-
+    <p className="preview-note">Fixed synthetic periods: the header filters and export are disabled previews.</p>
     <section aria-label="Key metrics" style={css("display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px")}>
       {kpis.map((k, index0) => <Fragment key={index0}>
         <div style={css("background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;display:flex;flex-direction:column;gap:6px")}>
@@ -82,7 +46,6 @@ export default function Failures({ dark }: { dark: boolean }) {
         </div>
       </Fragment>)}
     </section>
-
 
     <section style={css("display:flex;flex-wrap:wrap;gap:12px")}>
       <div style={css("flex:2 1 560px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:10px")}>
@@ -136,19 +99,15 @@ export default function Failures({ dark }: { dark: boolean }) {
       </div>
     </section>
 
-
     <section style={css("display:flex;flex-wrap:wrap;gap:12px")}>
       <div style={css("flex:2 1 560px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:12px")}>
         <div style={css("display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;gap:10px")}>
           <div style={css("display:flex;flex-direction:column;gap:3px")}>
             <h2 style={css("margin:0;font-size:16px;font-weight:600")}>Failed channels per unit</h2>
+            <p id="failure-scope" className="preview-note">Channel count changes this histogram only.</p>
             <span style={css("font-size:12.5px;color:var(--muted)")}>{fp.caption}</span>
           </div>
-          <div role="group" aria-label="Channel count" style={css("display:flex;background:var(--panel2);border:1px solid var(--line2);border-radius:10px;padding:3px;gap:2px")}>
-            {chOpts.map((o, index4) => <Fragment key={index4}>
-              <button type="button" aria-pressed={o.pressed === 'true'} onClick={o.pick} style={css(o.style)}>{o.label}</button>
-            </Fragment>)}
-          </div>
+          <SegmentedControl label="Channel count" options={CHANNEL_OPTIONS} value={state.ch} onChange={ch => setState({ ch })} describedBy="failure-scope" />
         </div>
         <svg viewBox="0 0 680 230" role="img" aria-label={fp.aria} style={css("width:100%;height:auto;display:block")}>
           <line x1="40" x2="664" y1="180" y2="180" style={css("stroke:var(--line);stroke-width:1")}></line>
@@ -198,7 +157,6 @@ export default function Failures({ dark }: { dark: boolean }) {
       </div>
     </section>
 
-
     <section style={css("background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;display:flex;flex-wrap:wrap;gap:18px 28px;align-items:center")}>
       <div style={css("flex:1 1 260px;display:flex;flex-direction:column;gap:3px")}>
         <h2 style={css("margin:0;font-size:16px;font-weight:600")}>Are operators following the analysis?</h2>
@@ -212,16 +170,15 @@ export default function Failures({ dark }: { dark: boolean }) {
       </div>
     </section>
 
-
     <section style={css("background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 18px 8px;display:flex;flex-direction:column;gap:10px")}>
       <div style={css("display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;gap:10px")}>
         <div style={css("display:flex;flex-direction:column;gap:3px")}>
           <h2 style={css("margin:0;font-size:16px;font-weight:600")}>Unrecoverable units</h2>
           <span style={css("font-size:12.5px;color:var(--muted)")}>Showing 7 of 27, newest first. Usable extras pass at both wavelengths and are not already in use.</span>
         </div>
-        <a href="#/queries" className="lnk" style={css("font-size:13px;display:inline-flex;align-items:center;min-height:32px")}>Open all in console</a>
+        <PreviewButton className="lnk" style={css("font-size:13px;display:inline-flex;align-items:center;min-height:32px;border:0;background:transparent;padding:0")}>Open all in console</PreviewButton>
       </div>
-      <div style={css("overflow-x:auto")}>
+      <div className="table-scroll" role="region" tabIndex={0} aria-label="Unrecoverable units table, scroll horizontally on narrow screens">
         <div role="table" aria-label="Unrecoverable units" style={css("min-width:900px")}>
           <div role="row" style={css("display:grid;grid-template-columns:0.95fr 1.25fr 0.6fr 0.8fr 1.8fr 0.75fr 1.1fr 1.6fr;gap:10px;padding:0 6px 9px;border-bottom:1px solid var(--line);font-size:12px;color:var(--muted);font-weight:500")}>
             <span role="columnheader">Unit</span>
@@ -250,7 +207,6 @@ export default function Failures({ dark }: { dark: boolean }) {
     </section>
 
     <footer style={css("font-size:12px;color:var(--muted);line-height:1.55;max-width:900px")}>Synthetic replacement examples. Recovery labels and calculations are illustrative and require review before production use.</footer>
-  </main>
-</div>
+
 </>);
 }

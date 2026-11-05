@@ -19,10 +19,6 @@ export default tseslint.config(
       'react-refresh/only-export-components': 'warn',
     },
   },
-  {
-    files: ['src/mock/*.js'],
-    rules: { '@typescript-eslint/no-unused-vars': 'off', 'no-unused-vars': 'off' },
-  },
   { files: ['scripts/*.mjs'], languageOptions: { globals: { ...globals.node, ...globals.browser } } },
   { files: ['*.js'], languageOptions: { globals: globals.node } },
 );

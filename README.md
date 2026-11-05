@@ -1,6 +1,6 @@
 # Light Workbench Analytics
 
-A browser-based analytics design foundation for Light Workbench. Milestone 0 adapts the supplied Claude dashboard into a working frontend with entirely synthetic data. No backend, SQL connection, authentication, or hosting is implemented.
+A browser-based analytics design foundation for Light Workbench. Milestones 0 and 1 retain the supplied Claude dashboard while consolidating the frontend and typing its entirely synthetic data. No backend, SQL connection, authentication, or hosting is implemented.
 
 ## Run locally
 
@@ -26,18 +26,18 @@ For browser checks, keep the dev server running in a second terminal:
 npm.cmd run test:browser
 ```
 
-The browser check uses installed Microsoft Edge through `playwright-core`; it does not download a browser. Other environments can set `BROWSER_PATH` to a compatible Chromium executable. `BASE_URL` overrides the test URL. Screenshots and results go to ignored `.local/qa/`.
+The browser check uses installed Microsoft Edge through `playwright-core`; it does not download a browser. Other environments can set `BROWSER_PATH` to a compatible Chromium executable. `BASE_URL` overrides the test URL; `QA_OUTPUT` overrides ignored `.local/qa/` for screenshots/results. The suite includes keyboard/contrast checks plus isolated delayed/failed imports to verify loading and reload recovery.
 
 ## Frontend
 
-React 19, TypeScript, Vite, Tailwind CSS 4, a locally owned shadcn/ui button, Recharts, and TanStack Table. Geist fonts are bundled locally. The original sample's mock presentation calculations remain in small JavaScript modules with typed input/output boundaries; they are not validated production analytics.
+React 19, strict TypeScript, Vite, Tailwind CSS 4, a locally owned shadcn/ui button, Recharts, and TanStack Table. Geist fonts are bundled locally. All application-owned mock modules have explicit TypeScript contracts and pure presentation functions; their calculations are illustrative, not validated production analytics. No new dependencies were added in Milestone 1.
 
 ```text
 src/
-  App.tsx                Hash navigation, theme, route loading state
+  App.tsx                Hash navigation, theme, route loading/error recovery
   screens/               Overview, Failures, Unit, Queries (adapted templates)
-  mock/                  Synthetic fixtures and retained sample calculations
-  components/            RecentActivity, QueryChart, ui/button
+  mock/                  Typed fixtures/contracts and pure sample calculations
+  components/            Shared shell/sidebar, controls, activity table/chart
   lib/                   Styling and class helpers
   types.ts               Mock state and activity contracts
   styles.css             Workbench palette and sample layout adjustments
@@ -48,13 +48,13 @@ docs/                    Design audit, proposed plan, status, notices
 
 ## Demo behavior and limits
 
-- Navigate among all four original screens. Theme preference persists locally.
-- Overview range/purpose controls update summary cards and recent activity; configuration rows update the histogram. Charts keep their explicitly labeled demo periods.
-- Recent activity supports serial search, model/station filters, sorting, and empty states. It is a small fixture list, not the full aggregate dataset.
+- Navigate among all four original screens. Theme preference persists locally; keyboard navigation focuses the shared page frame and skip link. Failed lazy imports offer reload recovery.
+- Overview range/purpose controls update counts, yields, outcomes and recent activity. Average time follows range/configuration only; configuration buttons select the histogram. Historical charts and sparklines keep fixed demo periods.
+- Recent activity supports trimmed, case-insensitive serial search, model/station filters, sorting, reset, and empty states. It is a small fixture list, not the full aggregate dataset.
 - Unit lookup contains one detailed fixture, `DEMO-18793` / `DEMO-SW-001`. Other serials show an empty state; wavelength controls work.
-- Query table/chart tabs, library search, and illustrative schema expansion work. SQL is displayed as text and never executed.
-- Unsupported filters/actions and saved views retain their design appearance as disabled previews. Exports, sharing, query editing/execution, saved reports, and production metric semantics are deferred.
+- Query table/chart buttons switch the same fixed results; library search filters titles only and has an empty state. Illustrative schema expansion works. SQL is displayed as text and never executed.
+- Unsupported filters/actions retain their design appearance as native disabled previews with visible explanation. Saved views are static examples; the Unit sidebar links example serials. Exports, sharing, query editing/execution, saved reports, and production metric semantics are deferred.
 
 Future architecture: **React → FastAPI → read-only SQL Server**. The browser must never access SQL Server. The separate Light Workbench repository and its database/hardware workflows are untouched.
 
-See [design reference](docs/DESIGN_REFERENCE.md), [status and evidence](docs/STATUS.md), [proposed milestones](docs/PLAN.md), and [third-party notices](docs/THIRD_PARTY.md). Stop at Milestone 0 until further work is authorized.
+See [design reference](docs/DESIGN_REFERENCE.md), [status and evidence](docs/STATUS.md), [proposed milestones](docs/PLAN.md), and [third-party notices](docs/THIRD_PARTY.md). Milestone 2 is not started and requires authorization.
