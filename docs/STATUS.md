@@ -1,3 +1,14 @@
+# Stage B authorization and read-only identity provisioning
+
+Updated November 11, 2026. The owner authorized Stage B for one named local non-production test database and a dedicated read-only SQL login. Exact target and identity details stay in local, untracked configuration. The owner provisioned the login through an administrator connection: one database role with object-level SELECT on `SCHEMA_MIGRATIONS`, `IL_RUNS`, `UNIT_SWITCH_ASSIGNMENTS`, `UNITS`, `SWITCHES` and `vw_RunTimingSummary`.
+
+Owner-run checks (screenshots reviewed):
+- The login belongs to no other database role, and `public` has no grants on `dbo` objects.
+- Impersonated as the login, the permission checks returned SELECT on `IL_RUNS` and `vw_RunTimingSummary` = 1, and INSERT/UPDATE on `IL_RUNS`, SELECT on `IL_MEASUREMENTS`, `dbo` schema SELECT and database CREATE TABLE = 0.
+- The migration ledger check ran successfully; its output was not reviewed here.
+
+The analytics connection check (`python -m app.reporting --verify`) has not run yet. Stage B acceptance, including schema/migration compatibility against the real database, bounded reads and query plans, is still pending.
+
 # Non-production certificate-trust opt-in
 
 Updated November 11, 2026. At the owner's decision, reporting now has a default-off `LWA_REPORTING_TRUST_SERVER_CERTIFICATE` setting for the approved local test server's self-signed certificate. Encryption remains mandatory, certificate validation remains the default, and the opt-in is rejected unless the target is declared non-production. The local diagnostic reports the sanitized TLS mode without exposing target or credential values.
