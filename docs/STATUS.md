@@ -19,7 +19,9 @@ So against the real test database, over an encrypted connection using the non-pr
 
 The server's TCP port is configured static.
 
-Still pending for Stage B acceptance: a bounded run read (`--runs`), review of query plans and cost, and sanitized failure behavior against the real server.
+A bounded run read (`--verify --runs`, window 2026-10-12 to 2026-11-12 UTC, 31 days) returned `compatible` with `returned_count: 4` and `has_more: false`. The parameterized, historical-assignment run query works against the real schema. Only sanitized counts were printed.
+
+Still pending for full Stage B acceptance: query plan/cost review on realistic volume and sanitized failure behavior against the real server (e.g. a wrong password or a stopped service). Neither blocks local development against the test database.
 
 # Non-production certificate-trust opt-in
 
