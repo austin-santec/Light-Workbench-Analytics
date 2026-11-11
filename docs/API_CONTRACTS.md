@@ -1,8 +1,8 @@
 # API contracts — Milestones 2–3 and first Stage B aggregate
 
-Local base: `http://127.0.0.1:8000`. API version: `v1`; service version: `0.1.0`. All four implemented operations are GET and use Pydantic response models in `backend/app/schemas.py`. `/docs` and `/openapi.json` expose the generated specification. No authentication, arbitrary HTTP SQL execution, resource-detail lookup, production metrics or frontend API integration exists.
+Local base: `http://127.0.0.1:8000`. API version: `v1`; service version: `0.1.0`. All four implemented operations are GET and use Pydantic response models in `backend/app/schemas.py`. `/docs` and `/openapi.json` expose the generated specification. No authentication, arbitrary HTTP SQL execution, resource-detail lookup or production metrics exist. The Overview live card is the first frontend API consumer.
 
-The first Stage B HTTP slice adds one aggregate-only run diagnostic. It may consume reporting data only after explicit request-time opt-in; FastAPI startup still does not load pyodbc or connect. No serial, operator, run ID, station row or other record-level field is served. The frontend remains on synthetic fixtures. Local diagnostic and database boundaries are documented in [REPORTING_DATABASE.md](REPORTING_DATABASE.md).
+The first Stage B HTTP slice adds one aggregate-only run diagnostic. It may consume reporting data only after explicit request-time opt-in; FastAPI startup still does not load pyodbc or connect. No serial, operator, run ID, station row or other record-level field is served. The frontend keeps all established synthetic fixtures and shows this diagnostic in a separate live card. Local diagnostic and database boundaries are documented in [REPORTING_DATABASE.md](REPORTING_DATABASE.md).
 
 ## Implemented operations
 
@@ -68,6 +68,14 @@ When connected, `data_source` is `test_database`; `tls` is `verified` or `encryp
 
 The numeric timing read is capped at 5000 ended runs by fetching at most 5001 numeric-only rows. If more than 5000 exist, `incomplete` is `true` and returned statistics cover only the bounded sample; clients must not present them as complete. No record identifiers are returned.
 
+### Overview frontend consumption
+
+During Vite development, `/api` is proxied to loopback `http://127.0.0.1:8000`; production build output has no proxy configuration. The Overview card computes the last 30 complete UTC days and sends the exclusive current-UTC-midnight boundary, keeping the window at exactly 30 days. It refetches on mount, Run purpose changes and manual refresh only.
+
+One selected purpose produces one filtered request. All four selected purposes produce one unfiltered request. Two or three selected purposes produce one request per purpose; the client sums only run counts, completion counts, timing-quality counts, open runs and the incomplete flag. It never combines means, medians or quantiles, and suppresses those statistics for partial multi-purpose selections.
+
+The client validates the complete response shape and known enum keys before rendering. It renders only fixed labels, aggregate numbers, the bounded window, the known TLS state and a sanitized 503 code. `not_connected`, network/backend-down, invalid-response and incomplete-sample states remain inside the live card and do not affect synthetic Overview content.
+
 ## Errors
 
 `ErrorResponse` wraps `{error: {code: string, message: string, details: ErrorDetail[]}}`; details contain only `{field: string, code: string}`. Example invalid `limit=0`:
@@ -101,4 +109,4 @@ The separate Light Workbench [database architecture](https://github.com/austin-s
 | Quality and replacements | Reviewed criteria snapshots, events versus unique replaced channels, assignment scope, recommendation usage versus verified work, saved no-recovery analyses versus final manufacturing disposition, current versus stale historical analyses |
 | Saved reports | Allowlisted report definitions, reviewed read models, bounded filters/results and disclosure/export rules; no arbitrary SQL execution implied by the sample Queries screen |
 
-Architecture is **React → FastAPI → read-only SQL Server**; browser-to-database access remains forbidden. The React application is not wired to this endpoint in Part A. React's colors, SVG geometry, chart formatting and view state remain client concerns; its synthetic presentation contracts are not production DTOs. Final production metrics and record-level APIs remain deferred.
+Architecture is **React → FastAPI → read-only SQL Server**; browser-to-database access remains forbidden. The Overview card consumes this endpoint through the Vite loopback proxy; other screens remain fixture-only. React's colors, SVG geometry, chart formatting and view state remain client concerns; its synthetic presentation contracts are not production DTOs. Final production metrics and record-level APIs remain deferred.

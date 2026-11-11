@@ -8,6 +8,7 @@ export default defineConfig({
   resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
   server: {
     host: '127.0.0.1',
+    proxy: { '/api': { target: 'http://127.0.0.1:8000', changeOrigin: false } },
     watch: { ignored: ['**/.local/**', '**/Claude-generated analytics dashboard sample/**', '**/public/licenses/**'] },
     fs: { deny: ['.env', '.env.*', '**/.git/**', '**/.local/**', '**/Claude-generated analytics dashboard sample/**'] },
   },

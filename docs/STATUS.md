@@ -1,3 +1,19 @@
+# First live metric Part B — Overview run activity card
+
+Updated November 11, 2026. The Overview now has a separate **Live · test database** card below its existing filters. It consumes `GET /api/v1/reporting/run-activity` through Vite's loopback-only `/api` proxy while every established KPI, chart, table and fixture remains synthetic. The card uses the last 30 complete UTC days, follows the existing Run purpose selection, fetches on mount/purpose change or manual refresh, and has no automatic refresh loop.
+
+The dependency-free client strictly validates the response contract and fixed enum keys. One selected purpose uses one filtered request; all four use one unfiltered request; two or three use separate filtered requests and sum counts/quality coverage only. Means, medians and P90 are never combined. The card covers loading, reporting-off, backend-down, sanitized 503, invalid-response, incomplete-sample, TLS and sample-size states, and never renders identifiers or arbitrary database strings.
+
+Validation for this change:
+
+- `npm.cmd run typecheck` and `npm.cmd run lint` passed.
+- The exact `npm.cmd run build` command reached Vite after TypeScript passed, then hit the known managed-filesystem/esbuild config-loader restriction. `npm.cmd run build -- --configLoader runner` passed with Vite 7.3.7 and 454 modules transformed.
+- `npm.cmd run test:browser` passed all 18 reported checks against a loopback Vite dev server. Synthetic route interception covered reporting-off, simulated connection refusal, the exact 30-day window, connected single-purpose timing, TLS, summed multi-purpose counts, refusal to combine timing and the all-purpose unfiltered request. The suite also passed its 24-screenshot light/dark desktop/tablet/narrow matrix and normal-flow error diagnostics. Light/dark desktop and 390px Overview captures were visually inspected. A separate headless Edge smoke check, with no backend listening and no API interception, confirmed the real Vite proxy path renders `Backend not reachable on 127.0.0.1:8000`.
+- Backend `.venv\Scripts\python.exe -m pytest` passed 143 tests and `.venv\Scripts\python.exe -m ruff check .` passed.
+- `git diff --check` passed. No backend code, dependency, AGENTS.md, database, reporting-enabled process, real record, credential, target detail, commit or push was involved.
+
+Real connected-card rendering, real 503/incomplete responses and live target behavior were not exercised in this implementation session. Austin must start the backend in his settings terminal for live visual acceptance.
+
 # First live metric Part A — aggregate run activity API
 
 Updated November 11, 2026. Implemented the approved aggregate-only `GET /api/v1/reporting/run-activity` backend slice. It counts runs started in a bounded UTC window by purpose and completion status, reports ended-run timing quality and T09/T10-style active/elapsed/stopped statistics, separates open runs, flags elapsed values strictly over 90 minutes, and marks the 5000-row numeric sample cap as incomplete. It returns no run IDs, serials, operators, stations or other record-level rows and is explicitly not a unit count, per-unit T12 metric or production KPI. React remains unchanged and synthetic.

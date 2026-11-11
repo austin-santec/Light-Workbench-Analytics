@@ -48,6 +48,7 @@ The sample's green/amber semantic status tones and orange heatmap ramp remain; o
 - Bundled fonts locally instead of calling Google Fonts; fixed SQL line breaks in TSX. SVG axes and text render through normal React.
 - Recent activity adds table-local filters/sorting and explicit serial links; results follow range/purpose selection. Aggregate figures and the tiny recent list are separate illustrative datasets.
 - Most historical charts retain fixed demo periods. Their original calculation quirks are not a production metrics contract. Unit lookup has one complete detailed fixture; other unit links show an honest empty state.
+- Overview now places a clearly separated **Live · test database** run-activity card below the filters. It preserves the reference card hierarchy and Workbench tokens in both themes while distinguishing bounded FastAPI aggregates from every synthetic KPI. Loading, reporting-off, backend-down, sanitized database-failure, incomplete-sample and connected states share the same responsive surface; the card has manual refresh only.
 - The fixed 30-day configuration histogram now keeps its own mean/median consistent with its table; the selected-range average remains a separate synthetic KPI.
 - Query result bars use Recharts with the same horizontal layout, series colors and data. Narrow tables/charts scroll within panels. Narrow navigation uses two columns; the unit channel map uses six columns for readable cells.
 

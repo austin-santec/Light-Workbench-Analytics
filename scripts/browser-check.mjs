@@ -9,10 +9,69 @@ const browser = await chromium.launch(process.env.BROWSER_PATH ? { executablePat
 const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
 const errors = [];
 const checks = [];
+let runActivityMode = 'not_connected';
+const runActivityRequests = [];
+const purposeTotals = { production: 2, engineering: 3, training: 1, calibration: 4 };
+const purposeOpenRuns = { production: 0, engineering: 1, training: 0, calibration: 0 };
+const purposeConfirmed = { production: 1, engineering: 1, training: 0, calibration: 0 };
+const sampleState = n => n === 0 ? 'no_data' : n < 10 ? 'small_sample' : 'ok';
+const durationStatistics = (n, multiplier) => ({
+  n,
+  mean: n ? n * multiplier : null,
+  median: n ? n * multiplier : null,
+  p90: n ? n * multiplier + 10 : null,
+  sample_state: sampleState(n),
+});
+const runActivityFixture = url => {
+  const purpose = url.searchParams.get('purpose');
+  const purposes = purpose ? [purpose] : Object.keys(purposeTotals);
+  const byPurpose = Object.fromEntries(Object.keys(purposeTotals).map(key => [key, purposes.includes(key) ? purposeTotals[key] : 0]));
+  const total = Object.values(byPurpose).reduce((sum, count) => sum + count, 0);
+  const openRuns = purposes.reduce((sum, key) => sum + purposeOpenRuns[key], 0);
+  const confirmed = purposes.reduce((sum, key) => sum + purposeConfirmed[key], 0);
+  const unavailable = total - openRuns - confirmed;
+  const ended = total - openRuns;
+  return {
+    data_source: 'test_database',
+    tls: 'encrypted_unverified',
+    window: {
+      started_from: new Date(url.searchParams.get('started_from')).toISOString().replace('.000Z', 'Z'),
+      started_before: new Date(url.searchParams.get('started_before')).toISOString().replace('.000Z', 'Z'),
+    },
+    filters: { purpose, wavelength_mode: null, switch_model: null },
+    incomplete: false,
+    runs: {
+      count_basis: 'runs_started_in_window_not_units',
+      total,
+      by_run_purpose: byPurpose,
+      by_completion_status: { in_progress: openRuns, complete: total - openRuns, stopped: 0, failed: 0 },
+    },
+    timing: {
+      open_runs: openRuns,
+      by_quality: { confirmed, checkpoint_estimate: 0, partial: 0, provisional: 0, unavailable },
+      active_seconds: durationStatistics(confirmed, 50),
+      elapsed_seconds: durationStatistics(ended, 80),
+      stopped_seconds: { n: confirmed, mean: confirmed ? 15 : null, sample_state: sampleState(confirmed) },
+      flagged_over_90_min: 0,
+    },
+  };
+};
+await page.route('**/api/v1/reporting/run-activity?*', async route => {
+  const url = new URL(route.request().url());
+  runActivityRequests.push(url);
+  await route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify(runActivityMode === 'not_connected' ? { data_source: 'not_connected' } : runActivityFixture(url)),
+  });
+});
 page.on('pageerror', error => errors.push(error.message));
 page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
 page.on('response', response => { if (response.status() >= 400) errors.push(`HTTP ${response.status()}: ${response.url()}`); });
-page.on('requestfailed', request => errors.push(`Request failed: ${request.url()} ${request.failure()?.errorText}`));
+page.on('requestfailed', request => {
+  const expectedUnmountCancellation = new URL(request.url()).pathname === '/api/v1/reporting/run-activity' && request.failure()?.errorText === 'net::ERR_ABORTED';
+  if (!expectedUnmountCancellation) errors.push(`Request failed: ${request.url()} ${request.failure()?.errorText}`);
+});
 const check = label => { checks.push(label); console.log(`PASS ${label}`); };
 const visit = async route => { await page.goto(`${base}/#${route}`); await page.locator('h1').waitFor(); };
 const assertText = async (locator, text) => assert.ok((await locator.innerText()).includes(text), `Expected ${text}`);
@@ -39,6 +98,34 @@ try {
   await assertText(page.getByRole('region', { name: 'Key metrics' }), '1,008');
   check('Overview renders synthetic summary');
 
+  const liveCard = page.getByRole('region', { name: 'Run activity' });
+  await liveCard.getByText('Live data is off. Start the backend with reporting settings to see test-database numbers.').waitFor();
+  const firstLiveRequest = runActivityRequests.at(-1);
+  const startedFrom = new Date(firstLiveRequest.searchParams.get('started_from'));
+  const startedBefore = new Date(firstLiveRequest.searchParams.get('started_before'));
+  assert.equal(startedBefore.getTime() - startedFrom.getTime(), 30 * 24 * 60 * 60 * 1000);
+  assert.equal(startedBefore.toISOString().slice(11), '00:00:00.000Z');
+  assert.equal(firstLiveRequest.searchParams.get('purpose'), 'production');
+  check('Live card not-connected state and 30 complete UTC day request window');
+
+  const downPage = await browser.newPage({ viewport: { width: 900, height: 800 } });
+  await downPage.route('**/api/v1/reporting/run-activity?*', route => route.abort('connectionrefused'));
+  try {
+    await downPage.goto(`${base}/#/`, { waitUntil: 'domcontentloaded' });
+    await downPage.getByRole('region', { name: 'Run activity' }).getByText('Backend not reachable on 127.0.0.1:8000').waitFor();
+    check('Live card backend-down state');
+  } finally { await downPage.close(); }
+
+  runActivityMode = 'connected';
+  await liveCard.getByRole('button', { name: 'Refresh live data' }).click();
+  await liveCard.getByText('Raw run activity, not units').waitFor();
+  await assertText(liveCard, 'Encrypted, certificate not verified');
+  await liveCard.getByText('Runs started').locator('..').getByText('2', { exact: true }).waitFor();
+  await assertText(liveCard, 'Small sample');
+  check('Live card connected single-purpose counts, timing, sample, and TLS states');
+
+  await page.reload();
+  await page.locator('h1').waitFor();
   await page.keyboard.press('Tab');
   await assertFocus(page.getByRole('link', { name: 'Skip to content' }));
   await page.keyboard.press('Enter');
@@ -50,7 +137,16 @@ try {
   await page.getByRole('button', { name: /^Engineering / }).click();
   await assertText(page.getByRole('heading', { level: 1 }), 'Production + engineering');
   await assertText(page.getByRole('region', { name: 'Key metrics' }), '8,736');
+  await liveCard.getByText('Runs started').locator('..').getByText('5', { exact: true }).waitFor();
+  await liveCard.getByText('Select one purpose or all to see timing').waitFor();
+  await page.getByRole('button', { name: /^Training / }).click();
+  await page.getByRole('button', { name: /^Calibration / }).click();
+  await liveCard.getByText('Runs started').locator('..').getByText('10', { exact: true }).waitFor();
+  await liveCard.getByText('Elapsed time').waitFor();
+  assert.equal(runActivityRequests.at(-1).searchParams.has('purpose'), false);
+  check('Live counts combine across selected purposes; timing is refused for partial combinations and restored for all-purpose request');
   await page.getByRole('button', { name: 'Back to production only' }).click();
+  await liveCard.getByText('Runs started').locator('..').getByText('2', { exact: true }).waitFor();
   await page.getByRole('button', { name: /^Production / }).click();
   assert.equal(await page.getByRole('button', { name: /^Production / }).getAttribute('aria-pressed'), 'true');
   check('Range and purpose filters update summary; final purpose cannot be deselected');

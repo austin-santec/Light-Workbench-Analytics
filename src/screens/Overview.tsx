@@ -7,6 +7,7 @@ import { RecentActivity } from '../components/RecentActivity';
 import { css } from '../lib/css';
 import { getOverviewValues } from '../mock/overview';
 import type { OverviewState } from '../types';
+import { LiveRunActivityCard } from '../components/LiveRunActivityCard';
 
 export default function Overview() {
  const [state, setState] = useState<OverviewState>({ range: 'today', cfg: 0, purp: { production: true, engineering: false, training: false, calibration: false } });
@@ -71,6 +72,8 @@ export default function Overview() {
         <PreviewSelect style={css("min-height:40px;padding:0 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel);font-size:13.5px;font-weight:500")}><option >Included only</option><option >Included + pending</option><option >Everything, incl. voided and superseded</option></PreviewSelect>
       </label>
     </section>
+
+    <LiveRunActivityCard purposes={state.purp} />
 
     {scope.show && <>
       <div role="status" style={css("display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:10px 14px;border-radius:12px;background:" + String(scope.bg) + ";color:" + String(scope.fg) + ";border:1px solid color-mix(in srgb,currentColor 25%,transparent);font-size:13px")}>
