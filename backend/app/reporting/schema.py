@@ -73,7 +73,8 @@ COLUMNS = {
         "active_test_ms": ("bigint", 8, 0, True),
         "elapsed_ms": ("bigint", 8, 0, True),
         "stopped_ms": ("bigint", 8, 0, True),
-        "timing_quality": ("varchar", 19, 0, True),
+        # Verified against the Stage B test database 2026-11-11: CASE of literals, NOT NULL.
+        "timing_quality": ("varchar", 19, 0, False),
     },
 }
 
