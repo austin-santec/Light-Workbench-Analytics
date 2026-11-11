@@ -7,7 +7,19 @@ Owner-run checks (screenshots reviewed):
 - Impersonated as the login, the permission checks returned SELECT on `IL_RUNS` and `vw_RunTimingSummary` = 1, and INSERT/UPDATE on `IL_RUNS`, SELECT on `IL_MEASUREMENTS`, `dbo` schema SELECT and database CREATE TABLE = 0.
 - The migration ledger check ran successfully; its output was not reviewed here.
 
-The analytics connection check (`python -m app.reporting --verify`) has not run yet. Stage B acceptance, including schema/migration compatibility against the real database, bounded reads and query plans, is still pending.
+**First real connection (owner-run, November 11, 2026):**
+- `python -m app.reporting` returned `configured_not_verified` with `tls: encrypted_unverified`, so the settings were valid with no connection made.
+- `python -m app.reporting --verify` returned **`compatible`** with `tls: encrypted_unverified`.
+
+So against the real test database, over an encrypted connection using the non-production certificate-trust opt-in:
+- the migration ledger matches exactly 1–7 with the reviewed names and checksums;
+- the consumed column types match;
+- the login passed the role and permission preflight;
+- connection cleanup completed.
+
+The server's TCP port is configured static.
+
+Still pending for Stage B acceptance: a bounded run read (`--runs`), review of query plans and cost, and sanitized failure behavior against the real server.
 
 # Non-production certificate-trust opt-in
 
