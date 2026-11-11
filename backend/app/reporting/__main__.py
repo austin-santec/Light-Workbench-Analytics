@@ -27,7 +27,12 @@ def main(argv=None) -> int:
         if not settings.enabled:
             result = {"reporting": "disabled"}
         elif not args.verify:
-            result = {"reporting": "configured_not_verified"}
+            result = {
+                "reporting": "configured_not_verified",
+                "tls": (
+                    "encrypted_unverified" if settings.trust_server_certificate else "verified"
+                ),
+            }
         else:
             query = None
             if args.runs:
@@ -35,11 +40,19 @@ def main(argv=None) -> int:
             repository = SqlServerReportingRepository(SqlServerAdapter(settings))
             if query is None:
                 repository.check_schema()
-                result = {"reporting": "compatible"}
+                result = {
+                    "reporting": "compatible",
+                    "tls": (
+                        "encrypted_unverified" if settings.trust_server_certificate else "verified"
+                    ),
+                }
             else:
                 page = repository.list_runs(query)
                 result = {
                     "reporting": "compatible",
+                    "tls": (
+                        "encrypted_unverified" if settings.trust_server_certificate else "verified"
+                    ),
                     "returned_count": len(page.items),
                     "has_more": page.has_more,
                 }
@@ -53,7 +66,12 @@ def main(argv=None) -> int:
             if exc.code in {"schema_incompatible", "target_mismatch"}
             else "unavailable"
         )
-        print(json.dumps({"reporting": state, "code": exc.code}))
+        result = {"reporting": state, "code": exc.code}
+        if "settings" in locals() and settings.enabled:
+            result["tls"] = (
+                "encrypted_unverified" if settings.trust_server_certificate else "verified"
+            )
+        print(json.dumps(result))
     return 2
 
 

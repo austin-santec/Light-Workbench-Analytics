@@ -227,7 +227,7 @@ def test_enabled_requires_all_approval_fields(missing):
         {"query_timeout_seconds": 0},
         {"query_timeout_seconds": 31},
         {"encrypt": False},
-        {"trust_server_certificate": True},
+        {"trust_server_certificate": True, "target_kind": None},
         {"connection_string": "DEMO"},
         {"username": SecretStr("DEMO-user")},
         {"authentication": "sql"},
@@ -262,6 +262,16 @@ def test_secrets_targets_hidden_and_odbc_values_escaped():
     assert "Encrypt={yes};TrustServerCertificate={no};" in connection_string
     assert "Trusted_Connection" not in connection_string
     assert "UID={DEMO-readonly}" in connection_string
+
+
+def test_nonproduction_certificate_trust_opt_in_keeps_encryption_enabled():
+    connection_string = _connection_string(settings(trust_server_certificate=True))
+    assert "Encrypt={yes};TrustServerCertificate={yes};" in connection_string
+
+
+def test_certificate_trust_requires_declared_nonproduction_target():
+    with pytest.raises(ValidationError, match="declared non-production target"):
+        ReportingSettings(trust_server_certificate=True)
 
 
 def test_preflight_timeouts_readonly_tls_and_cleanup(database):
@@ -514,7 +524,17 @@ def test_diagnostic_disabled_or_unverified_never_connects(monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out) == {"reporting": "disabled"}
     enable_diagnostic_environment(monkeypatch)
     assert diagnostic([]) == 0
-    assert json.loads(capsys.readouterr().out) == {"reporting": "configured_not_verified"}
+    assert json.loads(capsys.readouterr().out) == {
+        "reporting": "configured_not_verified",
+        "tls": "verified",
+    }
+
+    monkeypatch.setenv("LWA_REPORTING_TRUST_SERVER_CERTIFICATE", "true")
+    assert diagnostic([]) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "reporting": "configured_not_verified",
+        "tls": "encrypted_unverified",
+    }
 
 
 def test_diagnostic_only_emits_status_and_counts(database, monkeypatch, capsys):
@@ -538,16 +558,21 @@ def test_diagnostic_only_emits_status_and_counts(database, monkeypatch, capsys):
     )
     assert json.loads(capsys.readouterr().out) == {
         "reporting": "compatible",
+        "tls": "verified",
         "returned_count": 3,
         "has_more": False,
     }
     assert diagnostic(["--verify"]) == 0
-    assert json.loads(capsys.readouterr().out) == {"reporting": "compatible"}
+    assert json.loads(capsys.readouterr().out) == {
+        "reporting": "compatible",
+        "tls": "verified",
+    }
     database.migrations = []
     assert diagnostic(["--verify"]) == 2
     assert json.loads(capsys.readouterr().out) == {
         "reporting": "incompatible",
         "code": "schema_incompatible",
+        "tls": "verified",
     }
 
 

@@ -1,3 +1,9 @@
+# Non-production certificate-trust opt-in
+
+Updated November 11, 2026. At the owner's decision, reporting now has a default-off `LWA_REPORTING_TRUST_SERVER_CERTIFICATE` setting for the approved local test server's self-signed certificate. Encryption remains mandatory, certificate validation remains the default, and the opt-in is rejected unless the target is declared non-production. The local diagnostic reports the sanitized TLS mode without exposing target or credential values.
+
+Offline validation: backend `pytest` passed 125 tests; `ruff check .`, `ruff format --check .` and `pip check` passed. Frontend typecheck and lint passed. The exact `npm.cmd run build` command was blocked by the managed filesystem while esbuild tried to read a parent directory and resolve `vite.config.ts`; the approved fallback `npm.cmd run build -- --configLoader runner` passed with Vite 7.3.7 and 452 modules transformed. `git diff --check` passed. Milestone 3 Stage B remains **unaccepted**. No database connection, reporting verification, commit or push occurred.
+
 # Migration 7 source baseline refresh
 
 Updated November 11, 2026. The offline reporting schema baseline now recognizes exactly source migrations 1–7 at read-only evidence commit `5d4972830e74cc1b1e718fb577916d132e58faf7`. Migration 7 is `run_test_sessions` with normalized SHA-256 `43f6ec51f25bfd1bfae3da6255d896708add338cb021d96a8dab653f01f14125`; migrations 1–6 were re-derived at the same commit and remain unchanged. Evidence was read only with `git show`; no source code was imported or executed.

@@ -41,7 +41,7 @@ def _connection_string(settings: ReportingSettings) -> str:
         "SERVER": f"tcp:{settings.server},{settings.port}",
         "DATABASE": settings.database,
         "Encrypt": "yes",
-        "TrustServerCertificate": "no",
+        "TrustServerCertificate": "yes" if settings.trust_server_certificate else "no",
         "ApplicationIntent": "ReadOnly",
         "APP": "Light Workbench Analytics Reporting",
     }

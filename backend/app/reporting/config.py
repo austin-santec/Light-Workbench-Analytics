@@ -26,11 +26,16 @@ class ReportingSettings(BaseSettings):
     authentication: Literal["windows", "sql"] = "windows"
     username: SecretStr | None = Field(default=None, repr=False)
     password: SecretStr | None = Field(default=None, repr=False)
+    trust_server_certificate: bool = False
     connection_timeout_seconds: int = Field(default=5, ge=1, le=15)
     query_timeout_seconds: int = Field(default=10, ge=1, le=30)
 
     @model_validator(mode="after")
     def require_explicit_approval(self) -> Self:
+        if self.trust_server_certificate and self.target_kind != "nonproduction":
+            raise ValueError(
+                "Trusting the server certificate requires a declared non-production target"
+            )
         if self.authentication == "windows" and (self.username or self.password):
             raise ValueError("Windows authentication must not supply SQL credentials")
         if self.authentication == "sql" and not all(

@@ -83,14 +83,15 @@ Read-only enforcement comes from database permissions. pyodbc `readonly=True` an
 | `APPROVAL_REFERENCE` | Nonblank local approval/change reference, maximum 100 characters |
 | `SERVER`, `PORT`, `DATABASE` | No server/database defaults; TCP DNS hostname and port (default 1433), restricted database identifier |
 | `APPROVED_SERVER`, `APPROVED_PORT`, `APPROVED_DATABASE` | Separately supplied exact approved endpoint/database; port must be explicit. Server comparison ignores case; database comparison is exact. Any mismatch fails before driver loading. |
-| `AUTHENTICATION` | `windows` default, or explicit `sql` |
+| `AUTHENTICATION` | `windows` default, or explicit `sql`; SQL authentication is the owner's preferred method for the approved local test target |
 | `USERNAME`, `PASSWORD` | Required nonblank secret values for SQL auth; forbidden for Windows auth |
+| `TRUST_SERVER_CERTIFICATE` | false by default; true may skip certificate validation only for a declared `nonproduction` target |
 | `CONNECTION_TIMEOUT_SECONDS` | 5 default, 1–15 inclusive |
 | `QUERY_TIMEOUT_SECONDS` | 10 default, 1–30 inclusive |
 
 Supported adapter: conventional 64-bit Python 3.12+ and optional pyodbc 5.4+ with Microsoft ODBC Driver 18. Validated locally: CPython 3.14.7 x64, pyodbc 5.4.0 import and Driver 18 enumeration, **without connecting**. The separate 32-bit hardware runtime is not reused. Driver import/enumeration is lazy; disabled reporting never loads it. No pooling is enabled by this isolated diagnostic adapter.
 
-Connections use explicit TCP endpoints, `Encrypt=yes`, `TrustServerCertificate=no`, ODBC-escaped values, `readonly=True`, and autocommit for short SELECT statements. There is no TLS bypass or arbitrary connection-string setting. The server certificate must chain to a trusted CA and match the approved hostname; fix trust/hostname provisioning instead of disabling verification. See [Microsoft ODBC encryption documentation](https://learn.microsoft.com/en-us/sql/connect/odbc/windows/features-of-the-microsoft-odbc-driver-for-sql-server-on-windows) and [query/login timeout distinction](https://github.com/mkleehammer/pyodbc/wiki/Connection).
+Connections use explicit TCP endpoints, mandatory `Encrypt=yes`, ODBC-escaped values, `readonly=True`, and autocommit for short SELECT statements. Certificate validation is the default (`TrustServerCertificate=no`): the server certificate must chain to a trusted CA and match the approved hostname. The owner-approved, default-off `LWA_REPORTING_TRUST_SERVER_CERTIFICATE=true` opt-in may set `TrustServerCertificate=yes` only for a declared non-production target and must never be used for production. This weaker mode encrypts the connection but does not verify the server's identity, so a machine in the middle could impersonate the server. No arbitrary connection-string setting can disable encryption. See [Microsoft ODBC encryption documentation](https://learn.microsoft.com/en-us/sql/connect/odbc/windows/features-of-the-microsoft-odbc-driver-for-sql-server-on-windows) and [query/login timeout distinction](https://github.com/mkleehammer/pyodbc/wiki/Connection).
 
 Configuration declarations cannot prove that a target is non-production, that DNS aliases resolve as intended, or that an identity is dedicated. Stage B requires external administrator/environment confirmation. Once connected, `DB_NAME()` must exactly match the approved database before schema/record reads. Every operation creates a short-lived connection, sets the query timeout before cursor use, checks compatibility on that same connection and explicitly closes cursor then connection on success/failure. No commit, migration, seed, reset, permission-changing or hardware operation exists.
 
@@ -150,7 +151,7 @@ Stage B checklist (all pending):
 
 - Explicit authorization of exact non-production host/port/database and separate identity; verify environment and DNS independently. Never infer approval from source documentation.
 - DBA provisioning/review of effective read-only privileges, inherited groups/roles and metadata visibility, without analytics executing grants or write tests.
-- Confirm 64-bit runtime/driver, login/query timeouts, certificate chain/hostname validation and no TLS bypass against the actual server.
+- Confirm 64-bit runtime/driver and login/query timeouts, plus either certificate chain/hostname validation or the documented owner-approved certificate-trust opt-in for a declared non-production target, against the actual server.
 - Verify exact migration history/checksums, consumed columns and separately inspect relationships, constraints, indexes and database settings.
 - Run bounded schema/run reads; validate assignment/UTC/filter/order behavior and query plans/cost. Keep evidence private and sanitized.
 - Verify negative permission metadata and sanitized failure/cleanup behavior without DML/DDL attempts, destructive setup or production access. Record outcome in `STATUS.md` only after evidence exists.
