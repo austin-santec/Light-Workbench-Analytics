@@ -71,6 +71,84 @@ class DemoRunsResponse(BaseModel):
     pagination: Pagination
 
 
+class RunActivityQueryParams(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    started_from: AwareDatetime
+    started_before: AwareDatetime
+    purpose: RunPurpose | None = None
+    wavelength_mode: Literal["SM", "MM"] | None = None
+    switch_model: str | None = None
+
+
+class RunActivityWindow(BaseModel):
+    started_from: AwareDatetime
+    started_before: AwareDatetime
+
+
+class RunActivityFilters(BaseModel):
+    purpose: RunPurpose | None
+    wavelength_mode: Literal["SM", "MM"] | None
+    switch_model: str | None
+
+
+class DurationStatisticsResponse(BaseModel):
+    n: int = Field(ge=0)
+    mean: float | None
+    median: float | None
+    p90: float | None
+    sample_state: Literal["no_data", "small_sample", "ok"]
+
+
+class StoppedStatisticsResponse(BaseModel):
+    n: int = Field(ge=0)
+    mean: float | None
+    sample_state: Literal["no_data", "small_sample", "ok"]
+
+
+class RunCountsResponse(BaseModel):
+    count_basis: Literal["runs_started_in_window_not_units"] = "runs_started_in_window_not_units"
+    total: int = Field(ge=0)
+    by_run_purpose: dict[RunPurpose, int]
+    by_completion_status: dict[Literal["in_progress", "complete", "stopped", "failed"], int]
+
+
+class RunTimingResponse(BaseModel):
+    open_runs: int = Field(ge=0)
+    by_quality: dict[
+        Literal[
+            "confirmed",
+            "checkpoint_estimate",
+            "partial",
+            "provisional",
+            "unavailable",
+        ],
+        int,
+    ]
+    active_seconds: DurationStatisticsResponse
+    elapsed_seconds: DurationStatisticsResponse
+    stopped_seconds: StoppedStatisticsResponse
+    flagged_over_90_min: int = Field(ge=0)
+
+
+class RunActivityConnectedResponse(BaseModel):
+    data_source: Literal["test_database"] = "test_database"
+    tls: Literal["verified", "encrypted_unverified"]
+    window: RunActivityWindow
+    filters: RunActivityFilters
+    incomplete: bool
+    runs: RunCountsResponse
+    timing: RunTimingResponse
+
+
+class RunActivityNotConnectedResponse(BaseModel):
+    data_source: Literal["not_connected"] = "not_connected"
+
+
+class ReportingFailureResponse(BaseModel):
+    code: str
+
+
 class ErrorDetail(BaseModel):
     field: str
     code: str

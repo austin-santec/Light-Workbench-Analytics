@@ -5,7 +5,65 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from app import __version__
-from app.schemas import DemoRun, DemoRunsResponse, ErrorResponse, HealthResponse, SystemInfo
+from app.api import ReportingAccess, get_reporting_access
+from app.reporting.adapter import ReportingError
+from app.reporting.models import (
+    DurationStatistics,
+    RunActivityMetrics,
+    SampleState,
+    StoppedStatistics,
+    TimingQuality,
+)
+from app.schemas import (
+    DemoRun,
+    DemoRunsResponse,
+    ErrorResponse,
+    HealthResponse,
+    RunActivityConnectedResponse,
+    SystemInfo,
+)
+
+
+class FakeActivityRepository:
+    def __init__(self, result=None, error=None):
+        self.result = result
+        self.error = error
+        self.queries = []
+
+    def get_run_activity(self, query):
+        self.queries.append(query)
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
+def activity_metrics():
+    return RunActivityMetrics(
+        total_runs=3,
+        by_run_purpose={
+            purpose: int(purpose == "engineering") * 3
+            for purpose in ["production", "engineering", "training", "calibration"]
+        },
+        by_completion_status={
+            "in_progress": 1,
+            "complete": 2,
+            "stopped": 0,
+            "failed": 0,
+        },
+        open_runs=1,
+        by_timing_quality={
+            quality: int(quality == TimingQuality.CONFIRMED) * 2 for quality in TimingQuality
+        },
+        active_seconds=DurationStatistics(
+            n=2, mean=15, median=15, p90=20, sample_state=SampleState.SMALL_SAMPLE
+        ),
+        elapsed_seconds=DurationStatistics(
+            n=2, mean=30, median=30, p90=40, sample_state=SampleState.SMALL_SAMPLE
+        ),
+        stopped_seconds=StoppedStatistics(n=2, mean=15, sample_state=SampleState.SMALL_SAMPLE),
+        flagged_over_90_min=0,
+        incomplete=False,
+    )
 
 
 def test_startup_health_and_system_info(client):
@@ -102,6 +160,105 @@ def test_invalid_parameters_have_consistent_errors(client, query):
     assert all(set(detail) == {"field", "code"} for detail in response.json()["error"]["details"])
 
 
+def test_run_activity_disabled_or_not_configured_returns_only_not_connected(client, monkeypatch):
+    params = {
+        "started_from": "2026-11-01T00:00:00Z",
+        "started_before": "2026-11-02T00:00:00Z",
+    }
+    assert client.get("/api/v1/reporting/run-activity", params=params).json() == {
+        "data_source": "not_connected"
+    }
+    monkeypatch.setenv("LWA_REPORTING_ENABLED", "true")
+    assert client.get("/api/v1/reporting/run-activity", params=params).json() == {
+        "data_source": "not_connected"
+    }
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"started_from": "2026-11-01T00:00:00", "started_before": "2026-11-02T00:00:00Z"},
+        {"started_from": "2026-11-02T00:00:00Z", "started_before": "2026-11-01T00:00:00Z"},
+        {"started_from": "2026-11-01T00:00:00Z", "started_before": "2026-12-03T00:00:00Z"},
+        {
+            "started_from": "2026-11-01T00:00:00Z",
+            "started_before": "2026-11-02T00:00:00Z",
+            "wavelength_mode": "XX",
+        },
+        {
+            "started_from": "2026-11-01T00:00:00Z",
+            "started_before": "2026-11-02T00:00:00Z",
+            "purpose": "unknown",
+        },
+        {
+            "started_from": "2026-11-01T00:00:00Z",
+            "started_before": "2026-11-02T00:00:00Z",
+            "switch_model": "x" * 31,
+        },
+    ],
+)
+def test_run_activity_window_and_filters_are_sanitized_422(client, params):
+    response = client.get("/api/v1/reporting/run-activity", params=params)
+    assert response.status_code == 422
+    assert ErrorResponse.model_validate(response.json()).error.code == "validation_error"
+    assert not any(str(value) in response.text for value in params.values())
+
+
+def test_run_activity_connected_contract_echoes_utc_filters_and_only_aggregates(application):
+    fake = FakeActivityRepository(activity_metrics())
+    application.dependency_overrides[get_reporting_access] = lambda: ReportingAccess(
+        repository=fake, tls="verified"
+    )
+    with TestClient(application) as client:
+        response = client.get(
+            "/api/v1/reporting/run-activity",
+            params={
+                "started_from": "2026-11-01T01:00:00+01:00",
+                "started_before": "2026-11-02T01:00:00+01:00",
+                "purpose": "engineering",
+                "wavelength_mode": "SM",
+                "switch_model": "DEMO-MODEL-A",
+            },
+        )
+    assert response.status_code == 200
+    result = RunActivityConnectedResponse.model_validate(response.json())
+    assert result.data_source == "test_database" and result.tls == "verified"
+    assert response.json()["window"] == {
+        "started_from": "2026-11-01T00:00:00Z",
+        "started_before": "2026-11-02T00:00:00Z",
+    }
+    assert response.json()["filters"] == {
+        "purpose": "engineering",
+        "wavelength_mode": "SM",
+        "switch_model": "DEMO-MODEL-A",
+    }
+    assert result.runs.count_basis == "runs_started_in_window_not_units"
+    assert result.runs.total == 3 and result.timing.open_runs == 1
+    assert fake.queries[0].selection == "all"
+    assert not any(
+        forbidden in response.text.lower()
+        for forbidden in ["serial", "operator", "run_id", "station"]
+    )
+
+
+def test_run_activity_reporting_failure_is_exact_sanitized_503(application, caplog):
+    fake = FakeActivityRepository(error=ReportingError("query_timeout"))
+    application.dependency_overrides[get_reporting_access] = lambda: ReportingAccess(
+        repository=fake, tls="encrypted_unverified"
+    )
+    with TestClient(application) as client:
+        response = client.get(
+            "/api/v1/reporting/run-activity",
+            params={
+                "started_from": "2026-11-01T00:00:00Z",
+                "started_before": "2026-11-02T00:00:00Z",
+            },
+        )
+    assert response.status_code == 503
+    assert response.json() == {"code": "query_timeout"}
+    assert "encrypted_unverified" not in response.text
+
+
 @pytest.mark.parametrize("url", ["/", "/api/v1/unknown", "/api/v1/demo/runs/DEMO-RUN-9999"])
 def test_unknown_resource(client, url):
     response = client.get(url)
@@ -166,7 +323,12 @@ def test_demo_schema_rejects_real_identifiers_and_naive_timestamps(client):
 
 def test_openapi_matches_error_and_query_contracts(client):
     spec = client.get("/openapi.json").json()
-    assert set(spec["paths"]) == {"/api/v1/health/live", "/api/v1/system/info", "/api/v1/demo/runs"}
+    assert set(spec["paths"]) == {
+        "/api/v1/health/live",
+        "/api/v1/system/info",
+        "/api/v1/demo/runs",
+        "/api/v1/reporting/run-activity",
+    }
     operation = spec["paths"]["/api/v1/demo/runs"]["get"]
     assert {p["name"] for p in operation["parameters"]} == {"purpose", "model", "limit", "offset"}
     for code in ["404", "405", "422", "500"]:
@@ -174,3 +336,14 @@ def test_openapi_matches_error_and_query_contracts(client):
             "$ref": "#/components/schemas/ErrorResponse"
         }
     assert client.get("/docs").status_code == 200
+    reporting = spec["paths"]["/api/v1/reporting/run-activity"]["get"]
+    assert {parameter["name"] for parameter in reporting["parameters"]} == {
+        "started_from",
+        "started_before",
+        "purpose",
+        "wavelength_mode",
+        "switch_model",
+    }
+    assert reporting["responses"]["503"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/ReportingFailureResponse"
+    }

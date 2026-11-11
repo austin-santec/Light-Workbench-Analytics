@@ -11,12 +11,17 @@ from pydantic import SecretStr, ValidationError
 from app.reporting.__main__ import main as diagnostic
 from app.reporting.adapter import ReportingError, SqlServerAdapter, _connection_string, _driver
 from app.reporting.config import ReportingSettings
-from app.reporting.models import RunQuery
+from app.reporting.models import RunQuery, SampleState
 from app.reporting.repository import (
+    RUN_ACTIVITY_COUNT_SQL,
+    RUN_ACTIVITY_ROW_CAP,
+    RUN_ACTIVITY_TIMING_SQL,
     RUN_FIELDS,
     RUN_SQL,
     SqlServerReportingRepository,
+    build_run_activity_queries,
     build_run_query,
+    summarize_run_activity,
 )
 from app.reporting.schema import (
     COLUMN_SQL,
@@ -24,17 +29,9 @@ from app.reporting.schema import (
     IDENTITY_SQL,
     MIGRATION_SQL,
     MIGRATIONS,
+    OBJECT_TYPES,
     PERMISSION_SQL,
 )
-
-
-@pytest.fixture(autouse=True)
-def isolated_reporting_environment(monkeypatch):
-    import os
-
-    for name in os.environ:
-        if name.startswith("LWA_REPORTING_"):
-            monkeypatch.delenv(name)
 
 
 def settings(**changes):
@@ -103,11 +100,22 @@ class FakeDatabase:
         self.permissions = [(f"dbo.{name}", 1, 0, 0, 0, 0, 0) for name in COLUMNS]
         self.migrations = list(MIGRATIONS)
         self.columns = [
-            (table, column, *signature)
+            # sys.objects.type is char(2): SQL Server returns 'U ' / 'V ' with padding.
+            (table, OBJECT_TYPES[table].ljust(2), column, *signature)
             for table, columns in COLUMNS.items()
             for column, signature in columns.items()
         ]
         self.runs = [demo_row(3), demo_row(2), demo_row(1)]
+        self.activity_counts = [
+            ("production", "complete", "confirmed", 1),
+            ("production", "complete", "partial", 1),
+            ("production", "complete", "unavailable", 1),
+        ]
+        self.activity_timing = [
+            (60_000, 90_000, 30_000, "confirmed"),
+            (None, 120_000, None, "unavailable"),
+            (30_000, 180_000, None, "partial"),
+        ]
         self.fail_at = None
         self.error = FakeOdbcError("HYT00", "DEMO-sensitive-driver-message")
         self.cleanup_errors = set()
@@ -138,7 +146,14 @@ class FakeDatabase:
             PERMISSION_SQL: "permissions",
             MIGRATION_SQL: "migrations",
             COLUMN_SQL: "columns",
-        }.get(sql, "runs")
+        }.get(sql)
+        if kind is None:
+            if sql.startswith(RUN_ACTIVITY_COUNT_SQL):
+                kind = "activity_counts"
+            elif sql.startswith(RUN_ACTIVITY_TIMING_SQL):
+                kind = "activity_timing"
+            else:
+                kind = "runs"
         self.calls.append((sql, params))
         if self.fail_at == kind:
             raise self.error
@@ -158,7 +173,7 @@ class FakeDatabase:
         return self.result[0] if self.result else None
 
     def fetchmany(self, count):
-        assert 1 <= count <= 128
+        assert 1 <= count <= RUN_ACTIVITY_ROW_CAP + 1
         self.fetch_sizes.append(count)
         if self.fail_at == "fetch":
             raise self.error
@@ -354,11 +369,11 @@ def test_schema_incompatibilities_stop_before_run_query(database, change):
         database.migrations[-1] = tuple(row)
     elif change == "column":
         database.columns = [
-            row for row in database.columns if row[:2] != ("IL_RUNS", "station_number")
+            row for row in database.columns if (row[0], row[2]) != ("IL_RUNS", "station_number")
         ]
     else:
         row = list(database.columns[0])
-        row[2 if change == "type" else 5] = "nvarchar" if change == "type" else True
+        row[3 if change == "type" else 6] = "nvarchar" if change == "type" else True
         database.columns[0] = tuple(row)
     with pytest.raises(ReportingError, match="schema_incompatible"):
         repository(database).list_runs(query())
@@ -441,6 +456,132 @@ def test_bound_parameters_and_reviewed_selection_are_not_kpi_semantics():
     assert normal_params[2:4] == ("production", "included")
     assert "r.superseded_by_run_id IS NULL" in normal_sql
     assert "r.completion_status = ?" not in normal_sql
+
+
+def test_run_activity_queries_are_bounded_parameterized_and_nonidentifying():
+    injection = "DEMO' OR 1=1--"
+    count_sql, timing_sql, params = build_run_activity_queries(
+        query(
+            selection="all",
+            switch_model=injection,
+            wavelength_mode="MM",
+            run_purpose="engineering",
+            started_from="2026-11-01T01:00:00+01:00",
+        )
+    )
+    assert params == (
+        datetime(2026, 11, 1),
+        datetime(2026, 11, 2),
+        injection,
+        "MM",
+        "engineering",
+    )
+    assert injection not in count_sql + timing_sql
+    assert count_sql.count("?") == timing_sql.count("?") == len(params)
+    assert "COUNT_BIG(*)" in count_sql and "t.timing_quality" in count_sql
+    assert "GROUP BY" in count_sql
+    assert "TOP (5001)" in timing_sql
+    projection = timing_sql.split("FROM")[0]
+    assert all(name in projection for name in ["active_test_ms", "elapsed_ms", "stopped_ms"])
+    assert not re.search(r"\b(?:run_id|serial|operator|station)\b", projection, re.I)
+
+
+def test_run_activity_math_even_odd_nearest_rank_and_quality_rules():
+    count_rows = [
+        ("production", "complete", None, 1),
+        ("production", "complete", "confirmed", 9),
+        ("engineering", "failed", "checkpoint_estimate", 1),
+    ]
+    timing_rows = [
+        (index * 1000, index * 1000, index * 100, "confirmed") for index in range(1, 10)
+    ] + [(None, 5_400_001, None, "checkpoint_estimate")]
+    result = summarize_run_activity(count_rows, timing_rows, incomplete=False)
+    assert result.total_runs == 11
+    assert result.open_runs == 1
+    assert result.by_run_purpose["production"] == 10
+    assert result.by_completion_status["failed"] == 1
+    assert result.by_timing_quality["confirmed"] == 9
+    assert result.active_seconds.n == 9
+    assert result.active_seconds.median == 5
+    assert result.active_seconds.p90 == 9
+    assert result.active_seconds.sample_state is SampleState.SMALL_SAMPLE
+    assert result.elapsed_seconds.n == 10
+    assert result.elapsed_seconds.median == 5.5
+    assert result.elapsed_seconds.p90 == 9
+    assert result.elapsed_seconds.sample_state is SampleState.OK
+    assert result.stopped_seconds.mean == 0.5
+    assert result.flagged_over_90_min == 1
+
+
+def test_run_activity_no_data_uses_null_statistics():
+    result = summarize_run_activity([], [], incomplete=False)
+    assert result.total_runs == result.open_runs == 0
+    assert result.active_seconds.model_dump() == {
+        "n": 0,
+        "mean": None,
+        "median": None,
+        "p90": None,
+        "sample_state": SampleState.NO_DATA,
+    }
+    assert result.stopped_seconds.mean is None
+    assert result.stopped_seconds.sample_state is SampleState.NO_DATA
+
+
+def test_run_activity_90_minute_flag_is_strict_and_values_stay_in_sample():
+    result = summarize_run_activity(
+        [("production", "complete", "unavailable", 2)],
+        [
+            (None, 5_400_000, None, "unavailable"),
+            (None, 5_400_001, None, "unavailable"),
+        ],
+        incomplete=False,
+    )
+    assert result.flagged_over_90_min == 1
+    assert result.elapsed_seconds.n == 2
+    assert result.elapsed_seconds.p90 == 5400.001
+
+
+def test_run_activity_repository_caps_numeric_rows_and_marks_incomplete(database):
+    database.activity_counts = [("production", "complete", "confirmed", RUN_ACTIVITY_ROW_CAP + 1)]
+    database.activity_timing = [
+        (1000, 2000, 1000, "confirmed") for _ in range(RUN_ACTIVITY_ROW_CAP + 1)
+    ]
+    result = repository(database).get_run_activity(query(selection="all"))
+    assert result.incomplete is True
+    assert result.elapsed_seconds.n == RUN_ACTIVITY_ROW_CAP
+    assert database.fetch_sizes[-1] == RUN_ACTIVITY_ROW_CAP + 1
+
+
+@pytest.mark.parametrize("change", ["missing_view", "missing_view_column", "wrong_object_type"])
+def test_timing_view_schema_gate_fails_closed(database, change):
+    if change == "missing_view":
+        database.columns = [row for row in database.columns if row[0] != "vw_RunTimingSummary"]
+    elif change == "missing_view_column":
+        database.columns = [
+            row
+            for row in database.columns
+            if (row[0], row[2]) != ("vw_RunTimingSummary", "elapsed_ms")
+        ]
+    else:
+        database.columns = [
+            (row[0], "U ", *row[2:]) if row[0] == "vw_RunTimingSummary" else row
+            for row in database.columns
+        ]
+    with pytest.raises(ReportingError, match="schema_incompatible"):
+        repository(database).get_run_activity(query(selection="all"))
+    assert not any(sql.startswith(RUN_ACTIVITY_COUNT_SQL) for sql, _ in database.calls)
+
+
+def test_timing_view_select_denial_fails_closed(database):
+    view_permission = next(
+        index for index, row in enumerate(database.permissions) if row[0].endswith("TimingSummary")
+    )
+    row = list(database.permissions[view_permission])
+    row[1] = 0
+    database.permissions[view_permission] = tuple(row)
+    with pytest.raises(ReportingError, match="permission_denied"):
+        repository(database).get_run_activity(query(selection="all"))
+    assert not any(sql.startswith(RUN_ACTIVITY_COUNT_SQL) for sql, _ in database.calls)
 
 
 def test_page_has_more_empty_results_and_utc_mapping(database):
@@ -584,10 +725,18 @@ def test_diagnostic_configuration_errors_do_not_echo_values(monkeypatch, capsys)
     assert "DEMO-sensitive" not in output
 
 
-def test_reporting_configuration_does_not_wire_sensitive_http_routes(client, monkeypatch):
-    # The HTTP application never reads reporting configuration, even if it is invalid.
+def test_invalid_reporting_configuration_fails_closed_without_affecting_existing_routes(
+    client, monkeypatch
+):
     monkeypatch.setenv("LWA_REPORTING_ENABLED", "true")
     monkeypatch.setenv("LWA_REPORTING_SERVER", "DEMO-invalid-config")
     assert client.get("/api/v1/system/info").json()["data_source"] == "not_connected"
     assert client.get("/api/v1/demo/runs").json()["synthetic"] is True
+    assert client.get(
+        "/api/v1/reporting/run-activity",
+        params={
+            "started_from": "2026-11-01T00:00:00Z",
+            "started_before": "2026-11-02T00:00:00Z",
+        },
+    ).json() == {"data_source": "not_connected"}
     assert client.get("/api/v1/reporting/runs").status_code == 404

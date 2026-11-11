@@ -1,6 +1,6 @@
 # Reporting database foundation — Milestone 3
 
-**Stage A is offline-tested. Stage B is pending by explicit user instruction. No database connection was opened.** The independent React fixtures and three synthetic FastAPI endpoints are unchanged. Reporting is an internal Python repository/local diagnostic only, never an unauthenticated real-record API.
+**Stage A is offline-tested and the owner has authorized Stage B for one locally configured non-production target and dedicated read-only identity.** The owner, not Codex, performed the first compatible connection and bounded run read recorded in `STATUS.md`. Part A now exposes one aggregate-only run-activity endpoint; row-level real records, identities and serials remain forbidden over HTTP. React remains independent on synthetic fixtures.
 
 ## Reviewed baseline and evidence
 
@@ -10,7 +10,7 @@ Evidence reviewed: `infrastructure/database/sql_migrations/0001`–`0007`, `infr
 
 Supported SQL schema: exactly migrations **1–7**, with ordered names and SHA-256 checksums in `backend/app/reporting/schema.py`. Checksums follow the source runner: UTF-8 text with normalized LF newlines. These are verification metadata, not migration scripts to execute. SQL migration numbering is independent of legacy run/unit JSON schema versions.
 
-Notable implemented changes: 0002 rejects negative accepted losses; 0003 adds nullable `IL_RUNS.station_number`; 0004 adds analysis/recommendation history and replacement provenance; 0005 replaces `analysis_exclusion_reason` with nullable `void_info_json` and expands analysis result vocabulary; 0006 renames the switch count to `last_reported_scpi_channel_count`, makes measurement roles explicit and adds recommendation measurement FKs; 0007 adds prospective run timing sessions and a timing summary view. Do not query the removed/renamed columns. Analytics does not consume the 0007 objects yet.
+Notable implemented changes: 0002 rejects negative accepted losses; 0003 adds nullable `IL_RUNS.station_number`; 0004 adds analysis/recommendation history and replacement provenance; 0005 replaces `analysis_exclusion_reason` with nullable `void_info_json` and expands analysis result vocabulary; 0006 renames the switch count to `last_reported_scpi_channel_count`, makes measurement roles explicit and adds recommendation measurement FKs; 0007 adds prospective run timing sessions and a timing summary view. Do not query the removed/renamed columns. Analytics now consumes only the aggregate timing view from 0007, not session rows.
 
 ## Data contract for future review
 
@@ -38,7 +38,7 @@ Existing source FKs do not cascade deletes. Some cross-row rules, such as a repl
 - `vw_CurrentChannelMap`: expands assignment initial-map JSON and overlays the latest replacement per logical channel by event timestamp/ID. It does not verify hardware routing or a post-replacement measurement.
 - `vw_ConfirmedExtraPorts`: newest accepted extra candidate per assignment/physical port by written time, attempt and ID; excludes `excluded`/`superseded` source runs, requires a front-panel boundary and a port above it. Pending runs are not automatically excluded here; it is not a production-purpose filter.
 - `vw_ReplacementRecommendationUsage`: joins saved analysis/recommendation rows to recorded replacements using recommendation ID. Usage is distinct from current analysis freshness and verified manufacturing work.
-- `vw_RunTimingSummary` (0007; not consumed): one row per run. No sessions yields `timing_quality='unavailable'`; otherwise any `partial` session wins, then any `checkpoint_estimate`, then any open session yields `provisional`, and only the remaining fully closed set is `confirmed`. `active_test_ms` sums recorded session active durations. `stopped_ms` is NULL unless quality is `confirmed`, when it is nonnegative elapsed minus active time. For an open run, `elapsed_ms` uses `SYSUTCDATETIME()`, so repeated reads are non-deterministic. Runs predating 0007 have no historical sessions and therefore report unavailable unless a later source workflow records a session.
+- `vw_RunTimingSummary` (0007; aggregate consumption authorized): one row per run. No sessions yields `timing_quality='unavailable'`; otherwise any `partial` session wins, then any `checkpoint_estimate`, then any open session yields `provisional`, and only the remaining fully closed set is `confirmed`. `active_test_ms` sums recorded session active durations. `stopped_ms` is NULL unless quality is `confirmed`, when it is nonnegative elapsed minus active time. For an open run, `elapsed_ms` uses `SYSUTCDATETIME()`, so repeated reads are non-deterministic. Runs predating 0007 have no historical sessions and therefore report unavailable unless a later source workflow records a session. The HTTP query reads only `active_test_ms`, `elapsed_ms`, `stopped_ms` and `timing_quality` for ended runs; it never projects `run_id`.
 
 Source SQL constrains lifecycle to `in_progress`, `complete`, `stopped`, `failed`; purpose to `production`, `engineering`, `training`, `calibration`; analysis status to `pending`, `included`, `excluded`, `superseded`. Lifecycle completion is not passing quality. The richer display statuses in documentation are derived UI/read-model values, not SQL lifecycle enums.
 
@@ -50,9 +50,9 @@ Source workflow documentation says completed runs become included, stopped/faile
 
 An administrator must provision a **new dedicated reporting principal** for the approved non-production target. Windows authentication uses the process's Windows identity: launch under the dedicated approved account, not an interactive writer/admin account. SQL authentication requires separately configured credentials through the local environment/organization secret tooling; never copy source writer credentials. Do not store credentials in shell history, tracked files or command-line arguments.
 
-Use a dedicated database role with object-level SELECT on only these five consumed objects. The source's schema-wide reporting grant is broader than this design; do not reuse it or `db_datareader`, `db_datawriter`, owner/security/DDL/admin roles. No view/measurement/history permissions are needed for the current queries.
+Use a dedicated database role with object-level SELECT on only these six consumed objects: the original five tables plus `vw_RunTimingSummary`. The source's schema-wide reporting grant is broader than this design; do not reuse it or `db_datareader`, `db_datawriter`, owner/security/DDL/admin roles. No measurement/session/history-table permissions are needed for the current queries.
 
-Migration 0007 grants `vw_RunTimingSummary` to the source role `lwb_report_reader`; analytics does not use that role or consume the view. Any future analytics use would require a separately reviewed object-level `SELECT` grant to `analytics_reporting_readonly`. That grant is **future/not yet requested** and is not part of the guidance below.
+Migration 0007 grants `vw_RunTimingSummary` to the source role `lwb_report_reader`; analytics does not use that source role. The owner separately provisioned and reviewed object-level `SELECT` for the dedicated analytics identity as recorded in `STATUS.md`.
 
 Illustrative **administrator-managed guidance only**, never executed by analytics or tests:
 
@@ -63,6 +63,7 @@ GRANT SELECT ON OBJECT::dbo.IL_RUNS TO analytics_reporting_readonly;
 GRANT SELECT ON OBJECT::dbo.UNIT_SWITCH_ASSIGNMENTS TO analytics_reporting_readonly;
 GRANT SELECT ON OBJECT::dbo.UNITS TO analytics_reporting_readonly;
 GRANT SELECT ON OBJECT::dbo.SWITCHES TO analytics_reporting_readonly;
+GRANT SELECT ON OBJECT::dbo.vw_RunTimingSummary TO analytics_reporting_readonly;
 -- DBA creates/maps the separately approved user and adds role membership.
 ```
 
@@ -74,7 +75,7 @@ Read-only enforcement comes from database permissions. pyodbc `readonly=True` an
 
 ## Configuration and connection boundary
 
-`ReportingSettings` reads **environment variables only**, prefix `LWA_REPORTING_`. It does not read `.env`, DSNs, the related application's files, known development defaults, or an approval from a database-looking name. Leave `LWA_REPORTING_ENABLED` unset/false for Stage A. The HTTP settings class never reads/constructs reporting settings.
+`ReportingSettings` reads **environment variables only**, prefix `LWA_REPORTING_`. It does not read `.env`, DSNs, the related application's files, known development defaults, or an approval from a database-looking name. Leave `LWA_REPORTING_ENABLED` unset/false unless intentionally using the authorized target. FastAPI constructs reporting settings only in the new request dependency; application creation/startup does not construct the adapter, load pyodbc or connect.
 
 | Variable suffix | Requirement / default |
 | --- | --- |
@@ -97,13 +98,14 @@ Configuration declarations cannot prove that a target is non-production, that DN
 
 ## Implemented operations and cost bounds
 
-`ReportingRepository` exposes `check_schema()` and `list_runs(RunQuery)`. `SqlServerReportingRepository` implements both through `SqlServerAdapter`. These are internal Python operations; no raw SQL or caller-provided object identifiers are accepted by the repository.
+`ReportingRepository` exposes `check_schema()`, `list_runs(RunQuery)` and `get_run_activity(RunQuery)`. `SqlServerReportingRepository` implements them through `SqlServerAdapter`. No raw SQL or caller-provided object identifiers are accepted by the repository. The metadata page remains internal; only the aggregate activity result has an HTTP contract.
 
 | Operation | Read boundary |
 | --- | --- |
-| Connection/permissions | One scalar current-database/fixed-role/permission projection, then five object-permission rows; no unit/operator data |
-| Schema compatibility | TOP 8 bounded ledger query must yield exactly the seven reviewed IDs/names/checksums; a migration above 7 is ordered into the seven-row fetch boundary so it cannot be hidden by the existing cap. Missing/older/newer/modified histories fail. A TOP 128 catalog query checks consumed dbo user-table column names, system types, lengths, scale and nullability. Temporal storage lengths are normalized away; `datetime2` scale 3 is required. No cache or schema repair. |
+| Connection/permissions | One scalar current-database/fixed-role/permission projection, then six object-permission rows; no unit/operator data |
+| Schema compatibility | TOP 8 bounded ledger query must yield exactly the seven reviewed IDs/names/checksums; a migration above 7 is ordered into the seven-row fetch boundary so it cannot be hidden by the existing cap. Missing/older/newer/modified histories fail. A TOP 128 catalog query checks consumed dbo user-table and view (`U`/`V`) column names, system types, lengths, scale and nullability. Temporal storage lengths are normalized away; `datetime2` scale 3 is required. No cache or schema repair. |
 | Run/identity page | Explicit 17-column projection from `IL_RUNS → UNIT_SWITCH_ASSIGNMENTS → UNITS/SWITCHES`, preserving historical assignment ownership. Returns run/assignment/unit/switch IDs, main-board/switch serials, switch model, run number, start/end UTC, mode, completion/purpose/analysis status, superseding run ID, run front-panel count and station number. |
+| Aggregate run activity | On one connection after preflight, one `COUNT_BIG`/`GROUP BY` statement counts runs by purpose/completion and open state; a second statement fetches at most 5001 ended-run rows containing only three numeric duration columns and timing quality. Optional filters are bound. Python computes exact median and nearest-rank P90 over at most 5000 rows and marks larger samples incomplete. |
 
 Run reads require an aware UTC interval `[started_from, started_before)`, positive and at most 31 days. Optional equality filters: switch model (1–30 characters, bound parameter), wavelength mode, run purpose, completion and analysis status. Defaults use the named normal-report selection above. SQL values, dates, filters, limit and offset use `?` parameters; SQL identifiers/order are fixed in code. Driver-returned naive `DATETIME2` values are interpreted as UTC; aware values normalize to UTC.
 
@@ -113,13 +115,17 @@ Identity labels/model come from the joined unit/switch tables and may be mutable
 
 Date/result caps limit logical scope, not physical SQL work. The existing assignment/date and status/purpose/analysis indexes do not guarantee an efficient global timestamp seek/order. Stage B must inspect plans/reads on approved small non-production data before any larger deployment; timeouts are a guard, not a proven runtime SLA. Analytics never adds indexes to the source database. Full FK/index/CHECK-constraint verification and live migration history remain Stage B administration checks; consumed-column validation is not a full schema audit.
 
+The aggregate endpoint uses the same aware UTC `[started_from, started_before)` guard and 31-day maximum. Purpose is optional and defaults to all four purposes; optional mode and switch-model filters also intersect. Run totals count starts in the window and must be labeled as runs, never units. Open runs are counted separately and excluded from duration statistics. Timing-quality counts cover ended runs. Active/stopped statistics use only `confirmed` timing histories; elapsed statistics use every ended run. Values remain at millisecond precision until conversion to seconds. Median is exact; nearest-rank P90 selects one-based `ceil(0.90*n)`. Valid elapsed observations strictly greater than 5,400 seconds are flagged and remain included. Samples report `no_data` with null numbers at n=0, `small_sample` for n 1–9 and `ok` otherwise.
+
+The 5000-row cap bounds only the numeric duration sample. The query requests TOP 5001 to detect overflow; when overflow exists the response sets `incomplete: true` and statistics describe only the bounded sample. Counts remain SQL aggregates. This is an explicit incomplete diagnostic, not a production KPI or a substitute for T12 per-finished-unit cumulative timing.
+
 ## Sensitive fields and deferred metrics
 
-Serials, part numbers, operator fields (`tested_by`, `written_by`, `installed_by`, `removed_by`, `replaced_by`, `recorded_by`, `analyzed_by`), notes/reasons, station/equipment identity, UUIDs and JSON snapshots may be confidential. Current internal rows include serials to establish identity joins; they must not be logged, exported or served over unauthenticated HTTP. Rows/settings suppress sensitive repr fields; the diagnostic prints only state and bounded page count/has-more. Do not serialize internal models into HTTP responses.
+Serials, part numbers, operator fields (`tested_by`, `written_by`, `installed_by`, `removed_by`, `replaced_by`, `recorded_by`, `analyzed_by`), notes/reasons, station/equipment identity, UUIDs and JSON snapshots may be confidential. Current internal metadata rows include serials to establish identity joins; they must not be logged, exported or served over unauthenticated HTTP. The aggregate endpoint never invokes or serializes that metadata operation. Its database-returned strings are restricted to the reviewed purpose, completion-status and timing-quality enums. Rows/settings suppress sensitive repr fields; the diagnostic prints only state and bounded page count/has-more.
 
 Driver exceptions become sanitized codes: `driver_unavailable`, `connection_timeout`, `query_timeout`, `authentication_failed`, `permission_denied`, `connection_unavailable`, `schema_incompatible`, `target_mismatch`, `read_failed`, `cleanup_failed`, or `disabled`. Logs retain only code/phase, never raw exception arguments, SQL parameters, records, target details or credentials. Cleanup attempts both resources and preserves a primary failure. CLI configuration failures print only `configuration_invalid`.
 
-Questions before M4: reconcile the two inclusion rules; distinguish unique units/runs, channels/attempts and front-panel/extra-only/partial runs; define timezone/period boundaries; validate prospective 0007 active-time coverage and quality while retaining elapsed fallback or labels for pre-0007, partial and estimated timing; distinguish elapsed lifecycle time from active time; define technical validity/voiding and late retests; define replacement events versus unique channels, verified work and current map; validate saved analysis fingerprints and stale status; distinguish no viable recovery from final disposition. No final KPI formulas, quality outcomes or disposition fields are fabricated here.
+Remaining metric work: reconcile the two inclusion rules; distinguish unique units/runs, channels/attempts and front-panel/extra-only/partial runs; validate prospective 0007 active-time coverage and quality while retaining elapsed fallback or labels for pre-0007, partial and estimated timing; distinguish elapsed lifecycle time from active time; define technical validity/voiding and late retests; define replacement events versus unique channels, verified work and current map; validate saved analysis fingerprints and stale status; distinguish no viable recovery from final disposition. This endpoint implements only approved secondary run diagnostics. No final production KPI, quality outcome or disposition field is fabricated.
 
 ## Tests, local diagnostic and Stage B acceptance
 
@@ -135,25 +141,25 @@ From `backend/`:
 # {"reporting": "disabled"} by default; no driver load or connection.
 ```
 
-After **separate Stage B authorization and local administrator-supplied configuration only**:
+With the **Stage B-authorized target and local administrator-supplied configuration only** (owner-run; these commands connect and were not run for this Part A implementation):
 
 ```powershell
 # Without --verify: configured_not_verified; no connection.
 .venv\Scripts\python.exe -m app.reporting
-# These commands DO connect; do not run during Stage A.
+# These commands DO connect; run only from the owner's authorized terminal.
 .venv\Scripts\python.exe -m app.reporting --verify
 .venv\Scripts\python.exe -m app.reporting --verify --runs --started-from 2026-11-01T00:00:00Z --started-before 2026-11-02T00:00:00Z
 ```
 
-Diagnostic states distinguish `disabled`, `configured_not_verified`, `compatible` (only after checks), `incompatible` and `unavailable` with sanitized error codes. Success exits 0; sanitized configuration/read failures exit 2. A compatible connection does not establish full Stage B acceptance or production readiness. Process liveness remains a separate existing HTTP endpoint. There are no automatic startup probes, retry loops or background connections.
+Diagnostic states distinguish `disabled`, `configured_not_verified`, `compatible` (only after checks), `incompatible` and `unavailable` with sanitized error codes. Success exits 0; sanitized configuration/read failures exit 2. A compatible connection does not establish full Stage B acceptance or production readiness. Process liveness remains separate from reporting activity. There are no automatic startup probes, retry loops or background connections.
 
-Stage B checklist (all pending):
+Stage B checklist and remaining acceptance work (see `STATUS.md` for owner-run evidence):
 
-- Explicit authorization of exact non-production host/port/database and separate identity; verify environment and DNS independently. Never infer approval from source documentation.
-- DBA provisioning/review of effective read-only privileges, inherited groups/roles and metadata visibility, without analytics executing grants or write tests.
+- Exact non-production host/port/database and the separate identity are authorized and kept only in local configuration; environment and DNS still require independent operational control.
+- DBA provisioning and a bounded effective-permission review were owner-run. Broader inherited/custom permissions still require ongoing administrator control; analytics never executes grants or write tests.
 - Confirm 64-bit runtime/driver and login/query timeouts, plus either certificate chain/hostname validation or the documented owner-approved certificate-trust opt-in for a declared non-production target, against the actual server.
 - Verify exact migration history/checksums, consumed columns and separately inspect relationships, constraints, indexes and database settings.
-- Run bounded schema/run reads; validate assignment/UTC/filter/order behavior and query plans/cost. Keep evidence private and sanitized.
+- Bounded schema/run reads were owner-run and sanitized; aggregate endpoint acceptance and query plan/cost on realistic volume remain owner-run follow-up work.
 - Verify negative permission metadata and sanitized failure/cleanup behavior without DML/DDL attempts, destructive setup or production access. Record outcome in `STATUS.md` only after evidence exists.
 
 Offline tests validate generated SQL/binding and fake-driver behavior; they do not execute T-SQL or prove real schema, TLS, effective privileges, query plans or driver timeout behavior against SQL Server. Production access still requires explicit authorization, a reviewed deployment/access boundary and final metric/data-disclosure decisions.

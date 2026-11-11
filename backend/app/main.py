@@ -13,7 +13,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application = FastAPI(
         title=settings.app_name,
         version=__version__,
-        description="Development foundation. Demo data only; no database or hardware connection.",
+        description=(
+            "Local development API. Reporting is opt-in, aggregate-only, and disabled by default."
+        ),
         redoc_url=None,
         responses={
             404: {"model": ErrorResponse},

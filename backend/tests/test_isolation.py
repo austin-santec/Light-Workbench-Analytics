@@ -6,8 +6,13 @@ def test_fresh_import_startup_and_routes_without_database_hardware_or_network():
     # Fresh process guards imports before app import, including TestClient startup.
     code = """
 import builtins
+import os
 import socket
 import threading
+
+for name in tuple(os.environ):
+    if name.startswith('LWA_REPORTING_'):
+        del os.environ[name]
 
 original_import = builtins.__import__
 forbidden = {'pyodbc', 'pymssql', 'sqlalchemy', 'pyvisa', 'serial', 'infrastructure', 'hardware'}
@@ -55,6 +60,14 @@ else:
 with TestClient(app) as client:
     for route in ['/api/v1/health/live', '/api/v1/system/info', '/api/v1/demo/runs']:
         assert client.get(route).status_code == 200
+    response = client.get(
+        '/api/v1/reporting/run-activity',
+        params={
+            'started_from': '2026-11-01T00:00:00Z',
+            'started_before': '2026-11-02T00:00:00Z',
+        },
+    )
+    assert response.json() == {'data_source': 'not_connected'}
 """
     result = subprocess.run(
         [sys.executable, "-c", code], capture_output=True, text=True, timeout=30

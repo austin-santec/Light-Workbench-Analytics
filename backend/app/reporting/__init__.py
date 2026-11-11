@@ -1,1 +1,1 @@
-"""Opt-in local reporting only; never imported by the HTTP application."""
+"""Opt-in local reporting; driver loading and connections remain request/diagnostic scoped."""

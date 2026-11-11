@@ -68,7 +68,16 @@ COLUMNS = {
         "switch_serial": ("nvarchar", 200, 0, False),
         "switch_model": ("nvarchar", 60, 0, False),
     },
+    "vw_RunTimingSummary": {
+        "run_id": ("bigint", 8, 0, False),
+        "active_test_ms": ("bigint", 8, 0, True),
+        "elapsed_ms": ("bigint", 8, 0, True),
+        "stopped_ms": ("bigint", 8, 0, True),
+        "timing_quality": ("varchar", 19, 0, True),
+    },
 }
+
+OBJECT_TYPES = {name: "V" if name == "vw_RunTimingSummary" else "U" for name in COLUMNS}
 
 MIGRATION_SQL = """
 SELECT TOP (8) migration_id, migration_name, script_checksum
@@ -77,14 +86,14 @@ ORDER BY CASE WHEN migration_id > 7 THEN 0 ELSE 1 END, migration_id
 """
 
 COLUMN_SQL = """
-SELECT TOP (128) o.name, c.name, t.name,
+SELECT TOP (128) o.name, o.type, c.name, t.name,
     CASE WHEN t.name = 'datetime2' THEN NULL ELSE c.max_length END,
     c.scale, c.is_nullable
 FROM sys.objects AS o
 JOIN sys.schemas AS s ON s.schema_id = o.schema_id
 JOIN sys.columns AS c ON c.object_id = o.object_id
 JOIN sys.types AS t ON t.user_type_id = c.user_type_id
-WHERE s.name = ? AND o.type = ? AND o.name IN (?, ?, ?, ?, ?)
+WHERE s.name = ? AND o.type IN (?, ?) AND o.name IN (?, ?, ?, ?, ?, ?)
 ORDER BY o.name, c.column_id
 """
 
@@ -113,5 +122,5 @@ SELECT p.name,
     HAS_PERMS_BY_NAME(p.name, 'OBJECT', 'DELETE'),
     HAS_PERMS_BY_NAME(p.name, 'OBJECT', 'ALTER'),
     HAS_PERMS_BY_NAME(p.name, 'OBJECT', 'CONTROL')
-FROM (VALUES (?), (?), (?), (?), (?)) AS p(name)
+FROM (VALUES (?), (?), (?), (?), (?), (?)) AS p(name)
 """

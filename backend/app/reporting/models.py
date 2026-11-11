@@ -21,6 +21,20 @@ class AnalysisStatus(StrEnum):
     SUPERSEDED = "superseded"
 
 
+class TimingQuality(StrEnum):
+    CONFIRMED = "confirmed"
+    CHECKPOINT_ESTIMATE = "checkpoint_estimate"
+    PARTIAL = "partial"
+    PROVISIONAL = "provisional"
+    UNAVAILABLE = "unavailable"
+
+
+class SampleState(StrEnum):
+    NO_DATA = "no_data"
+    SMALL_SAMPLE = "small_sample"
+    OK = "ok"
+
+
 class RunQuery(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
 
@@ -79,3 +93,36 @@ class RunPage(BaseModel):
     limit: int
     offset: int
     has_more: bool
+
+
+class DurationStatistics(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    n: int = Field(ge=0)
+    mean: float | None
+    median: float | None
+    p90: float | None
+    sample_state: SampleState
+
+
+class StoppedStatistics(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    n: int = Field(ge=0)
+    mean: float | None
+    sample_state: SampleState
+
+
+class RunActivityMetrics(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    total_runs: int = Field(ge=0)
+    by_run_purpose: dict[RunPurpose, int]
+    by_completion_status: dict[CompletionStatus, int]
+    open_runs: int = Field(ge=0)
+    by_timing_quality: dict[TimingQuality, int]
+    active_seconds: DurationStatistics
+    elapsed_seconds: DurationStatistics
+    stopped_seconds: StoppedStatistics
+    flagged_over_90_min: int = Field(ge=0)
+    incomplete: bool
