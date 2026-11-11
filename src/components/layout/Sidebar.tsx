@@ -12,9 +12,9 @@ function NavigationIcon({ screen }: { screen: ScreenId }) {
 
 export function DemoStatus() {
   return <div className="demo-status">
-    <div className="demo-status-title"><span className="offline-dot" aria-hidden="true" />Synthetic data · offline</div>
-    <div className="demo-status-detail">Milestone 1 · browser only<br />Deterministic demo fixtures<br />No database connection</div>
-    <span className="sample-badge">Sample data</span>
+    <div className="demo-status-title"><span className="offline-dot" aria-hidden="true" />Development data sources</div>
+    <div className="demo-status-detail">Demo fixtures always available<br />Live test-database panels:<br />connected, off, or backend not reachable</div>
+    <span className="sample-badge">Demo + live panels</span>
   </div>;
 }
 

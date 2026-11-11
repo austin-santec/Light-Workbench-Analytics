@@ -80,10 +80,10 @@ COLUMNS = {
 
 OBJECT_TYPES = {name: "V" if name == "vw_RunTimingSummary" else "U" for name in COLUMNS}
 
-MIGRATION_SQL = """
-SELECT TOP (8) migration_id, migration_name, script_checksum
+MIGRATION_SQL = f"""
+SELECT TOP ({len(MIGRATIONS) + 1}) migration_id, migration_name, script_checksum
 FROM dbo.SCHEMA_MIGRATIONS
-ORDER BY CASE WHEN migration_id > 7 THEN 0 ELSE 1 END, migration_id
+ORDER BY migration_id
 """
 
 COLUMN_SQL = """

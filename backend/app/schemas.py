@@ -81,6 +81,15 @@ class RunActivityQueryParams(BaseModel):
     switch_model: str | None = None
 
 
+class TestTimeByConfigurationQueryParams(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    started_from: AwareDatetime
+    started_before: AwareDatetime
+    purpose: RunPurpose | None = None
+    wavelength_mode: Literal["SM", "MM"] | None = None
+
+
 class RunActivityWindow(BaseModel):
     started_from: AwareDatetime
     started_before: AwareDatetime
@@ -90,6 +99,11 @@ class RunActivityFilters(BaseModel):
     purpose: RunPurpose | None
     wavelength_mode: Literal["SM", "MM"] | None
     switch_model: str | None
+
+
+class TestTimeByConfigurationFilters(BaseModel):
+    purpose: RunPurpose | None
+    wavelength_mode: Literal["SM", "MM"] | None
 
 
 class DurationStatisticsResponse(BaseModel):
@@ -143,6 +157,29 @@ class RunActivityConnectedResponse(BaseModel):
 
 class RunActivityNotConnectedResponse(BaseModel):
     data_source: Literal["not_connected"] = "not_connected"
+
+
+class ConfigurationTestTimeResponse(BaseModel):
+    switch_model: str = Field(min_length=1, max_length=30)
+    wavelength_mode: Literal["SM", "MM"]
+    front_panel_channel_count: int | None = Field(default=None, gt=0)
+    runs: int = Field(ge=0)
+    open_runs: int = Field(ge=0)
+    elapsed_seconds: DurationStatisticsResponse
+    active_seconds: DurationStatisticsResponse
+    confirmed_timing_runs: int = Field(ge=0)
+    unavailable_timing_runs: int = Field(ge=0)
+    seconds_per_channel: float | None = Field(default=None, ge=0)
+    flagged_over_90_min: int = Field(ge=0)
+
+
+class TestTimeByConfigurationConnectedResponse(BaseModel):
+    data_source: Literal["test_database"] = "test_database"
+    tls: Literal["verified", "encrypted_unverified"]
+    window: RunActivityWindow
+    filters: TestTimeByConfigurationFilters
+    incomplete: bool
+    configurations: list[ConfigurationTestTimeResponse]
 
 
 class ReportingFailureResponse(BaseModel):

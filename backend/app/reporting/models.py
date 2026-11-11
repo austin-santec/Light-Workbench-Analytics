@@ -126,3 +126,26 @@ class RunActivityMetrics(BaseModel):
     stopped_seconds: StoppedStatistics
     flagged_over_90_min: int = Field(ge=0)
     incomplete: bool
+
+
+class ConfigurationTestTime(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    switch_model: str = Field(min_length=1, max_length=30)
+    wavelength_mode: Literal["SM", "MM"]
+    front_panel_channel_count: int | None = Field(default=None, gt=0)
+    runs: int = Field(ge=0)
+    open_runs: int = Field(ge=0)
+    elapsed_seconds: DurationStatistics
+    active_seconds: DurationStatistics
+    confirmed_timing_runs: int = Field(ge=0)
+    unavailable_timing_runs: int = Field(ge=0)
+    seconds_per_channel: float | None = Field(default=None, ge=0)
+    flagged_over_90_min: int = Field(ge=0)
+
+
+class TestTimeByConfigurationMetrics(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    configurations: tuple[ConfigurationTestTime, ...]
+    incomplete: bool

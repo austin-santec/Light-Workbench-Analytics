@@ -8,11 +8,15 @@ from app import __version__
 from app.api import ReportingAccess, get_reporting_access
 from app.reporting.adapter import ReportingError
 from app.reporting.models import (
+    ConfigurationTestTime,
     DurationStatistics,
     RunActivityMetrics,
     SampleState,
     StoppedStatistics,
     TimingQuality,
+)
+from app.reporting.models import (
+    TestTimeByConfigurationMetrics as ConfigurationTimingMetrics,
 )
 from app.schemas import (
     DemoRun,
@@ -21,6 +25,9 @@ from app.schemas import (
     HealthResponse,
     RunActivityConnectedResponse,
     SystemInfo,
+)
+from app.schemas import (
+    TestTimeByConfigurationConnectedResponse as ConfigurationTimingResponse,
 )
 
 
@@ -31,6 +38,12 @@ class FakeActivityRepository:
         self.queries = []
 
     def get_run_activity(self, query):
+        self.queries.append(query)
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+    def get_test_time_by_configuration(self, query):
         self.queries.append(query)
         if self.error is not None:
             raise self.error
@@ -63,6 +76,30 @@ def activity_metrics():
         stopped_seconds=StoppedStatistics(n=2, mean=15, sample_state=SampleState.SMALL_SAMPLE),
         flagged_over_90_min=0,
         incomplete=False,
+    )
+
+
+def configuration_metrics():
+    statistics = DurationStatistics(
+        n=2, mean=30, median=30, p90=40, sample_state=SampleState.SMALL_SAMPLE
+    )
+    return ConfigurationTimingMetrics(
+        incomplete=False,
+        configurations=(
+            ConfigurationTestTime(
+                switch_model="OSX-150",
+                wavelength_mode="SM",
+                front_panel_channel_count=48,
+                runs=2,
+                open_runs=1,
+                elapsed_seconds=statistics,
+                active_seconds=statistics,
+                confirmed_timing_runs=2,
+                unavailable_timing_runs=0,
+                seconds_per_channel=0.625,
+                flagged_over_90_min=0,
+            ),
+        ),
     )
 
 
@@ -259,6 +296,104 @@ def test_run_activity_reporting_failure_is_exact_sanitized_503(application, capl
     assert "encrypted_unverified" not in response.text
 
 
+def test_configuration_timing_disabled_returns_only_not_connected(client):
+    response = client.get(
+        "/api/v1/reporting/test-time-by-configuration",
+        params={
+            "started_from": "2026-11-01T00:00:00Z",
+            "started_before": "2026-11-02T00:00:00Z",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json() == {"data_source": "not_connected"}
+
+
+def test_configuration_timing_connected_contract_and_filters(application):
+    fake = FakeActivityRepository(configuration_metrics())
+    application.dependency_overrides[get_reporting_access] = lambda: ReportingAccess(
+        repository=fake, tls="verified"
+    )
+    with TestClient(application) as client:
+        response = client.get(
+            "/api/v1/reporting/test-time-by-configuration",
+            params={
+                "started_from": "2026-11-01T01:00:00+01:00",
+                "started_before": "2026-11-02T01:00:00+01:00",
+                "purpose": "engineering",
+                "wavelength_mode": "SM",
+            },
+        )
+    assert response.status_code == 200
+    result = ConfigurationTimingResponse.model_validate(response.json())
+    assert result.data_source == "test_database" and result.tls == "verified"
+    assert response.json()["window"] == {
+        "started_from": "2026-11-01T00:00:00Z",
+        "started_before": "2026-11-02T00:00:00Z",
+    }
+    assert response.json()["filters"] == {
+        "purpose": "engineering",
+        "wavelength_mode": "SM",
+    }
+    assert result.configurations[0].front_panel_channel_count == 48
+    assert result.configurations[0].seconds_per_channel == 0.625
+    assert fake.queries[0].selection == "all"
+    assert fake.queries[0].switch_model is None
+    assert not any(
+        forbidden in response.text.lower()
+        for forbidden in ["serial", "operator", "run_id", "station"]
+    )
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"started_from": "2026-11-01T00:00:00", "started_before": "2026-11-02T00:00:00Z"},
+        {
+            "started_from": "2026-11-01T00:00:00Z",
+            "started_before": "2026-12-03T00:00:00Z",
+        },
+        {
+            "started_from": "2026-11-01T00:00:00Z",
+            "started_before": "2026-11-02T00:00:00Z",
+            "purpose": "unknown",
+        },
+        {
+            "started_from": "2026-11-01T00:00:00Z",
+            "started_before": "2026-11-02T00:00:00Z",
+            "wavelength_mode": "XX",
+        },
+        {
+            "started_from": "2026-11-01T00:00:00Z",
+            "started_before": "2026-11-02T00:00:00Z",
+            "switch_model": "not-a-filter",
+        },
+    ],
+)
+def test_configuration_timing_query_validation_is_sanitized(client, params):
+    response = client.get("/api/v1/reporting/test-time-by-configuration", params=params)
+    assert response.status_code == 422
+    assert ErrorResponse.model_validate(response.json()).error.code == "validation_error"
+    assert not any(str(value) in response.text for value in params.values())
+
+
+def test_configuration_timing_reporting_failure_is_exact_sanitized_503(application):
+    fake = FakeActivityRepository(error=ReportingError("query_timeout"))
+    application.dependency_overrides[get_reporting_access] = lambda: ReportingAccess(
+        repository=fake, tls="encrypted_unverified"
+    )
+    with TestClient(application) as client:
+        response = client.get(
+            "/api/v1/reporting/test-time-by-configuration",
+            params={
+                "started_from": "2026-11-01T00:00:00Z",
+                "started_before": "2026-11-02T00:00:00Z",
+            },
+        )
+    assert response.status_code == 503
+    assert response.json() == {"code": "query_timeout"}
+    assert "encrypted_unverified" not in response.text
+
+
 @pytest.mark.parametrize("url", ["/", "/api/v1/unknown", "/api/v1/demo/runs/DEMO-RUN-9999"])
 def test_unknown_resource(client, url):
     response = client.get(url)
@@ -328,6 +463,7 @@ def test_openapi_matches_error_and_query_contracts(client):
         "/api/v1/system/info",
         "/api/v1/demo/runs",
         "/api/v1/reporting/run-activity",
+        "/api/v1/reporting/test-time-by-configuration",
     }
     operation = spec["paths"]["/api/v1/demo/runs"]["get"]
     assert {p["name"] for p in operation["parameters"]} == {"purpose", "model", "limit", "offset"}
@@ -345,5 +481,15 @@ def test_openapi_matches_error_and_query_contracts(client):
         "switch_model",
     }
     assert reporting["responses"]["503"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/ReportingFailureResponse"
+    }
+    configuration = spec["paths"]["/api/v1/reporting/test-time-by-configuration"]["get"]
+    assert {parameter["name"] for parameter in configuration["parameters"]} == {
+        "started_from",
+        "started_before",
+        "purpose",
+        "wavelength_mode",
+    }
+    assert configuration["responses"]["503"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/ReportingFailureResponse"
     }

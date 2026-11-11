@@ -11,6 +11,7 @@ const errors = [];
 const checks = [];
 let runActivityMode = 'not_connected';
 const runActivityRequests = [];
+const configurationTimingRequests = [];
 const purposeTotals = { production: 2, engineering: 3, training: 1, calibration: 4 };
 const purposeOpenRuns = { production: 0, engineering: 1, training: 0, calibration: 0 };
 const purposeConfirmed = { production: 1, engineering: 1, training: 0, calibration: 0 };
@@ -56,6 +57,36 @@ const runActivityFixture = url => {
     },
   };
 };
+const configurationTimingFixture = url => {
+  const purpose = url.searchParams.get('purpose');
+  const runs = purpose ? purposeTotals[purpose] : Object.values(purposeTotals).reduce((sum, count) => sum + count, 0);
+  const confirmed = purpose ? purposeConfirmed[purpose] : Object.values(purposeConfirmed).reduce((sum, count) => sum + count, 0);
+  const openRuns = purpose ? purposeOpenRuns[purpose] : Object.values(purposeOpenRuns).reduce((sum, count) => sum + count, 0);
+  const ended = runs - openRuns;
+  return {
+    data_source: 'test_database',
+    tls: 'encrypted_unverified',
+    window: {
+      started_from: new Date(url.searchParams.get('started_from')).toISOString().replace('.000Z', 'Z'),
+      started_before: new Date(url.searchParams.get('started_before')).toISOString().replace('.000Z', 'Z'),
+    },
+    filters: { purpose, wavelength_mode: null },
+    incomplete: false,
+    configurations: [{
+      switch_model: 'OSX-150',
+      wavelength_mode: 'SM',
+      front_panel_channel_count: 48,
+      runs: ended,
+      open_runs: openRuns,
+      elapsed_seconds: durationStatistics(ended, 80),
+      active_seconds: durationStatistics(confirmed, 50),
+      confirmed_timing_runs: confirmed,
+      unavailable_timing_runs: ended - confirmed,
+      seconds_per_channel: ended ? ended * 80 / 48 : null,
+      flagged_over_90_min: 0,
+    }],
+  };
+};
 await page.route('**/api/v1/reporting/run-activity?*', async route => {
   const url = new URL(route.request().url());
   runActivityRequests.push(url);
@@ -65,11 +96,21 @@ await page.route('**/api/v1/reporting/run-activity?*', async route => {
     body: JSON.stringify(runActivityMode === 'not_connected' ? { data_source: 'not_connected' } : runActivityFixture(url)),
   });
 });
+await page.route('**/api/v1/reporting/test-time-by-configuration?*', async route => {
+  const url = new URL(route.request().url());
+  configurationTimingRequests.push(url);
+  await route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify(runActivityMode === 'not_connected' ? { data_source: 'not_connected' } : configurationTimingFixture(url)),
+  });
+});
 page.on('pageerror', error => errors.push(error.message));
 page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
 page.on('response', response => { if (response.status() >= 400) errors.push(`HTTP ${response.status()}: ${response.url()}`); });
 page.on('requestfailed', request => {
-  const expectedUnmountCancellation = new URL(request.url()).pathname === '/api/v1/reporting/run-activity' && request.failure()?.errorText === 'net::ERR_ABORTED';
+  const pathname = new URL(request.url()).pathname;
+  const expectedUnmountCancellation = ['/api/v1/reporting/run-activity', '/api/v1/reporting/test-time-by-configuration'].includes(pathname) && request.failure()?.errorText === 'net::ERR_ABORTED';
   if (!expectedUnmountCancellation) errors.push(`Request failed: ${request.url()} ${request.failure()?.errorText}`);
 });
 const check = label => { checks.push(label); console.log(`PASS ${label}`); };
@@ -99,8 +140,10 @@ try {
   check('Overview renders synthetic summary');
 
   const liveCard = page.getByRole('region', { name: 'Run activity' });
-  await liveCard.getByText('Live data is off. Start the backend with reporting settings to see test-database numbers.').waitFor();
-  const firstLiveRequest = runActivityRequests.at(-1);
+  await liveCard.getByText('Live data is off. Start the backend with reporting settings to see test-database numbers.').first().waitFor();
+  assert.equal(await liveCard.getByText('Live data is off. Start the backend with reporting settings to see test-database numbers.').count(), 2);
+  const firstLiveRequest = runActivityRequests.find(url => url.searchParams.get('purpose') === 'production');
+  assert.ok(firstLiveRequest);
   const startedFrom = new Date(firstLiveRequest.searchParams.get('started_from'));
   const startedBefore = new Date(firstLiveRequest.searchParams.get('started_before'));
   assert.equal(startedBefore.getTime() - startedFrom.getTime(), 30 * 24 * 60 * 60 * 1000);
@@ -110,9 +153,10 @@ try {
 
   const downPage = await browser.newPage({ viewport: { width: 900, height: 800 } });
   await downPage.route('**/api/v1/reporting/run-activity?*', route => route.abort('connectionrefused'));
+  await downPage.route('**/api/v1/reporting/test-time-by-configuration?*', route => route.abort('connectionrefused'));
   try {
     await downPage.goto(`${base}/#/`, { waitUntil: 'domcontentloaded' });
-    await downPage.getByRole('region', { name: 'Run activity' }).getByText('Backend not reachable on 127.0.0.1:8000').waitFor();
+    await downPage.getByRole('region', { name: 'Run activity' }).getByText('Backend not reachable on 127.0.0.1:8000').first().waitFor();
     check('Live card backend-down state');
   } finally { await downPage.close(); }
 
@@ -122,7 +166,14 @@ try {
   await assertText(liveCard, 'Encrypted, certificate not verified');
   await liveCard.getByText('Runs started').locator('..').getByText('2', { exact: true }).waitFor();
   await assertText(liveCard, 'Small sample');
-  check('Live card connected single-purpose counts, timing, sample, and TLS states');
+  const liveConfigurationTable = liveCard.getByRole('table', { name: 'Live test time by configuration' });
+  await liveConfigurationTable.getByText('OSX-150').waitFor();
+  await assertText(liveConfigurationTable, '48 ch');
+  await assertText(liveConfigurationTable, '1 / 2 confirmed');
+  assert.equal(configurationTimingRequests.at(-1).searchParams.get('purpose'), 'production');
+  await assertText(page.getByRole('button', { name: /^Engineering / }), '3');
+  assert.ok((await page.getByRole('button', { name: /^Engineering / }).innerText()).includes('3'));
+  check('Live card connected counts, configuration timing, samples, TLS, and live purpose-chip counts');
 
   await page.reload();
   await page.locator('h1').waitFor();
@@ -139,11 +190,13 @@ try {
   await assertText(page.getByRole('region', { name: 'Key metrics' }), '8,736');
   await liveCard.getByText('Runs started').locator('..').getByText('5', { exact: true }).waitFor();
   await liveCard.getByText('Select one purpose or all to see timing').waitFor();
+  await liveCard.getByText('Select one purpose or all to see times by configuration').waitFor();
   await page.getByRole('button', { name: /^Training / }).click();
   await page.getByRole('button', { name: /^Calibration / }).click();
   await liveCard.getByText('Runs started').locator('..').getByText('10', { exact: true }).waitFor();
   await liveCard.getByText('Elapsed time').waitFor();
   assert.equal(runActivityRequests.at(-1).searchParams.has('purpose'), false);
+  assert.equal(configurationTimingRequests.at(-1).searchParams.has('purpose'), false);
   check('Live counts combine across selected purposes; timing is refused for partial combinations and restored for all-purpose request');
   await page.getByRole('button', { name: 'Back to production only' }).click();
   await liveCard.getByText('Runs started').locator('..').getByText('2', { exact: true }).waitFor();

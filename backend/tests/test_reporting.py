@@ -18,10 +18,14 @@ from app.reporting.repository import (
     RUN_ACTIVITY_TIMING_SQL,
     RUN_FIELDS,
     RUN_SQL,
+    TEST_TIME_BY_CONFIGURATION_ROW_CAP,
+    TEST_TIME_BY_CONFIGURATION_SQL,
     SqlServerReportingRepository,
     build_run_activity_queries,
     build_run_query,
+    build_test_time_by_configuration_query,
     summarize_run_activity,
+    summarize_test_time_by_configuration,
 )
 from app.reporting.schema import (
     COLUMN_SQL,
@@ -116,6 +120,11 @@ class FakeDatabase:
             (None, 120_000, None, "unavailable"),
             (30_000, 180_000, None, "partial"),
         ]
+        self.configuration_timing = [
+            ("OSX-150", "SM", 48, 60_000, 90_000, "confirmed"),
+            ("OSX-150", "SM", 48, None, 120_000, "unavailable"),
+            ("OSX-150", "SM", 36, None, None, None),
+        ]
         self.fail_at = None
         self.error = FakeOdbcError("HYT00", "DEMO-sensitive-driver-message")
         self.cleanup_errors = set()
@@ -152,6 +161,8 @@ class FakeDatabase:
                 kind = "activity_counts"
             elif sql.startswith(RUN_ACTIVITY_TIMING_SQL):
                 kind = "activity_timing"
+            elif sql.startswith(TEST_TIME_BY_CONFIGURATION_SQL):
+                kind = "configuration_timing"
             else:
                 kind = "runs"
         self.calls.append((sql, params))
@@ -160,11 +171,7 @@ class FakeDatabase:
         if kind == "identity":
             self.result = [self.identity]
         elif kind == "migrations":
-            supported_max = MIGRATIONS[-1][0]
-            self.result = sorted(
-                self.migrations,
-                key=lambda row: (row[0] <= supported_max, row[0]),
-            )[: supported_max + 1]
+            self.result = sorted(self.migrations, key=lambda row: row[0])[: len(MIGRATIONS) + 1]
         else:
             self.result = getattr(self, kind)
         return self
@@ -486,6 +493,96 @@ def test_run_activity_queries_are_bounded_parameterized_and_nonidentifying():
     assert not re.search(r"\b(?:run_id|serial|operator|station)\b", projection, re.I)
 
 
+def test_configuration_timing_query_is_bounded_parameterized_and_nonidentifying():
+    sql, params = build_test_time_by_configuration_query(
+        query(
+            selection="all",
+            wavelength_mode="SM",
+            run_purpose="engineering",
+            started_from="2026-11-01T01:00:00+01:00",
+        )
+    )
+    assert params == (
+        datetime(2026, 11, 1),
+        datetime(2026, 11, 2),
+        "SM",
+        "engineering",
+    )
+    assert sql.count("?") == len(params)
+    assert "TOP (5001)" in sql
+    assert "r.front_panel_channel_count" in sql
+    projection = sql.split("FROM")[0]
+    assert all(
+        name in projection
+        for name in [
+            "switch_model",
+            "wavelength_mode",
+            "front_panel_channel_count",
+            "active_test_ms",
+            "elapsed_ms",
+            "timing_quality",
+        ]
+    )
+    assert not re.search(r"\b(?:run_id|serial|operator|station)\b", projection, re.I)
+
+
+def test_configuration_timing_groups_statistics_null_channels_and_ordering():
+    rows = [
+        ("OSX-150", "SM", None, None, 60_000, "unavailable"),
+        ("OSX-150", "SM", 24, 30_000, 60_000, "confirmed"),
+        ("OSX-150", "SM", 48, 10_000, 10_000, "confirmed"),
+        ("OSX-150", "SM", 48, 20_000, 20_000, "confirmed"),
+        ("OSX-150", "SM", 48, None, None, None),
+        ("OSX-100", "MM", 36, None, 5_400_001, "checkpoint_estimate"),
+    ]
+    result = summarize_test_time_by_configuration(rows, incomplete=False)
+    assert [
+        (row.switch_model, row.wavelength_mode, row.front_panel_channel_count)
+        for row in result.configurations
+    ] == [
+        ("OSX-100", "MM", 36),
+        ("OSX-150", "SM", 48),
+        ("OSX-150", "SM", 24),
+        ("OSX-150", "SM", None),
+    ]
+    first = result.configurations[0]
+    assert first.runs == 1 and first.open_runs == 0
+    assert first.flagged_over_90_min == 1
+    group = result.configurations[1]
+    assert group.runs == 2 and group.open_runs == 1
+    assert group.elapsed_seconds.mean == group.elapsed_seconds.median == 15
+    assert group.elapsed_seconds.p90 == 20
+    assert group.active_seconds.model_dump()["sample_state"] is SampleState.SMALL_SAMPLE
+    assert group.confirmed_timing_runs == 2 and group.unavailable_timing_runs == 0
+    assert group.seconds_per_channel == 15 / 48
+    null_channels = result.configurations[-1]
+    assert null_channels.front_panel_channel_count is None
+    assert null_channels.seconds_per_channel is None
+    assert null_channels.unavailable_timing_runs == 1
+
+
+def test_configuration_timing_no_data_group_never_invents_zero_statistics():
+    result = summarize_test_time_by_configuration(
+        [("OSX-150", "SM", 36, None, None, None)], incomplete=False
+    ).configurations[0]
+    assert result.runs == 0 and result.open_runs == 1
+    assert result.elapsed_seconds.n == 0
+    assert result.elapsed_seconds.mean is None
+    assert result.active_seconds.median is None
+    assert result.seconds_per_channel is None
+
+
+def test_configuration_timing_repository_caps_rows_and_marks_incomplete(database):
+    database.configuration_timing = [
+        ("OSX-150", "SM", 48, 1000, 2000, "confirmed")
+        for _ in range(TEST_TIME_BY_CONFIGURATION_ROW_CAP + 1)
+    ]
+    result = repository(database).get_test_time_by_configuration(query(selection="all"))
+    assert result.incomplete is True
+    assert result.configurations[0].runs == TEST_TIME_BY_CONFIGURATION_ROW_CAP
+    assert database.fetch_sizes[-1] == TEST_TIME_BY_CONFIGURATION_ROW_CAP + 1
+
+
 def test_run_activity_math_even_odd_nearest_rank_and_quality_rules():
     count_rows = [
         ("production", "complete", None, 1),
@@ -615,7 +712,9 @@ def test_constructed_query_revalidated_before_connect(database):
 
 
 def test_all_statements_are_read_only_and_reference_reviewed_columns(database):
-    repository(database).list_runs(query())
+    repo = repository(database)
+    repo.list_runs(query())
+    repo.get_test_time_by_configuration(query(selection="all"))
     for sql, _ in database.calls:
         assert sql.lstrip().startswith("SELECT")
         # Static regression check only; SQL permissions enforce read-only access.
@@ -639,6 +738,9 @@ def test_all_statements_are_read_only_and_reference_reviewed_columns(database):
     projection = RUN_SQL.split("FROM")[0].replace("SELECT", "").split(",")
     assert [column.strip().split(".")[1] for column in projection] == list(RUN_FIELDS)
     assert "_json" not in RUN_SQL and "tested_by" not in RUN_SQL
+    configuration_sql, _ = build_test_time_by_configuration_query(query(selection="all"))
+    for alias, column in re.findall(r"\b([ras])\.([a-z_]+)", configuration_sql):
+        assert column in COLUMNS[aliases[alias]]
 
 
 def test_driver_checks_missing_installation_and_bitness_without_connect(monkeypatch):

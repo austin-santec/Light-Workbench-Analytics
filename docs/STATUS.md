@@ -1,3 +1,22 @@
+# Live test time by configuration and cleanup
+
+Updated November 11, 2026. Implemented the approved `GET /api/v1/reporting/test-time-by-configuration` aggregate and added its compact table below run activity in the existing **Live · test database** card. The endpoint groups ended-run elapsed and confirmed-only active duration diagnostics by each run's historical switch model, wavelength mode and saved front-panel channel count; null channel count remains its own group. It reports exact mean/median/nearest-rank P90, sample state, open runs, timing coverage, strict over-90-minute flags and median seconds per channel. One parameterized TOP 5001 read returns no record identifiers, and Python groups at most 5000 rows with an explicit incomplete state. This is labeled T09/T10-style run-level evidence, not the T12 per-finished-unit primary.
+
+The dependency-free frontend client strictly validates the complete response shape. Configuration timing fetches alongside run activity on mount, purpose changes and manual refresh. One selected purpose and all four purposes show statistics; mixed selections show the required non-combination prompt. An unfiltered run-activity request supplies live purpose-chip counts while connected, with accessible source labels and deterministic demo-count fallback. The synthetic configuration table, histogram and KPIs are unchanged. The top banner and sidebar now accurately describe demo fixtures plus optional live test-database panels in every connection state.
+
+The migration preflight now fetches `len(MIGRATIONS) + 1` rows and uses plain migration-ID ordering. Offline tests still prove exact migrations 1–7 pass and missing 7, extra 8, a gap, and changed name/checksum fail closed.
+
+Validation for this change:
+
+- Backend `.venv\Scripts\python.exe -m pytest` passed all 155 tests; `.venv\Scripts\python.exe -m ruff check .`, `.venv\Scripts\python.exe -m ruff format --check .` and `.venv\Scripts\python.exe -m pip check` passed.
+- `npm.cmd run typecheck` and `npm.cmd run lint` passed.
+- The exact `npm.cmd run build` command reached Vite after TypeScript passed, then hit the known managed-filesystem/esbuild config-loader restriction. `npm.cmd run build -- --configLoader runner` passed with Vite 7.3.7 and 455 modules transformed.
+- `npm.cmd run test:browser` passed all 18 checks against the already-running owner preview on port 5173. It covered reporting-off and backend-down states for both live sections, connected configuration timing, live purpose-chip counts, one/mixed/all-purpose behavior, the 24-screenshot light/dark responsive matrix and normal-flow error diagnostics. Light/dark Overview screenshots were visually inspected at 1440px and 390px.
+- `git diff --check` passed.
+- No database connection, backend start, reporting-enabled process, real record, credential, target detail, dependency change, AGENTS.md change, commit or push occurred.
+
+Not verified here: rendering against the real test database, live query plan/cost, live incomplete/503 behavior and the owner-specific reporting configuration. Those remain owner-run acceptance work.
+
 # First live metric Part B — Overview run activity card
 
 Updated November 11, 2026. The Overview now has a separate **Live · test database** card below its existing filters. It consumes `GET /api/v1/reporting/run-activity` through Vite's loopback-only `/api` proxy while every established KPI, chart, table and fixture remains synthetic. The card uses the last 30 complete UTC days, follows the existing Run purpose selection, fetches on mount/purpose change or manual refresh, and has no automatic refresh loop.

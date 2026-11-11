@@ -24,6 +24,9 @@ from app.schemas import (
     RunCountsResponse,
     RunTimingResponse,
     SystemInfo,
+    TestTimeByConfigurationConnectedResponse,
+    TestTimeByConfigurationFilters,
+    TestTimeByConfigurationQueryParams,
 )
 from app.services.demo import list_demo_runs
 
@@ -57,6 +60,25 @@ def validated_run_activity_query(
             started_from=params.started_from,
             started_before=params.started_before,
             switch_model=params.switch_model,
+            wavelength_mode=params.wavelength_mode,
+            run_purpose=params.purpose,
+            selection="all",
+        )
+    except ValidationError as exc:
+        errors = [
+            item | {"loc": ("query", *item["loc"])}
+            for item in exc.errors(include_url=False, include_input=False, include_context=False)
+        ]
+        raise RequestValidationError(errors) from None
+
+
+def validated_test_time_by_configuration_query(
+    params: Annotated[TestTimeByConfigurationQueryParams, Query()],
+) -> RunQuery:
+    try:
+        return RunQuery(
+            started_from=params.started_from,
+            started_before=params.started_before,
             wavelength_mode=params.wavelength_mode,
             run_purpose=params.purpose,
             selection="all",
@@ -130,4 +152,35 @@ def run_activity(
             stopped_seconds=metrics.stopped_seconds.model_dump(),
             flagged_over_90_min=metrics.flagged_over_90_min,
         ),
+    )
+
+
+@router.get(
+    "/reporting/test-time-by-configuration",
+    response_model=TestTimeByConfigurationConnectedResponse | RunActivityNotConnectedResponse,
+    responses={503: {"model": ReportingFailureResponse}},
+    tags=["reporting"],
+)
+def test_time_by_configuration(
+    query: Annotated[RunQuery, Depends(validated_test_time_by_configuration_query)],
+    access: Annotated[ReportingAccess | None, Depends(get_reporting_access)],
+) -> TestTimeByConfigurationConnectedResponse | RunActivityNotConnectedResponse | JSONResponse:
+    """Run-level duration diagnostics grouped by historical configuration."""
+    if access is None:
+        return RunActivityNotConnectedResponse()
+    try:
+        metrics = access.repository.get_test_time_by_configuration(query)
+    except ReportingError as exc:
+        return JSONResponse(status_code=503, content={"code": exc.code})
+    return TestTimeByConfigurationConnectedResponse(
+        tls=access.tls,
+        window=RunActivityWindow(
+            started_from=query.started_from, started_before=query.started_before
+        ),
+        filters=TestTimeByConfigurationFilters(
+            purpose=query.run_purpose,
+            wavelength_mode=query.wavelength_mode,
+        ),
+        incomplete=metrics.incomplete,
+        configurations=[configuration.model_dump() for configuration in metrics.configurations],
     )

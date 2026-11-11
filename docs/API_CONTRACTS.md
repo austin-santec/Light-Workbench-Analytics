@@ -1,8 +1,8 @@
-# API contracts — Milestones 2–3 and first Stage B aggregate
+# API contracts — Milestones 2–3 and Stage B aggregates
 
-Local base: `http://127.0.0.1:8000`. API version: `v1`; service version: `0.1.0`. All four implemented operations are GET and use Pydantic response models in `backend/app/schemas.py`. `/docs` and `/openapi.json` expose the generated specification. No authentication, arbitrary HTTP SQL execution, resource-detail lookup or production metrics exist. The Overview live card is the first frontend API consumer.
+Local base: `http://127.0.0.1:8000`. API version: `v1`; service version: `0.1.0`. All five implemented operations are GET and use Pydantic response models in `backend/app/schemas.py`. `/docs` and `/openapi.json` expose the generated specification. No authentication, arbitrary HTTP SQL execution, resource-detail lookup or production metrics exist. The Overview live card consumes the two reporting aggregates.
 
-The first Stage B HTTP slice adds one aggregate-only run diagnostic. It may consume reporting data only after explicit request-time opt-in; FastAPI startup still does not load pyodbc or connect. No serial, operator, run ID, station row or other record-level field is served. The frontend keeps all established synthetic fixtures and shows this diagnostic in a separate live card. Local diagnostic and database boundaries are documented in [REPORTING_DATABASE.md](REPORTING_DATABASE.md).
+The Stage B HTTP slices provide two aggregate-only run diagnostics. They may consume reporting data only after explicit request-time opt-in; FastAPI startup still does not load pyodbc or connect. No serial, operator, run ID, station row or other record-level field is served. The frontend keeps all established synthetic fixtures and shows these diagnostics in a separate live card. Local diagnostic and database boundaries are documented in [REPORTING_DATABASE.md](REPORTING_DATABASE.md).
 
 ## Implemented operations
 
@@ -68,6 +68,12 @@ When connected, `data_source` is `test_database`; `tls` is `verified` or `encryp
 
 The numeric timing read is capped at 5000 ended runs by fetching at most 5001 numeric-only rows. If more than 5000 exist, `incomplete` is `true` and returned statistics cover only the bounded sample; clients must not present them as complete. No record identifiers are returned.
 
+`GET /api/v1/reporting/test-time-by-configuration` is a secondary **run-level** duration diagnostic grouped by the run's historical `switch_model × wavelength_mode × front_panel_channel_count`. It uses the same required aware UTC window, 31-day maximum, optional `purpose` and optional `wavelength_mode` validation as run activity. It intentionally has no switch-model filter because model is a group key. A null run channel count is retained as its own `front_panel_channel_count: null` group.
+
+Each configuration reports ended `runs`, excluded `open_runs`, elapsed and confirmed-only active duration statistics, confirmed/unavailable timing counts, median elapsed seconds per channel (null for null channel count or no elapsed data), and elapsed observations strictly over 90 minutes. Duration blocks use the same exact mean/median/nearest-rank P90 and sample-state rules as run activity. Groups sort by model, mode and descending channel count with null last. One parameterized read requests at most 5001 rows containing only group keys, numeric durations and timing quality; Python groups at most 5000 and sets `incomplete: true` on overflow. No run, unit, switch, serial, station or operator identifier is returned.
+
+The connected envelope contains `data_source`, `tls`, `window`, `filters`, `incomplete` and `configurations`. Disabled/incomplete reporting returns exactly `{"data_source":"not_connected"}`; enabled reporting failures return the same sanitized 503 contract as run activity. These statistics are T09/T10-style run diagnostics, not T12 per-finished-unit cumulative testing duration or a production KPI.
+
 ### Overview frontend consumption
 
 During Vite development, `/api` is proxied to loopback `http://127.0.0.1:8000`; production build output has no proxy configuration. The Overview card computes the last 30 complete UTC days and sends the exclusive current-UTC-midnight boundary, keeping the window at exactly 30 days. It refetches on mount, Run purpose changes and manual refresh only.
@@ -75,6 +81,8 @@ During Vite development, `/api` is proxied to loopback `http://127.0.0.1:8000`; 
 One selected purpose produces one filtered request. All four selected purposes produce one unfiltered request. Two or three selected purposes produce one request per purpose; the client sums only run counts, completion counts, timing-quality counts, open runs and the incomplete flag. It never combines means, medians or quantiles, and suppresses those statistics for partial multi-purpose selections.
 
 The client validates the complete response shape and known enum keys before rendering. It renders only fixed labels, aggregate numbers, the bounded window, the known TLS state and a sanitized 503 code. `not_connected`, network/backend-down, invalid-response and incomplete-sample states remain inside the live card and do not affect synthetic Overview content.
+
+Configuration timing is requested for one selected purpose or, when all four are selected, one unfiltered request. Two or three selected purposes show a selection prompt because means, medians and quantiles cannot be combined. A separate unfiltered run-activity result supplies live purpose-chip counts while connected; the chips fall back to their labeled synthetic counts otherwise.
 
 ## Errors
 

@@ -2,15 +2,17 @@ import { ConfigurationTable } from './ConfigurationTable';
 import { TIME_RANGES, PRODUCTION_ONLY, togglePurpose } from '../mock/presentation';
 import { PreviewButton, PreviewSelect } from '../components/PreviewControl';
 import { SegmentedControl } from '../components/SegmentedControl';
-import { Fragment, useState } from 'react';
+import { Fragment, useCallback, useState } from 'react';
 import { RecentActivity } from '../components/RecentActivity';
 import { css } from '../lib/css';
 import { getOverviewValues } from '../mock/overview';
-import type { OverviewState } from '../types';
+import type { OverviewState, Purpose } from '../types';
 import { LiveRunActivityCard } from '../components/LiveRunActivityCard';
 
 export default function Overview() {
  const [state, setState] = useState<OverviewState>({ range: 'today', cfg: 0, purp: { production: true, engineering: false, training: false, calibration: false } });
+ const [livePurposeCounts, setLivePurposeCounts] = useState<Record<Purpose, number> | null>(null);
+ const updateLivePurposeCounts = useCallback((counts: Record<Purpose, number> | null) => setLivePurposeCounts(counts), []);
  const resetPurpose = () => setState(current => ({ ...current, purp: { ...PRODUCTION_ONLY } }));
  const values = getOverviewValues(state);
  const { accent, d, kpis, purposes, scope, cfgRows, sel, hist, meanX, meanLX, outSegs, outLegend, linePath, areaPath, lineGrid, dots, avgY, lastX, lastY, bars, barGrid, stations, cells, legendCells, runs } = values;
@@ -64,7 +66,11 @@ export default function Overview() {
           <button type="button" aria-pressed={p.pressed} onClick={() => setState(current => ({ ...current, purp: togglePurpose(current.purp, p.value) }))} style={css(p.style)}>
             <span style={css("width:14px;height:14px;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;border:1.5px solid " + String(p.boxBorder) + ";background:" + String(p.boxBg))}><svg width="10" height="10" viewBox="0 0 16 16" aria-hidden="true" style={css("fill:none;stroke:#fff;stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round;opacity:" + String(p.checkOp))}><path d="M3 8.5l3.2 3L13 4.5"></path></svg></span>
             {p.label}
-            <span style={css("font-size:11.5px;font-weight:500;color:var(--muted);font-variant-numeric:tabular-nums")}>{p.count}</span>
+            <span
+              aria-label={`${livePurposeCounts ? livePurposeCounts[p.value] : p.count} runs from ${livePurposeCounts ? 'the live test-database 30-day window' : 'synthetic demo data'}`}
+              title={livePurposeCounts ? 'Live run count for the test-database 30-day window' : 'Synthetic demo run count'}
+              style={css("font-size:11.5px;font-weight:500;color:var(--muted);font-variant-numeric:tabular-nums")}
+            >{livePurposeCounts ? livePurposeCounts[p.value] : p.count}</span>
           </button>
         </Fragment>)}
       </div>
@@ -73,7 +79,7 @@ export default function Overview() {
       </label>
     </section>
 
-    <LiveRunActivityCard purposes={state.purp} />
+    <LiveRunActivityCard purposes={state.purp} onPurposeCountsChange={updateLivePurposeCounts} />
 
     {scope.show && <>
       <div role="status" style={css("display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:10px 14px;border-radius:12px;background:" + String(scope.bg) + ";color:" + String(scope.fg) + ";border:1px solid color-mix(in srgb,currentColor 25%,transparent);font-size:13px")}>

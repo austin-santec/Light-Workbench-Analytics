@@ -1,6 +1,6 @@
 # Reporting database foundation — Milestone 3
 
-**Stage A is offline-tested and the owner has authorized Stage B for one locally configured non-production target and dedicated read-only identity.** The owner, not Codex, performed the first compatible connection and bounded run read recorded in `STATUS.md`. Part A now exposes one aggregate-only run-activity endpoint; row-level real records, identities and serials remain forbidden over HTTP. React remains independent on synthetic fixtures.
+**Stage A is offline-tested and the owner has authorized Stage B for one locally configured non-production target and dedicated read-only identity.** The owner, not Codex, performed the first compatible connection and bounded run read recorded in `STATUS.md`. Two aggregate-only run diagnostics now feed the separate Overview live card; row-level real records, identities and serials remain forbidden over HTTP. Every established KPI, chart, table and fixture remains synthetic.
 
 ## Reviewed baseline and evidence
 
@@ -98,14 +98,15 @@ Configuration declarations cannot prove that a target is non-production, that DN
 
 ## Implemented operations and cost bounds
 
-`ReportingRepository` exposes `check_schema()`, `list_runs(RunQuery)` and `get_run_activity(RunQuery)`. `SqlServerReportingRepository` implements them through `SqlServerAdapter`. No raw SQL or caller-provided object identifiers are accepted by the repository. The metadata page remains internal; only the aggregate activity result has an HTTP contract.
+`ReportingRepository` exposes `check_schema()`, `list_runs(RunQuery)`, `get_run_activity(RunQuery)` and `get_test_time_by_configuration(RunQuery)`. `SqlServerReportingRepository` implements them through `SqlServerAdapter`. No raw SQL or caller-provided object identifiers are accepted by the repository. The metadata page remains internal; only the two aggregate results have HTTP contracts.
 
 | Operation | Read boundary |
 | --- | --- |
 | Connection/permissions | One scalar current-database/fixed-role/permission projection, then six object-permission rows; no unit/operator data |
-| Schema compatibility | TOP 8 bounded ledger query must yield exactly the seven reviewed IDs/names/checksums; a migration above 7 is ordered into the seven-row fetch boundary so it cannot be hidden by the existing cap. Missing/older/newer/modified histories fail. A TOP 128 catalog query checks consumed dbo user-table and view (`U`/`V`) column names, system types, lengths, scale and nullability. Temporal storage lengths are normalized away; `datetime2` scale 3 is required. No cache or schema repair. |
+| Schema compatibility | TOP 8 bounded ledger query ordered by migration ID must yield exactly the seven reviewed IDs/names/checksums. Python reads `len(MIGRATIONS) + 1`, so missing/older/newer/gapped/modified histories fail without a special ordering case. A TOP 128 catalog query checks consumed dbo user-table and view (`U`/`V`) column names, system types, lengths, scale and nullability. Temporal storage lengths are normalized away; `datetime2` scale 3 is required. No cache or schema repair. |
 | Run/identity page | Explicit 17-column projection from `IL_RUNS → UNIT_SWITCH_ASSIGNMENTS → UNITS/SWITCHES`, preserving historical assignment ownership. Returns run/assignment/unit/switch IDs, main-board/switch serials, switch model, run number, start/end UTC, mode, completion/purpose/analysis status, superseding run ID, run front-panel count and station number. |
 | Aggregate run activity | On one connection after preflight, one `COUNT_BIG`/`GROUP BY` statement counts runs by purpose/completion and open state; a second statement fetches at most 5001 ended-run rows containing only three numeric duration columns and timing quality. Optional filters are bound. Python computes exact median and nearest-rank P90 over at most 5000 rows and marks larger samples incomplete. |
+| Test time by configuration | On one connection after preflight, one parameterized TOP 5001 read returns historical run model/mode/channel-count group keys, active/elapsed duration columns and timing quality only. Python groups at most 5000 rows, retains null channel count as a group, excludes open runs from statistics, and marks overflow incomplete. |
 
 Run reads require an aware UTC interval `[started_from, started_before)`, positive and at most 31 days. Optional equality filters: switch model (1–30 characters, bound parameter), wavelength mode, run purpose, completion and analysis status. Defaults use the named normal-report selection above. SQL values, dates, filters, limit and offset use `?` parameters; SQL identifiers/order are fixed in code. Driver-returned naive `DATETIME2` values are interpreted as UTC; aware values normalize to UTC.
 
@@ -118,6 +119,8 @@ Date/result caps limit logical scope, not physical SQL work. The existing assign
 The aggregate endpoint uses the same aware UTC `[started_from, started_before)` guard and 31-day maximum. Purpose is optional and defaults to all four purposes; optional mode and switch-model filters also intersect. Run totals count starts in the window and must be labeled as runs, never units. Open runs are counted separately and excluded from duration statistics. Timing-quality counts cover ended runs. Active/stopped statistics use only `confirmed` timing histories; elapsed statistics use every ended run. Values remain at millisecond precision until conversion to seconds. Median is exact; nearest-rank P90 selects one-based `ceil(0.90*n)`. Valid elapsed observations strictly greater than 5,400 seconds are flagged and remain included. Samples report `no_data` with null numbers at n=0, `small_sample` for n 1–9 and `ok` otherwise.
 
 The 5000-row cap bounds only the numeric duration sample. The query requests TOP 5001 to detect overflow; when overflow exists the response sets `incomplete: true` and statistics describe only the bounded sample. Counts remain SQL aggregates. This is an explicit incomplete diagnostic, not a production KPI or a substitute for T12 per-finished-unit cumulative timing.
+
+The configuration endpoint uses the same UTC window and optional purpose/mode filters, without a switch-model filter. It groups using the switch from the run's historical assignment, the run's wavelength mode and the run's saved front-panel channel count. Ended-run elapsed statistics include all timing qualities; active statistics include only `confirmed` timing. It also reports open runs, confirmed/unavailable coverage, strict over-90-minute flags and median elapsed divided by channel count. Null channel count or no elapsed sample yields null seconds per channel. Output ordering is model, mode, then channels descending with null last. This remains T09/T10-style run-level evidence and cannot replace T12's all-history, verified-finished-unit cumulative primary.
 
 ## Sensitive fields and deferred metrics
 

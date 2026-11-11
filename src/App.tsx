@@ -34,7 +34,7 @@ export default function App() {
         event.preventDefault(); document.querySelector('main')?.focus();
       }}>Skip to content</a>
       <div className="demo-strip">
-        <span><strong>Milestone 1</strong> · Synthetic demonstration · Offline</span>
+        <span><strong>Development</strong> · Demo data + live test-database panels</span>
         <span id="preview-help">Disabled controls are future-feature previews.</span>
         <Button variant="outline" size="sm" onClick={() => setDark(value => !value)} aria-pressed={dark}>
           {dark ? 'Light mode' : 'Dark mode'}

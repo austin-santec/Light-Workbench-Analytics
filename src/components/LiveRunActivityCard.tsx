@@ -11,7 +11,16 @@ import {
   type RunActivityWindow,
   type SampleState,
 } from '../lib/api/runActivity';
+import {
+  loadTestTimeByConfiguration,
+  type TestTimeByConfigurationConnectedResponse,
+} from '../lib/api/testTimeByConfiguration';
 import type { Purpose } from '../types';
+
+interface ConnectedLiveData {
+  activity: Extract<RunActivityResult, { data_source: 'test_database' }>;
+  configurations: TestTimeByConfigurationConnectedResponse | null;
+}
 
 type CardState =
   | { kind: 'loading' }
@@ -20,7 +29,7 @@ type CardState =
   | { kind: 'database_error'; code: string }
   | { kind: 'invalid_response' }
   | { kind: 'request_failed' }
-  | { kind: 'connected'; data: Extract<RunActivityResult, { data_source: 'test_database' }> };
+  | { kind: 'connected'; data: ConnectedLiveData };
 
 interface Snapshot {
   requestKey: string;
@@ -39,6 +48,12 @@ function formatWindow(window: RunActivityWindow): string {
   const format = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
   const lastIncludedDay = new Date(Date.parse(window.started_before) - 1);
   return `${format.format(new Date(window.started_from))} – ${format.format(lastIncludedDay)} UTC`;
+}
+
+// Per-channel times are often under a few seconds; whole-second rounding would show 0s.
+function formatPerChannel(value: number | null): string {
+  if (value === null) return '—';
+  return value < 60 ? `${value.toFixed(1)}s` : formatSeconds(value);
 }
 
 function formatSeconds(value: number | null): string {
@@ -126,6 +141,65 @@ function ConnectedContent({ data }: { data: Extract<RunActivityResult, { data_so
   </div>;
 }
 
+function StatisticDetail({ statistics }: { statistics: DurationStatistics }) {
+  const badge = sampleLabel(statistics.sample_state);
+  return <span style={css('display:flex;flex-direction:column;align-items:flex-end;gap:2px')}>
+    <span>{formatSeconds(statistics.median)}</span>
+    <span style={css('font-size:10.5px;color:var(--muted);white-space:nowrap')}>
+      n={statistics.n}{badge ? ` · ${badge}` : ''}
+    </span>
+  </span>;
+}
+
+function ConfigurationTimingTable({ data }: { data: TestTimeByConfigurationConnectedResponse }) {
+  return <div className="table-scroll" tabIndex={0} role="region" aria-label="Live test time by configuration, scroll horizontally on narrow screens">
+    <table className="configuration-table" aria-label="Live test time by configuration">
+      <caption className="sr-only">Run-level test-database duration diagnostics grouped by each run's historical configuration. These are not per-unit cumulative T12 results.</caption>
+      <colgroup>{[1.9, .55, .85, .85, .85, .9, 1, 1.3].map((width, index) => <col key={index} style={{ width: `${width / 8.2 * 100}%` }} />)}</colgroup>
+      <thead><tr>{['Configuration', 'Runs', 'Median', 'Mean', 'P90', 'Per channel', 'Active median', 'Timing coverage'].map(label => <th key={label} scope="col" title={label === 'Active median' ? 'Confirmed timing only' : undefined}>{label}</th>)}</tr></thead>
+      <tbody>{data.configurations.map(row => {
+        const channels = row.front_panel_channel_count === null ? 'channels: null' : `${row.front_panel_channel_count} ch`;
+        const otherTiming = row.runs - row.confirmed_timing_runs - row.unavailable_timing_runs;
+        return <tr key={`${row.switch_model}-${row.wavelength_mode}-${String(row.front_panel_channel_count)}`}>
+          <th scope="row">
+            <span className="configuration-model">{row.switch_model}</span>{' · '}
+            <span className="configuration-mode">{row.wavelength_mode}</span>{' · '}{channels}
+          </th>
+          <td><span style={css('display:flex;flex-direction:column;align-items:flex-end;gap:2px')}><span>{row.runs}</span>{row.open_runs > 0 && <span style={css('font-size:10.5px;color:var(--muted);white-space:nowrap')}>+ {row.open_runs} open</span>}</span></td>
+          <td><StatisticDetail statistics={row.elapsed_seconds} /></td>
+          <td>{formatSeconds(row.elapsed_seconds.mean)}</td>
+          <td>{formatSeconds(row.elapsed_seconds.p90)}</td>
+          <td>{formatPerChannel(row.seconds_per_channel)}</td>
+          <td><StatisticDetail statistics={row.active_seconds} /></td>
+          <td><span style={css('display:flex;flex-direction:column;align-items:flex-end;gap:2px;white-space:nowrap')}><span>{row.confirmed_timing_runs} / {row.runs} confirmed</span><span style={css('font-size:10.5px;color:var(--muted)')}>{row.unavailable_timing_runs} unavailable{otherTiming > 0 ? ` · ${otherTiming} other` : ''}</span></span></td>
+        </tr>;
+      })}</tbody>
+    </table>
+  </div>;
+}
+
+function ConfigurationTimingSection({ state }: { state: CardState }) {
+  return <section aria-labelledby="live-configuration-timing-title" style={css('display:flex;flex-direction:column;gap:9px;padding-top:12px;border-top:1px solid var(--line)')}>
+    <div style={css('display:flex;flex-direction:column;gap:3px')}>
+      <h3 id="live-configuration-timing-title" style={css('margin:0;font-size:14px;font-weight:600')}>Test time by configuration</h3>
+      <span style={css('font-size:11.5px;color:var(--muted)')}>Run-level elapsed diagnostics grouped by the run's historical model, mode and channel count · not per-unit cumulative T12</span>
+    </div>
+    {state.kind === 'loading' && <LoadingState />}
+    {state.kind === 'not_connected' && <StatusMessage>Live data is off. Start the backend with reporting settings to see test-database numbers.</StatusMessage>}
+    {state.kind === 'backend_unreachable' && <StatusMessage>Backend not reachable on 127.0.0.1:8000</StatusMessage>}
+    {state.kind === 'database_error' && <StatusMessage>Database check failed (<code>{state.code}</code>)</StatusMessage>}
+    {state.kind === 'invalid_response' && <StatusMessage>Live data response was not recognized.</StatusMessage>}
+    {state.kind === 'request_failed' && <StatusMessage>Live data request failed.</StatusMessage>}
+    {state.kind === 'connected' && state.data.configurations === null && <StatusMessage>Select one purpose or all to see times by configuration</StatusMessage>}
+    {state.kind === 'connected' && state.data.configurations !== null && <>
+      {state.data.configurations.incomplete && <div role="status" style={css('padding:9px 11px;border-radius:9px;background:var(--warn-bg);color:var(--warn-fg);font-size:12.5px;font-weight:600')}>Bounded sample — configuration statistics do not cover every matching run.</div>}
+      {state.data.configurations.configurations.length > 0
+        ? <ConfigurationTimingTable data={state.data.configurations} />
+        : <StatusMessage>No configuration timing data in this window.</StatusMessage>}
+    </>}
+  </section>;
+}
+
 function errorState(error: unknown): CardState {
   if (error instanceof RunActivityClientError) {
     if (error.kind === 'database' && error.code) return { kind: 'database_error', code: error.code };
@@ -135,7 +209,7 @@ function errorState(error: unknown): CardState {
   return { kind: 'backend_unreachable' };
 }
 
-export function LiveRunActivityCard({ purposes }: { purposes: Record<Purpose, boolean> }) {
+export function LiveRunActivityCard({ purposes, onPurposeCountsChange }: { purposes: Record<Purpose, boolean>; onPurposeCountsChange?: (counts: Record<Purpose, number> | null) => void }) {
   const selectedPurposes = useMemo(() => RUN_PURPOSES.filter(purpose => purposes[purpose]), [purposes]);
   const selectionKey = selectedPurposes.join(',');
   const [refresh, setRefresh] = useState(0);
@@ -147,18 +221,35 @@ export function LiveRunActivityCard({ purposes }: { purposes: Record<Purpose, bo
   useEffect(() => {
     const controller = new AbortController();
     const requestWindow = computeLast30CompleteUtcWindow();
-    loadRunActivity(selectedPurposes, requestWindow, controller.signal)
-      .then(result => setSnapshot({ requestKey, window: requestWindow, state: result.data_source === 'not_connected' ? { kind: 'not_connected' } : { kind: 'connected', data: result } }))
+    onPurposeCountsChange?.(null);
+    const activityRequest = loadRunActivity(selectedPurposes, requestWindow, controller.signal);
+    const allPurposeRequest = selectedPurposes.length === RUN_PURPOSES.length
+      ? activityRequest
+      : loadRunActivity(RUN_PURPOSES, requestWindow, controller.signal);
+    const configurationRequest = selectedPurposes.length === 1 || selectedPurposes.length === RUN_PURPOSES.length
+      ? loadTestTimeByConfiguration(selectedPurposes.length === 1 ? selectedPurposes[0] : null, requestWindow, controller.signal)
+      : Promise.resolve(null);
+    Promise.all([activityRequest, allPurposeRequest, configurationRequest])
+      .then(([activity, allPurposeActivity, configurations]) => {
+        if (activity.data_source === 'not_connected') {
+          if (allPurposeActivity.data_source !== 'not_connected' || configurations?.data_source === 'test_database') throw new RunActivityClientError('invalid_response');
+          setSnapshot({ requestKey, window: requestWindow, state: { kind: 'not_connected' } });
+          return;
+        }
+        if (allPurposeActivity.data_source !== 'test_database' || configurations?.data_source === 'not_connected') throw new RunActivityClientError('invalid_response');
+        onPurposeCountsChange?.(allPurposeActivity.runs.by_run_purpose);
+        setSnapshot({ requestKey, window: requestWindow, state: { kind: 'connected', data: { activity, configurations } } });
+      })
       .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setSnapshot({ requestKey, window: requestWindow, state: errorState(error) }); });
     return () => controller.abort();
-  }, [requestKey, selectedPurposes]);
+  }, [onPurposeCountsChange, requestKey, selectedPurposes]);
 
   return <section aria-labelledby="live-run-activity-title" style={css('background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;display:flex;flex-direction:column;gap:12px;min-width:0')}>
     <div style={css('display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:10px')}>
       <div style={css('display:flex;flex-direction:column;gap:3px')}>
         <div style={css('display:flex;flex-wrap:wrap;align-items:center;gap:8px')}>
           <span style={css('font-size:11px;font-weight:650;letter-spacing:.05em;text-transform:uppercase;padding:3px 8px;border-radius:999px;background:color-mix(in srgb,var(--accent) 10%,var(--panel));color:var(--accent-ink)')}>Live · test database</span>
-          {state.kind === 'connected' && state.data.tls === 'encrypted_unverified' && <span style={css('font-size:10.5px;padding:3px 8px;border-radius:999px;background:var(--warn-bg);color:var(--warn-fg)')}>Encrypted, certificate not verified</span>}
+          {state.kind === 'connected' && state.data.activity.tls === 'encrypted_unverified' && <span style={css('font-size:10.5px;padding:3px 8px;border-radius:999px;background:var(--warn-bg);color:var(--warn-fg)')}>Encrypted, certificate not verified</span>}
         </div>
         <h2 id="live-run-activity-title" style={css('margin:0;font-size:16px;font-weight:600')}>Run activity</h2>
         <span style={css('font-size:12px;color:var(--muted)')}>{formatWindow(displayWindow)} · follows Run purpose only</span>
@@ -174,6 +265,7 @@ export function LiveRunActivityCard({ purposes }: { purposes: Record<Purpose, bo
     {state.kind === 'database_error' && <StatusMessage>Database check failed (<code>{state.code}</code>)</StatusMessage>}
     {state.kind === 'invalid_response' && <StatusMessage>Live data response was not recognized.</StatusMessage>}
     {state.kind === 'request_failed' && <StatusMessage>Live data request failed.</StatusMessage>}
-    {state.kind === 'connected' && <ConnectedContent data={state.data} />}
+    {state.kind === 'connected' && <ConnectedContent data={state.data.activity} />}
+    <ConfigurationTimingSection state={state} />
   </section>;
 }

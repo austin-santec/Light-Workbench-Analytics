@@ -5,6 +5,7 @@ from typing import Protocol
 from app.reporting.adapter import ReportingError, SqlServerAdapter
 from app.reporting.models import (
     CompletionStatus,
+    ConfigurationTestTime,
     DurationStatistics,
     RunActivityMetrics,
     RunMetadata,
@@ -12,6 +13,7 @@ from app.reporting.models import (
     RunQuery,
     SampleState,
     StoppedStatistics,
+    TestTimeByConfigurationMetrics,
     TimingQuality,
 )
 from app.reporting.schema import (
@@ -26,6 +28,7 @@ from app.reporting.schema import (
 from app.schemas import RunPurpose
 
 RUN_ACTIVITY_ROW_CAP = 5000
+TEST_TIME_BY_CONFIGURATION_ROW_CAP = 5000
 
 RUN_FIELDS = (
     "run_id",
@@ -71,6 +74,16 @@ JOIN dbo.SWITCHES AS s ON s.switch_id = a.switch_id
 
 RUN_ACTIVITY_TIMING_SQL = """
 SELECT TOP (5001) t.active_test_ms, t.elapsed_ms, t.stopped_ms, t.timing_quality
+FROM dbo.IL_RUNS AS r
+JOIN dbo.vw_RunTimingSummary AS t ON t.run_id = r.run_id
+JOIN dbo.UNIT_SWITCH_ASSIGNMENTS AS a ON a.assignment_id = r.assignment_id
+JOIN dbo.SWITCHES AS s ON s.switch_id = a.switch_id
+"""
+
+TEST_TIME_BY_CONFIGURATION_SQL = """
+SELECT TOP (5001) s.switch_model, r.wavelength_mode, r.front_panel_channel_count,
+    t.active_test_ms, t.elapsed_ms,
+    CASE WHEN r.run_ended_at_utc IS NULL THEN NULL ELSE t.timing_quality END
 FROM dbo.IL_RUNS AS r
 JOIN dbo.vw_RunTimingSummary AS t ON t.run_id = r.run_id
 JOIN dbo.UNIT_SWITCH_ASSIGNMENTS AS a ON a.assignment_id = r.assignment_id
@@ -134,6 +147,25 @@ def build_run_activity_queries(query: RunQuery) -> tuple[str, str, tuple]:
         + " ORDER BY r.run_started_at_utc, r.run_id"
     )
     return count_sql, timing_sql, tuple(params)
+
+
+def build_test_time_by_configuration_query(query: RunQuery) -> tuple[str, tuple]:
+    where = ["r.run_started_at_utc >= ?", "r.run_started_at_utc < ?"]
+    params = [query.started_from.replace(tzinfo=None), query.started_before.replace(tzinfo=None)]
+    for column, value in (
+        ("r.wavelength_mode", query.wavelength_mode),
+        ("r.run_purpose", query.run_purpose),
+    ):
+        if value is not None:
+            where.append(f"{column} = ?")
+            params.append(str(value))
+    sql = (
+        TEST_TIME_BY_CONFIGURATION_SQL
+        + " WHERE "
+        + " AND ".join(where)
+        + " ORDER BY r.run_started_at_utc, r.run_id"
+    )
+    return sql, tuple(params)
 
 
 def _sample_state(n: int) -> SampleState:
@@ -246,10 +278,93 @@ def summarize_run_activity(
     )
 
 
+def summarize_test_time_by_configuration(
+    rows: list[tuple], *, incomplete: bool
+) -> TestTimeByConfigurationMetrics:
+    groups: dict[tuple[str, str, int | None], dict[str, object]] = {}
+    for row in rows:
+        if len(row) != 6:
+            raise ReportingError("schema_incompatible")
+        switch_model, wavelength_mode, channel_count, active, elapsed, raw_quality = row
+        if not isinstance(switch_model, str) or not 1 <= len(switch_model) <= 30:
+            raise ReportingError("schema_incompatible")
+        if wavelength_mode not in {"SM", "MM"}:
+            raise ReportingError("schema_incompatible")
+        if channel_count is not None and (type(channel_count) is not int or channel_count <= 0):
+            raise ReportingError("schema_incompatible")
+        if active is not None and (type(active) is not int or active < 0):
+            raise ReportingError("schema_incompatible")
+        if elapsed is not None and (type(elapsed) is not int or elapsed < 0):
+            raise ReportingError("schema_incompatible")
+
+        key = (switch_model, wavelength_mode, channel_count)
+        group = groups.setdefault(
+            key,
+            {
+                "open_runs": 0,
+                "elapsed_ms": [],
+                "active_ms": [],
+                "confirmed": 0,
+                "unavailable": 0,
+                "flagged": 0,
+            },
+        )
+        if raw_quality is None:
+            group["open_runs"] += 1
+            continue
+        try:
+            quality = TimingQuality(raw_quality)
+        except (TypeError, ValueError):
+            raise ReportingError("schema_incompatible") from None
+        if type(elapsed) is not int:
+            raise ReportingError("schema_incompatible")
+        group["elapsed_ms"].append(elapsed)
+        group["flagged"] += elapsed > 5_400_000
+        if quality is TimingQuality.CONFIRMED:
+            if type(active) is not int:
+                raise ReportingError("schema_incompatible")
+            group["active_ms"].append(active)
+            group["confirmed"] += 1
+        elif quality is TimingQuality.UNAVAILABLE:
+            group["unavailable"] += 1
+
+    configurations = []
+    ordered_keys = sorted(
+        groups,
+        key=lambda key: (key[0], key[1], key[2] is None, -(key[2] or 0)),
+    )
+    for switch_model, wavelength_mode, channel_count in ordered_keys:
+        group = groups[(switch_model, wavelength_mode, channel_count)]
+        elapsed_seconds = _duration_statistics(group["elapsed_ms"])
+        configurations.append(
+            ConfigurationTestTime(
+                switch_model=switch_model,
+                wavelength_mode=wavelength_mode,
+                front_panel_channel_count=channel_count,
+                runs=elapsed_seconds.n,
+                open_runs=group["open_runs"],
+                elapsed_seconds=elapsed_seconds,
+                active_seconds=_duration_statistics(group["active_ms"]),
+                confirmed_timing_runs=group["confirmed"],
+                unavailable_timing_runs=group["unavailable"],
+                seconds_per_channel=(
+                    None
+                    if channel_count is None or elapsed_seconds.median is None
+                    else elapsed_seconds.median / channel_count
+                ),
+                flagged_over_90_min=group["flagged"],
+            )
+        )
+    return TestTimeByConfigurationMetrics(
+        configurations=tuple(configurations), incomplete=incomplete
+    )
+
+
 class ReportingRepository(Protocol):
     def check_schema(self) -> None: ...
     def list_runs(self, query: RunQuery) -> RunPage: ...
     def get_run_activity(self, query: RunQuery) -> RunActivityMetrics: ...
+    def get_test_time_by_configuration(self, query: RunQuery) -> TestTimeByConfigurationMetrics: ...
 
 
 class SqlServerReportingRepository:
@@ -269,7 +384,7 @@ class SqlServerReportingRepository:
             for row in permissions
         ):
             raise ReportingError("permission_denied")
-        migrations = cursor.execute(MIGRATION_SQL).fetchmany(7)
+        migrations = cursor.execute(MIGRATION_SQL).fetchmany(len(MIGRATIONS) + 1)
         if tuple(tuple(row) for row in migrations) != MIGRATIONS:
             raise ReportingError("schema_incompatible")
         rows = cursor.execute(COLUMN_SQL, ("dbo", "U", "V", *COLUMNS)).fetchmany(128)
@@ -331,4 +446,15 @@ class SqlServerReportingRepository:
                 count_rows,
                 timing_rows[:RUN_ACTIVITY_ROW_CAP],
                 incomplete=incomplete,
+            )
+
+    def get_test_time_by_configuration(self, query: RunQuery) -> TestTimeByConfigurationMetrics:
+        query = RunQuery.model_validate(query.model_dump())
+        sql, params = build_test_time_by_configuration_query(query)
+        with self._adapter.cursor() as cursor:
+            self._preflight(cursor)
+            rows = cursor.execute(sql, params).fetchmany(TEST_TIME_BY_CONFIGURATION_ROW_CAP + 1)
+            incomplete = len(rows) > TEST_TIME_BY_CONFIGURATION_ROW_CAP
+            return summarize_test_time_by_configuration(
+                rows[:TEST_TIME_BY_CONFIGURATION_ROW_CAP], incomplete=incomplete
             )
