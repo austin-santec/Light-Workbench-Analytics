@@ -6,6 +6,21 @@ The request-scoped dependency returns `not_connected` when reporting is disabled
 
 Offline validation for this change: backend `pytest` passed 143 tests; `ruff check .`, `ruff format --check .` and `pip check` passed. Frontend typecheck and lint passed. The exact `npm.cmd run build` command was blocked by the managed filesystem while esbuild tried to read a parent directory and resolve `vite.config.ts`; the documented `npm.cmd run build -- --configLoader runner` fallback passed with Vite 7.3.7 and 452 modules transformed. No browser test was required because there was no UI change. No live database connection, server start with reporting enabled, `--verify`, frontend change, commit or push was performed. Austin must run any live endpoint acceptance afterward from his terminal.
 
+# First live aggregate endpoint
+
+Updated November 11, 2026. `GET /api/v1/reporting/run-activity` returned HTTP 200 against the Stage B test database. The backend ran on loopback, the owner supplied credentials in his own terminal session, and the connection used `tls: encrypted_unverified`.
+
+The first live call failed closed with 503 `schema_incompatible`. The owner's catalog query showed `vw_RunTimingSummary.timing_quality` is `varchar(19) NOT NULL`, while the gate expected it nullable. The gate was corrected; all other view columns matched.
+
+Live checks over a 31-day window:
+- **No filter:** 200.
+- **`purpose=engineering`:** 200.
+- **`purpose=production`:** 200.
+- **Response shape:** only aggregates and enum keys. Most runs predate 0007 timing (`unavailable`), so active-time samples are `small_sample`, as expected.
+- **Run counts:** these differ from `--verify --runs`, which uses the narrower production/included report selection. The endpoint counts every run started in the window.
+
+React is not wired yet; that is Part B.
+
 # Stage B authorization and read-only identity provisioning
 
 Updated November 11, 2026. The owner authorized Stage B for one named local non-production test database and a dedicated read-only SQL login. Exact target and identity details stay in local, untracked configuration. The owner provisioned the login through an administrator connection: one database role with object-level SELECT on `SCHEMA_MIGRATIONS`, `IL_RUNS`, `UNIT_SWITCH_ASSIGNMENTS`, `UNITS`, `SWITCHES` and `vw_RunTimingSummary`.
