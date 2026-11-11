@@ -142,7 +142,16 @@ class FakeDatabase:
         self.calls.append((sql, params))
         if self.fail_at == kind:
             raise self.error
-        self.result = [self.identity] if kind == "identity" else getattr(self, kind)
+        if kind == "identity":
+            self.result = [self.identity]
+        elif kind == "migrations":
+            supported_max = MIGRATIONS[-1][0]
+            self.result = sorted(
+                self.migrations,
+                key=lambda row: (row[0] <= supported_max, row[0]),
+            )[: supported_max + 1]
+        else:
+            self.result = getattr(self, kind)
         return self
 
     def fetchone(self):
@@ -317,7 +326,8 @@ def test_cleanup_failure_closes_both_resources_and_preserves_primary_failure(dat
 
 
 @pytest.mark.parametrize(
-    "change", ["missing", "old", "new", "checksum", "name", "column", "type", "nullable"]
+    "change",
+    ["missing", "old", "new", "gap", "checksum", "name", "column", "type", "nullable"],
 )
 def test_schema_incompatibilities_stop_before_run_query(database, change):
     if change == "missing":
@@ -325,11 +335,13 @@ def test_schema_incompatibilities_stop_before_run_query(database, change):
     elif change == "old":
         database.migrations.pop()
     elif change == "new":
-        database.migrations.append((7, "DEMO_new", "0" * 64))
+        database.migrations.append((8, "DEMO_new", "0" * 64))
+    elif change == "gap":
+        database.migrations.pop(3)
     elif change in {"checksum", "name"}:
-        row = list(database.migrations[0])
+        row = list(database.migrations[-1])
         row[2 if change == "checksum" else 1] = "DEMO_changed"
-        database.migrations[0] = tuple(row)
+        database.migrations[-1] = tuple(row)
     elif change == "column":
         database.columns = [
             row for row in database.columns if row[:2] != ("IL_RUNS", "station_number")

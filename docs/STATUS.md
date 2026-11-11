@@ -1,3 +1,13 @@
+# Migration 7 source baseline refresh
+
+Updated November 11, 2026. The offline reporting schema baseline now recognizes exactly source migrations 1–7 at read-only evidence commit `5d4972830e74cc1b1e718fb577916d132e58faf7`. Migration 7 is `run_test_sessions` with normalized SHA-256 `43f6ec51f25bfd1bfae3da6255d896708add338cb021d96a8dab653f01f14125`; migrations 1–6 were re-derived at the same commit and remain unchanged. Evidence was read only with `git show`; no source code was imported or executed.
+
+The compatibility gate accepts the seven reviewed ledger rows and fails closed for a missing migration 7, an extra migration 8, a gap, and a changed migration 7 name or checksum. The new `IL_RUN_SESSIONS` table and `vw_RunTimingSummary` are documented as source facts only. They were not added to analytics consumed columns, permissions or queries. Duration feasibility now recognizes prospective active time for `confirmed` sessions while retaining labeled elapsed fallback or incompleteness for pre-0007, missing, partial, checkpoint-estimated and provisional timing.
+
+Offline validation: backend `pytest` passed 123 tests; `ruff check .`, `ruff format --check .` and `pip check` passed; frontend typecheck and lint passed; `git diff --check` passed. The exact `npm.cmd run build` command was blocked by the managed filesystem while esbuild tried to read a parent directory and resolve `vite.config.ts`. The non-mutating workaround `npm.cmd run build -- --configLoader runner` passed with Vite 7.3.7 and 452 modules transformed. No browser test was required because there was no UI change.
+
+Milestone 3 Stage B remains **unapproved**. No database connection, reporting enablement, driver operation, HTTP route, React wiring, source-repository change, dependency change, commit or push occurred.
+
 # Milestone 4A status
 
 Updated November 6, 2026. **Final owner decision update prepared for review, documentation only.** The previous reconciliation is committed at `7801ae409c0d2110834cf6b6aa4c53334c3437ba`; it is no longer pending as unstaged work. Final D05/D06/D07/D08/D14 decisions are incorporated in [METRICS.md](METRICS.md), preserving other approvals. Technical verification and production readiness are not implied. Milestone 3 Stage B remains **unapproved**; Milestone 4B is **not started**.

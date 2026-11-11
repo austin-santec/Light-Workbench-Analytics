@@ -1,6 +1,6 @@
 """Reviewed source metadata, not migrations to execute. See REPORTING_DATABASE.md."""
 
-SOURCE_COMMIT = "02ec8f831b71a0c593cdf8cc2b3576723c978373"
+SOURCE_COMMIT = "5d4972830e74cc1b1e718fb577916d132e58faf7"
 MIGRATIONS = (
     (1, "initial_schema", "b416e81f6fb7fa2bdce7d0cb66f76bf96ff8ef9128682055d42836cc95ec09f5"),
     (
@@ -23,6 +23,11 @@ MIGRATIONS = (
         6,
         "authoritative_channel_roles",
         "04d2a0c207c94fa4901a6b07330b1556f44d97806490f843d7545d2efc9f6c6d",
+    ),
+    (
+        7,
+        "run_test_sessions",
+        "43f6ec51f25bfd1bfae3da6255d896708add338cb021d96a8dab653f01f14125",
     ),
 )
 
@@ -66,8 +71,9 @@ COLUMNS = {
 }
 
 MIGRATION_SQL = """
-SELECT TOP (7) migration_id, migration_name, script_checksum
-FROM dbo.SCHEMA_MIGRATIONS ORDER BY migration_id
+SELECT TOP (8) migration_id, migration_name, script_checksum
+FROM dbo.SCHEMA_MIGRATIONS
+ORDER BY CASE WHEN migration_id > 7 THEN 0 ELSE 1 END, migration_id
 """
 
 COLUMN_SQL = """
