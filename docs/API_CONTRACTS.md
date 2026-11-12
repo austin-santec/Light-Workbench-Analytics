@@ -1,8 +1,8 @@
-# API contracts — Milestones 2–3 and Stage B aggregates
+# API contracts — Milestones 2–3, Stage B aggregates and unit lookup
 
-Local base: `http://127.0.0.1:8000`. API version: `v1`; service version: `0.1.0`. All five implemented operations are GET and use Pydantic response models in `backend/app/schemas.py`. `/docs` and `/openapi.json` expose the generated specification. No authentication, arbitrary HTTP SQL execution, resource-detail lookup or production metrics exist. The Overview live card consumes the two reporting aggregates.
+Local base: `http://127.0.0.1:8000`. API version: `v1`; service version: `0.1.0`. All nine implemented operations are GET and use Pydantic response models in `backend/app/schemas.py`. `/docs` and `/openapi.json` expose the generated specification. No authentication, arbitrary HTTP SQL execution or final production metrics exist. The Overview live card consumes the two reporting aggregates; the four unit-lookup operations are approved row-level evidence APIs for the future Unit screen.
 
-The Stage B HTTP slices provide two aggregate-only run diagnostics. They may consume reporting data only after explicit request-time opt-in; FastAPI startup still does not load pyodbc or connect. No serial, operator, run ID, station row or other record-level field is served. The frontend keeps all established synthetic fixtures and shows these diagnostics in a separate live card. Local diagnostic and database boundaries are documented in [REPORTING_DATABASE.md](REPORTING_DATABASE.md).
+The Stage B HTTP slices provide two aggregate-only run diagnostics plus the approved unit, run-channel and assignment-hardware evidence lookups. They may consume reporting data only after explicit request-time opt-in; FastAPI startup still does not load pyodbc or connect. Unit lookup may return serials, operators and row-level records under the November 11 owner decision. Real values stay in HTTP responses and are never logged, tested or documented. The frontend keeps all established synthetic fixtures until its separate Part B. Local diagnostic and database boundaries are documented in [REPORTING_DATABASE.md](REPORTING_DATABASE.md).
 
 ## Implemented operations
 
@@ -73,6 +73,35 @@ The numeric timing read is capped at 5000 ended runs by fetching at most 5001 nu
 Each configuration reports ended `runs`, excluded `open_runs`, elapsed and confirmed-only active duration statistics, confirmed/unavailable timing counts, median elapsed seconds per channel (null for null channel count or no elapsed data), and elapsed observations strictly over 90 minutes. Duration blocks use the same exact mean/median/nearest-rank P90 and sample-state rules as run activity. Groups sort by model, mode and descending channel count with null last. One parameterized read requests at most 5001 rows containing only group keys, numeric durations and timing quality; Python groups at most 5000 and sets `incomplete: true` on overflow. No run, unit, switch, serial, station or operator identifier is returned.
 
 The connected envelope contains `data_source`, `tls`, `window`, `filters`, `incomplete` and `configurations`. Disabled/incomplete reporting returns exactly `{"data_source":"not_connected"}`; enabled reporting failures return the same sanitized 503 contract as run activity. These statistics are T09/T10-style run diagnostics, not T12 per-finished-unit cumulative testing duration or a production KPI.
+
+### Unit lookup
+
+All four operations below use one short-lived reporting connection per request. The same connection performs target, permission, migration and consumed-column preflight before fixed parameterized reads. When reporting is disabled or incomplete, each returns HTTP 200 exactly as `{"data_source":"not_connected"}`. Connected responses contain `data_source: "test_database"` and `tls: "verified" | "encrypted_unverified"`. Enabled reporting failures are the exact sanitized 503 `{"code":"<reporting_code>"}`. Unknown positive IDs return the standard sanitized 404 envelope; nonpositive/malformed path IDs return 422.
+
+`GET /api/v1/units/search?q=<text>` trims `q` and requires 2–100 characters. It performs a case-insensitive contains match against the main-board serial and every historically assigned switch serial. SQL LIKE metacharacters `%`, `_`, `[` and the escape marker are escaped before the value is bound. The fixed TOP 21 read returns at most 20 units, newest run first (units without runs last), plus `has_more`. Each item contains `unit_id`, main-board serial, nullable part number/model, the active assignment's nullable switch serial/model, nullable latest run start and run count.
+
+`GET /api/v1/units/{unit_id}` returns:
+
+- `unit`: ID, serial, nullable part number/model/front-panel count, created and updated UTC timestamps;
+- `assignments`: newest-first switch assignment history with serial/model/firmware, install/remove timestamps and operators, and removal reason. The list is capped at 500; `assignments_incomplete` reports overflow;
+- `runs`: newest-first runs capped at 200 with `has_more`. Each includes IDs, start/end, tester/station, mode/band/saved front-panel count/part number/application version, lifecycle/purpose/analysis state, superseding run ID and parsed void details;
+- `limits`: the strictly validated saved snapshot fields (`model`, mode, too-good, warning and fail criteria), or null for missing/malformed/internally inconsistent JSON;
+- `timing`: timing quality, active/elapsed/stopped seconds and session count from `vw_RunTimingSummary`;
+- `counts`: current logical channels and extra candidates measured, plus strict-source-rule failing/warning channel counts. Failure/warning counts are null when the saved limits cannot be validated.
+
+`GET /api/v1/runs/{run_id}/channels` returns all accepted logical-channel and extra-candidate attempts in separate flat lists. The combined fixed TOP 5001 read returns at most 5000 rows and sets `incomplete` on overflow. Logical attempts order by logical channel, attempt and measurement ID; extras use physical port, attempt and measurement ID. Each row contains the measurement ID, nullable logical channel, physical port, attempt, both wavelength/loss pairs, written UTC/operator and `is_current`, determined by membership in `vw_CurrentILMeasurements`. Current rows receive one classification with precedence `fail` → `too_good` → `warning` → `pass`; invalid/missing limits produce `unknown`. Noncurrent rows have null classification/rule. For valid limits, `classification_rule` is `strict >, run limit snapshot`: fail and warning use source `>` comparisons and too-good uses source `<`. Unknown classifications identify an invalid or missing snapshot instead. Equality at the fail limit is warning when the run has an enabled, lower warning threshold; it is never fail under the source rule. This intentionally follows `LimitProfile.classify`; the separate rounded COC `>=` policy conflict remains unresolved.
+
+`GET /api/v1/assignments/{assignment_id}/hardware` returns:
+
+- current channel-map rows with logical, initial/effective ports, replacement flag and latest replacement time;
+- oldest-first replacement events and their run/recommendation provenance and notes;
+- confirmed extra-port measurements with wavelength/loss pairs, attempt, source run/write time and analysis state;
+- only the latest designated/undesignated spare event per physical port;
+- newest-first saved analyses for runs in the assignment, with ranked recommendations and `used`, derived from a matching replacement's `source_recommendation_id`.
+
+Channel map, replacements, extra ports and spare lists are each capped at 500; analyses at 200; total recommendations at 2000. One top-level `incomplete` flag reports any overflow. Saved analysis `result_status` is historical evidence only: `fail_no_viable_recovery` is not a final manufacturing disposition, and `used` is recommendation linkage rather than proof of verified work.
+
+All insertion-loss and analysis loss/improvement values serialize as JSON numbers rounded to four decimal places. SQL `DECIMAL(9,4)` values are retained as `Decimal` until response serialization. Every returned timestamp is UTC-aware and serializes with `Z`.
 
 ### Overview frontend consumption
 

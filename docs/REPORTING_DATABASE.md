@@ -1,6 +1,6 @@
 # Reporting database foundation — Milestone 3
 
-**Stage A is offline-tested and the owner has authorized Stage B for one locally configured non-production target and dedicated read-only identity.** The owner, not Codex, performed the first compatible connection and bounded run read recorded in `STATUS.md`. Two aggregate-only run diagnostics now feed the separate Overview live card; row-level real records, identities and serials remain forbidden over HTTP. Every established KPI, chart, table and fixture remains synthetic.
+**Stage A is offline-tested and the owner has authorized Stage B for one locally configured non-production target and dedicated read-only identity.** The owner, not Codex, performed the first compatible connection and bounded run read recorded in `STATUS.md`. Two aggregate-only run diagnostics feed the separate Overview live card. The November 11 unit-lookup approval additionally permits row-level unit, run, channel and hardware evidence—including real serials and operators—over the loopback API. Real values remain forbidden in logs, tests, docs and repository artifacts. Every established frontend KPI, chart, table and fixture remains synthetic pending separate Unit-screen work.
 
 ## Reviewed baseline and evidence
 
@@ -50,7 +50,9 @@ Source workflow documentation says completed runs become included, stopped/faile
 
 An administrator must provision a **new dedicated reporting principal** for the approved non-production target. Windows authentication uses the process's Windows identity: launch under the dedicated approved account, not an interactive writer/admin account. SQL authentication requires separately configured credentials through the local environment/organization secret tooling; never copy source writer credentials. Do not store credentials in shell history, tracked files or command-line arguments.
 
-Use a dedicated database role with object-level SELECT on only these six consumed objects: the original five tables plus `vw_RunTimingSummary`. The source's schema-wide reporting grant is broader than this design; do not reuse it or `db_datareader`, `db_datawriter`, owner/security/DDL/admin roles. No measurement/session/history-table permissions are needed for the current queries.
+Use a dedicated database role with object-level SELECT on only the 14 objects consumed by current endpoints: the original five tables and `vw_RunTimingSummary`, plus `IL_MEASUREMENTS`, `vw_CurrentILMeasurements`, `CHANNEL_REPLACEMENTS`, `vw_CurrentChannelMap`, `vw_ConfirmedExtraPorts`, `DESIGNATED_SPARES`, `REPLACEMENT_ANALYSES` and `REPLACEMENT_ANALYSIS_RECOMMENDATIONS`. The source's schema-wide reporting grant is broader than this design; do not reuse it or `db_datareader`, `db_datawriter`, owner/security/DDL/admin roles.
+
+The owner-provided role-update script lists object-level SELECT for those eight new consumed objects and also `IL_RUN_SESSIONS`. The current API does **not** read `IL_RUN_SESSIONS`, so analytics does not add that table to `COLUMNS`, object-type validation or permission preflight; timing remains through `vw_RunTimingSummary`. The extra administrator-managed grant does not authorize analytics to query session rows. Target and identity values in the local access process remain outside this public documentation.
 
 Migration 0007 grants `vw_RunTimingSummary` to the source role `lwb_report_reader`; analytics does not use that source role. The owner separately provisioned and reviewed object-level `SELECT` for the dedicated analytics identity as recorded in `STATUS.md`.
 
@@ -64,6 +66,14 @@ GRANT SELECT ON OBJECT::dbo.UNIT_SWITCH_ASSIGNMENTS TO analytics_reporting_reado
 GRANT SELECT ON OBJECT::dbo.UNITS TO analytics_reporting_readonly;
 GRANT SELECT ON OBJECT::dbo.SWITCHES TO analytics_reporting_readonly;
 GRANT SELECT ON OBJECT::dbo.vw_RunTimingSummary TO analytics_reporting_readonly;
+GRANT SELECT ON OBJECT::dbo.IL_MEASUREMENTS TO analytics_reporting_readonly;
+GRANT SELECT ON OBJECT::dbo.vw_CurrentILMeasurements TO analytics_reporting_readonly;
+GRANT SELECT ON OBJECT::dbo.CHANNEL_REPLACEMENTS TO analytics_reporting_readonly;
+GRANT SELECT ON OBJECT::dbo.vw_CurrentChannelMap TO analytics_reporting_readonly;
+GRANT SELECT ON OBJECT::dbo.vw_ConfirmedExtraPorts TO analytics_reporting_readonly;
+GRANT SELECT ON OBJECT::dbo.DESIGNATED_SPARES TO analytics_reporting_readonly;
+GRANT SELECT ON OBJECT::dbo.REPLACEMENT_ANALYSES TO analytics_reporting_readonly;
+GRANT SELECT ON OBJECT::dbo.REPLACEMENT_ANALYSIS_RECOMMENDATIONS TO analytics_reporting_readonly;
 -- DBA creates/maps the separately approved user and adds role membership.
 ```
 
@@ -98,15 +108,21 @@ Configuration declarations cannot prove that a target is non-production, that DN
 
 ## Implemented operations and cost bounds
 
-`ReportingRepository` exposes `check_schema()`, `list_runs(RunQuery)`, `get_run_activity(RunQuery)` and `get_test_time_by_configuration(RunQuery)`. `SqlServerReportingRepository` implements them through `SqlServerAdapter`. No raw SQL or caller-provided object identifiers are accepted by the repository. The metadata page remains internal; only the two aggregate results have HTTP contracts.
+`ReportingRepository` exposes the existing schema/run/aggregate operations plus `search_units`, `get_unit_detail`, `get_run_channels` and `get_assignment_hardware`. `SqlServerReportingRepository` implements them through `SqlServerAdapter`. No raw SQL or caller-provided object identifiers are accepted by the repository. Every unit lookup uses fixed projections and bound values; only the recommendation `IN` placeholder count is generated, from the bounded analysis IDs just read on the same connection.
 
 | Operation | Read boundary |
 | --- | --- |
-| Connection/permissions | One scalar current-database/fixed-role/permission projection, then six object-permission rows; no unit/operator data |
-| Schema compatibility | TOP 8 bounded ledger query ordered by migration ID must yield exactly the seven reviewed IDs/names/checksums. Python reads `len(MIGRATIONS) + 1`, so missing/older/newer/gapped/modified histories fail without a special ordering case. A TOP 128 catalog query checks consumed dbo user-table and view (`U`/`V`) column names, system types, lengths, scale and nullability. Temporal storage lengths are normalized away; `datetime2` scale 3 is required. No cache or schema repair. |
+| Connection/permissions | One scalar current-database/fixed-role/permission projection, then 14 object-permission rows; no unit/operator data |
+| Schema compatibility | TOP 8 bounded ledger query ordered by migration ID must yield exactly the seven reviewed IDs/names/checksums. Python reads `len(MIGRATIONS) + 1`, so missing/older/newer/gapped/modified histories fail without a special ordering case. The catalog TOP is derived from the consumed-column count plus bounded slack for other columns on the same reviewed objects; reaching the cap fails closed. Generated `IN`/`VALUES` placeholders track the object list. Consumed dbo table/view (`U`/`V`) column names, system types, lengths, scale and nullability must match. Temporal storage lengths are normalized away; `datetime2` scale 3 is required. No cache or schema repair. |
 | Run/identity page | Explicit 17-column projection from `IL_RUNS → UNIT_SWITCH_ASSIGNMENTS → UNITS/SWITCHES`, preserving historical assignment ownership. Returns run/assignment/unit/switch IDs, main-board/switch serials, switch model, run number, start/end UTC, mode, completion/purpose/analysis status, superseding run ID, run front-panel count and station number. |
 | Aggregate run activity | On one connection after preflight, one `COUNT_BIG`/`GROUP BY` statement counts runs by purpose/completion and open state; a second statement fetches at most 5001 ended-run rows containing only three numeric duration columns and timing quality. Optional filters are bound. Python computes exact median and nearest-rank P90 over at most 5000 rows and marks larger samples incomplete. |
 | Test time by configuration | On one connection after preflight, one parameterized TOP 5001 read returns historical run model/mode/channel-count group keys, active/elapsed duration columns and timing quality only. Python groups at most 5000 rows, retains null channel count as a group, excludes open runs from statistics, and marks overflow incomplete. |
+| Unit search | One TOP 21 read; contains matching escapes SQL LIKE metacharacters and binds the same pattern for main-board and historical switch serial matching. Returns 20 rows plus `has_more`. |
+| Unit detail | TOP 1 unit, TOP 501 assignment history and TOP 201 run history. Run rows use bounded correlated current-measurement aggregates and the timing view. Python strictly parses limit/void JSON; malformed limits become null. |
+| Run channels | TOP 1 run criteria read and TOP 5001 attempt read, capped to 5000 with `incomplete`. Raw and current-measurement views determine every attempt and `is_current`; Python applies the source strict classifier. |
+| Assignment hardware | TOP 1 existence; TOP 501 each for current map, replacements, confirmed extras and latest-per-port spares; TOP 201 analyses and TOP 2001 recommendations. Any overflow sets one `incomplete` flag. |
+
+The newly consumed view columns are validated fail-closed offline. On 2026-11-12 the owner's catalog check of the Stage B test database confirmed every gated column of `vw_RunTimingSummary`, `vw_CurrentILMeasurements`, `vw_CurrentChannelMap` and `vw_ConfirmedExtraPorts`. That includes `timing_session_count` as nullable despite its `COALESCE`, and every `vw_CurrentChannelMap` column except `assignment_id` as nullable. The same check confirmed SELECT on all nine new objects and no INSERT/UPDATE/DELETE for the read-only login.
 
 Run reads require an aware UTC interval `[started_from, started_before)`, positive and at most 31 days. Optional equality filters: switch model (1–30 characters, bound parameter), wavelength mode, run purpose, completion and analysis status. Defaults use the named normal-report selection above. SQL values, dates, filters, limit and offset use `?` parameters; SQL identifiers/order are fixed in code. Driver-returned naive `DATETIME2` values are interpreted as UTC; aware values normalize to UTC.
 
@@ -124,7 +140,7 @@ The configuration endpoint uses the same UTC window and optional purpose/mode fi
 
 ## Sensitive fields and deferred metrics
 
-Serials, part numbers, operator fields (`tested_by`, `written_by`, `installed_by`, `removed_by`, `replaced_by`, `recorded_by`, `analyzed_by`), notes/reasons, station/equipment identity, UUIDs and JSON snapshots may be confidential. Current internal metadata rows include serials to establish identity joins; they must not be logged, exported or served over unauthenticated HTTP. The aggregate endpoint never invokes or serializes that metadata operation. Its database-returned strings are restricted to the reviewed purpose, completion-status and timing-quality enums. Rows/settings suppress sensitive repr fields; the diagnostic prints only state and bounded page count/has-more.
+Serials, part numbers, operator fields (`tested_by`, `written_by`, `installed_by`, `removed_by`, `replaced_by`, `recorded_by`, `analyzed_by`), notes/reasons and station identity are now approved in unit-lookup HTTP responses on loopback. They still must not appear in logs, fixtures, docs, exports or repository artifacts. UUIDs and raw JSON snapshots are not returned. Aggregate endpoints remain nonidentifying. Rows/settings suppress sensitive repr fields; the diagnostic prints only state and bounded page count/has-more.
 
 Driver exceptions become sanitized codes: `driver_unavailable`, `connection_timeout`, `query_timeout`, `authentication_failed`, `permission_denied`, `connection_unavailable`, `schema_incompatible`, `target_mismatch`, `read_failed`, `cleanup_failed`, or `disabled`. Logs retain only code/phase, never raw exception arguments, SQL parameters, records, target details or credentials. Cleanup attempts both resources and preserves a primary failure. CLI configuration failures print only `configuration_invalid`.
 

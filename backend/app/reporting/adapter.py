@@ -2,7 +2,9 @@ import importlib
 import logging
 import re
 import struct
+import traceback
 from contextlib import contextmanager
+from pathlib import Path
 
 from app.reporting.config import ReportingSettings
 
@@ -67,6 +69,22 @@ def _error_code(exc: Exception, phase: str) -> str:
     return "connection_unavailable" if phase == "connect" else "read_failed"
 
 
+def _diagnostic(exc: Exception) -> str:
+    # Local diagnosis without values: exception type, SQLSTATE and SQL Server error
+    # number (digits only), and the innermost application code location. Never the
+    # message text, driver arguments, SQL parameters or row data.
+    state = str(exc.args[0]) if exc.args else ""
+    state = state if re.fullmatch(r"[0-9A-Z]{5}", state) else "-"
+    numbers = re.findall(r"\((\d{1,6})\)", " ".join(str(arg) for arg in exc.args[1:2]))
+    native = numbers[-1] if numbers else "-"
+    location = "-"
+    for frame in traceback.extract_tb(exc.__traceback__):
+        path = Path(frame.filename)
+        if "app" in path.parts and path.name not in {"adapter.py", "contextlib.py"}:
+            location = f"{Path(frame.filename).name}:{frame.lineno}"
+    return f"type={type(exc).__name__} sqlstate={state} native={native} at={location}"
+
+
 class SqlServerAdapter:
     def __init__(self, settings: ReportingSettings, *, load_driver=_driver):
         self.settings = ReportingSettings.model_validate(settings.model_dump())
@@ -96,7 +114,12 @@ class SqlServerAdapter:
             raise
         except Exception as exc:
             primary_error = ReportingError(_error_code(exc, phase))
-            logger.warning("Reporting failure code=%s phase=%s", primary_error.code, phase)
+            logger.warning(
+                "Reporting failure code=%s phase=%s %s",
+                primary_error.code,
+                phase,
+                _diagnostic(exc),
+            )
             raise primary_error from None
         finally:
             cleanup_failed = False

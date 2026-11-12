@@ -28,6 +28,7 @@ from app.reporting.repository import (
     summarize_test_time_by_configuration,
 )
 from app.reporting.schema import (
+    CATALOG_ROW_CAP,
     COLUMN_SQL,
     COLUMNS,
     IDENTITY_SQL,
@@ -306,6 +307,7 @@ def test_preflight_timeouts_readonly_tls_and_cleanup(database):
     assert "Encrypt={yes};TrustServerCertificate={no};" in database.connection_string
     assert database.close_order == ["cursor", "connection"]
     assert len(database.calls) == 4
+    assert database.fetch_sizes[-1] == CATALOG_ROW_CAP
 
 
 @pytest.mark.parametrize(
@@ -342,6 +344,16 @@ def test_driver_failures_are_sanitized_and_resources_closed(
         else ["cursor", "connection"]
     )
     assert database.close_order == expected
+
+
+def test_read_failure_log_has_type_codes_and_location_but_no_message(database, caplog):
+    database.fail_at = "runs"
+    database.error = FakeOdbcError("42000", "DEMO-sensitive JSON text DEMO-U-1 (13609)")
+    with pytest.raises(ReportingError, match="read_failed"):
+        repository(database).list_runs(query())
+    assert "type=FakeOdbcError sqlstate=42000 native=13609 at=repository.py:" in caplog.text
+    assert "DEMO-sensitive" not in caplog.text
+    assert "DEMO-U-1" not in caplog.text
 
 
 def test_cleanup_failure_closes_both_resources_and_preserves_primary_failure(database, caplog):
@@ -679,6 +691,43 @@ def test_timing_view_select_denial_fails_closed(database):
     with pytest.raises(ReportingError, match="permission_denied"):
         repository(database).get_run_activity(query(selection="all"))
     assert not any(sql.startswith(RUN_ACTIVITY_COUNT_SQL) for sql, _ in database.calls)
+
+
+@pytest.mark.parametrize(
+    "object_name",
+    [
+        "IL_MEASUREMENTS",
+        "vw_CurrentILMeasurements",
+        "CHANNEL_REPLACEMENTS",
+        "vw_CurrentChannelMap",
+        "vw_ConfirmedExtraPorts",
+        "DESIGNATED_SPARES",
+        "REPLACEMENT_ANALYSES",
+        "REPLACEMENT_ANALYSIS_RECOMMENDATIONS",
+    ],
+)
+@pytest.mark.parametrize("failure", ["missing_column", "wrong_type", "no_select", "write"])
+def test_each_new_unit_lookup_object_fails_closed(database, object_name, failure):
+    if failure in {"missing_column", "wrong_type"}:
+        target = next(row for row in database.columns if row[0] == object_name)
+        if failure == "missing_column":
+            database.columns.remove(target)
+        else:
+            index = database.columns.index(target)
+            changed = list(target)
+            changed[3] = "xml"
+            database.columns[index] = tuple(changed)
+    else:
+        index = next(
+            index
+            for index, row in enumerate(database.permissions)
+            if row[0] == f"dbo.{object_name}"
+        )
+        changed = list(database.permissions[index])
+        changed[1 if failure == "no_select" else 2] = 0 if failure == "no_select" else 1
+        database.permissions[index] = tuple(changed)
+    with pytest.raises(ReportingError, match="schema_incompatible|permission_denied"):
+        repository(database).check_schema()
 
 
 def test_page_has_more_empty_results_and_utc_mapping(database):

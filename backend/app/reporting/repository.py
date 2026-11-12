@@ -17,6 +17,7 @@ from app.reporting.models import (
     TimingQuality,
 )
 from app.reporting.schema import (
+    CATALOG_ROW_CAP,
     COLUMN_SQL,
     COLUMNS,
     IDENTITY_SQL,
@@ -24,6 +25,12 @@ from app.reporting.schema import (
     MIGRATIONS,
     OBJECT_TYPES,
     PERMISSION_SQL,
+)
+from app.reporting.unit_lookup import (
+    get_assignment_hardware,
+    get_run_channels,
+    get_unit_detail,
+    search_units,
 )
 from app.schemas import RunPurpose
 
@@ -365,6 +372,10 @@ class ReportingRepository(Protocol):
     def list_runs(self, query: RunQuery) -> RunPage: ...
     def get_run_activity(self, query: RunQuery) -> RunActivityMetrics: ...
     def get_test_time_by_configuration(self, query: RunQuery) -> TestTimeByConfigurationMetrics: ...
+    def search_units(self, text: str) -> dict: ...
+    def get_unit_detail(self, unit_id: int) -> dict | None: ...
+    def get_run_channels(self, run_id: int) -> dict | None: ...
+    def get_assignment_hardware(self, assignment_id: int) -> dict | None: ...
 
 
 class SqlServerReportingRepository:
@@ -387,7 +398,9 @@ class SqlServerReportingRepository:
         migrations = cursor.execute(MIGRATION_SQL).fetchmany(len(MIGRATIONS) + 1)
         if tuple(tuple(row) for row in migrations) != MIGRATIONS:
             raise ReportingError("schema_incompatible")
-        rows = cursor.execute(COLUMN_SQL, ("dbo", "U", "V", *COLUMNS)).fetchmany(128)
+        rows = cursor.execute(COLUMN_SQL, ("dbo", "U", "V", *COLUMNS)).fetchmany(CATALOG_ROW_CAP)
+        if len(rows) >= CATALOG_ROW_CAP:
+            raise ReportingError("schema_incompatible")
         # sys.objects.type is char(2), so drivers return 'U ' / 'V '; compare trimmed.
         actual = {(row[0], row[2]): (str(row[1]).rstrip(), *row[3:]) for row in rows}
         if any(
@@ -458,3 +471,23 @@ class SqlServerReportingRepository:
             return summarize_test_time_by_configuration(
                 rows[:TEST_TIME_BY_CONFIGURATION_ROW_CAP], incomplete=incomplete
             )
+
+    def search_units(self, text: str) -> dict:
+        with self._adapter.cursor() as cursor:
+            self._preflight(cursor)
+            return search_units(cursor, text)
+
+    def get_unit_detail(self, unit_id: int) -> dict | None:
+        with self._adapter.cursor() as cursor:
+            self._preflight(cursor)
+            return get_unit_detail(cursor, unit_id)
+
+    def get_run_channels(self, run_id: int) -> dict | None:
+        with self._adapter.cursor() as cursor:
+            self._preflight(cursor)
+            return get_run_channels(cursor, run_id)
+
+    def get_assignment_hardware(self, assignment_id: int) -> dict | None:
+        with self._adapter.cursor() as cursor:
+            self._preflight(cursor)
+            return get_assignment_hardware(cursor, assignment_id)

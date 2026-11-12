@@ -459,11 +459,15 @@ def test_demo_schema_rejects_real_identifiers_and_naive_timestamps(client):
 def test_openapi_matches_error_and_query_contracts(client):
     spec = client.get("/openapi.json").json()
     assert set(spec["paths"]) == {
+        "/api/v1/assignments/{assignment_id}/hardware",
         "/api/v1/health/live",
         "/api/v1/system/info",
         "/api/v1/demo/runs",
         "/api/v1/reporting/run-activity",
         "/api/v1/reporting/test-time-by-configuration",
+        "/api/v1/runs/{run_id}/channels",
+        "/api/v1/units/search",
+        "/api/v1/units/{unit_id}",
     }
     operation = spec["paths"]["/api/v1/demo/runs"]["get"]
     assert {p["name"] for p in operation["parameters"]} == {"purpose", "model", "limit", "offset"}

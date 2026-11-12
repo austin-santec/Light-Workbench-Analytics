@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
@@ -12,6 +12,7 @@ from app.reporting.config import ReportingSettings
 from app.reporting.models import RunQuery
 from app.reporting.repository import ReportingRepository, SqlServerReportingRepository
 from app.schemas import (
+    AssignmentHardwareConnectedResponse,
     DemoRunQuery,
     DemoRunsResponse,
     HealthResponse,
@@ -21,12 +22,16 @@ from app.schemas import (
     RunActivityNotConnectedResponse,
     RunActivityQueryParams,
     RunActivityWindow,
+    RunChannelsConnectedResponse,
     RunCountsResponse,
     RunTimingResponse,
     SystemInfo,
     TestTimeByConfigurationConnectedResponse,
     TestTimeByConfigurationFilters,
     TestTimeByConfigurationQueryParams,
+    UnitDetailConnectedResponse,
+    UnitSearchConnectedResponse,
+    UnitSearchQueryParams,
 )
 from app.services.demo import list_demo_runs
 
@@ -184,3 +189,85 @@ def test_time_by_configuration(
         incomplete=metrics.incomplete,
         configurations=[configuration.model_dump() for configuration in metrics.configurations],
     )
+
+
+@router.get(
+    "/units/search",
+    response_model=UnitSearchConnectedResponse | RunActivityNotConnectedResponse,
+    responses={503: {"model": ReportingFailureResponse}},
+    tags=["unit lookup"],
+)
+def search_units(
+    query: Annotated[UnitSearchQueryParams, Query()],
+    access: Annotated[ReportingAccess | None, Depends(get_reporting_access)],
+) -> UnitSearchConnectedResponse | RunActivityNotConnectedResponse | JSONResponse:
+    if access is None:
+        return RunActivityNotConnectedResponse()
+    try:
+        result = access.repository.search_units(query.q)
+    except ReportingError as exc:
+        return JSONResponse(status_code=503, content={"code": exc.code})
+    return UnitSearchConnectedResponse(tls=access.tls, **result)
+
+
+@router.get(
+    "/units/{unit_id}",
+    response_model=UnitDetailConnectedResponse | RunActivityNotConnectedResponse,
+    responses={503: {"model": ReportingFailureResponse}},
+    tags=["unit lookup"],
+)
+def unit_detail(
+    unit_id: Annotated[int, Path(gt=0)],
+    access: Annotated[ReportingAccess | None, Depends(get_reporting_access)],
+) -> UnitDetailConnectedResponse | RunActivityNotConnectedResponse | JSONResponse:
+    if access is None:
+        return RunActivityNotConnectedResponse()
+    try:
+        result = access.repository.get_unit_detail(unit_id)
+    except ReportingError as exc:
+        return JSONResponse(status_code=503, content={"code": exc.code})
+    if result is None:
+        raise HTTPException(status_code=404)
+    return UnitDetailConnectedResponse(tls=access.tls, **result)
+
+
+@router.get(
+    "/runs/{run_id}/channels",
+    response_model=RunChannelsConnectedResponse | RunActivityNotConnectedResponse,
+    responses={503: {"model": ReportingFailureResponse}},
+    tags=["unit lookup"],
+)
+def run_channels(
+    run_id: Annotated[int, Path(gt=0)],
+    access: Annotated[ReportingAccess | None, Depends(get_reporting_access)],
+) -> RunChannelsConnectedResponse | RunActivityNotConnectedResponse | JSONResponse:
+    if access is None:
+        return RunActivityNotConnectedResponse()
+    try:
+        result = access.repository.get_run_channels(run_id)
+    except ReportingError as exc:
+        return JSONResponse(status_code=503, content={"code": exc.code})
+    if result is None:
+        raise HTTPException(status_code=404)
+    return RunChannelsConnectedResponse(tls=access.tls, **result)
+
+
+@router.get(
+    "/assignments/{assignment_id}/hardware",
+    response_model=AssignmentHardwareConnectedResponse | RunActivityNotConnectedResponse,
+    responses={503: {"model": ReportingFailureResponse}},
+    tags=["unit lookup"],
+)
+def assignment_hardware(
+    assignment_id: Annotated[int, Path(gt=0)],
+    access: Annotated[ReportingAccess | None, Depends(get_reporting_access)],
+) -> AssignmentHardwareConnectedResponse | RunActivityNotConnectedResponse | JSONResponse:
+    if access is None:
+        return RunActivityNotConnectedResponse()
+    try:
+        result = access.repository.get_assignment_hardware(assignment_id)
+    except ReportingError as exc:
+        return JSONResponse(status_code=503, content={"code": exc.code})
+    if result is None:
+        raise HTTPException(status_code=404)
+    return AssignmentHardwareConnectedResponse(tls=access.tls, **result)
