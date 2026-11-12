@@ -113,6 +113,20 @@ The client validates the complete response shape and known enum keys before rend
 
 Configuration timing is requested for one selected purpose or, when all four are selected, one unfiltered request. Two or three selected purposes show a selection prompt because means, medians and quantiles cannot be combined. A separate unfiltered run-activity result supplies live purpose-chip counts while connected; the chips fall back to their labeled synthetic counts otherwise.
 
+### Unit frontend consumption
+
+The Unit screen probes `GET /api/v1/units/search` on mount. `not_connected`, an unreachable backend and a sanitized 503 retain the established synthetic unit screen and add an honest state note; a 503 exposes only its validated reporting code. A connected response switches the whole screen to live mode. Live and synthetic values are never combined within a panel, and every live evidence panel is labeled **Live · test database**.
+
+Live search trims input, waits until at least two characters are present, debounces for approximately 250 ms and aborts every superseded request. Only the response for the current text is rendered. Exact case-insensitive main-board or switch-serial matches open directly; the result list otherwise shows the bounded search fields and `has_more` refinement state. Timestamps render in the browser's local time with the original UTC value retained in the `time` element and tooltip.
+
+The hash route accepts `#/unit?unit=<positive_id>` and optional `&run=<positive_id>`. The existing `?serial=` route remains a search prefill and continues to drive the demo fixture when live reporting is unavailable. Unit/run choices update browser history; reload, back and forward navigation restore both IDs. Missing positive IDs use the API's not-found state, while malformed/nonpositive IDs are rejected locally without issuing a detail request.
+
+After unit detail loads, the newest run is selected when the route has no run ID. The client then requests that run's channel attempts and its assignment's hardware independently. Completed hardware responses are cached by assignment for the lifetime of the open Unit screen. Channel and hardware failures stay local to their dependent sections. A stopped backend therefore leaves the unit frame visible with sanitized failure messages rather than substituting synthetic values or blanking the screen.
+
+Transport DTO guards validate every documented key, nested object, enum, timestamp, identifier and numeric/null boundary for all four responses. Unknown enum values and malformed bodies become `invalid_response`; 404 becomes `not_found`; 503 accepts only a short lowercase reporting code. Pure rendering derivations select current attempts, construct chronological events, group attempt history and map API classifications without recomputing classification or limits. Saved `result_status` and recommendation `used` remain historical evidence labels, never final disposition or verified-repair claims.
+
+While live mode is connected, the Unit sidebar reads and writes at most five recently opened units in `localStorage`. The stored records contain only positive unit IDs and serial strings; parsing and writes are guarded with `try/catch`. Demo mode retains the three synthetic example links.
+
 ## Errors
 
 `ErrorResponse` wraps `{error: {code: string, message: string, details: ErrorDetail[]}}`; details contain only `{field: string, code: string}`. Example invalid `limit=0`:

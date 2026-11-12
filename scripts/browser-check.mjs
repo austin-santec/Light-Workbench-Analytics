@@ -12,6 +12,7 @@ const checks = [];
 let runActivityMode = 'not_connected';
 const runActivityRequests = [];
 const configurationTimingRequests = [];
+const unitSearchRequests = [];
 const purposeTotals = { production: 2, engineering: 3, training: 1, calibration: 4 };
 const purposeOpenRuns = { production: 0, engineering: 1, training: 0, calibration: 0 };
 const purposeConfirmed = { production: 1, engineering: 1, training: 0, calibration: 0 };
@@ -105,12 +106,16 @@ await page.route('**/api/v1/reporting/test-time-by-configuration?*', async route
     body: JSON.stringify(runActivityMode === 'not_connected' ? { data_source: 'not_connected' } : configurationTimingFixture(url)),
   });
 });
+await page.route('**/api/v1/units/search?*', async route => {
+  unitSearchRequests.push(new URL(route.request().url()));
+  await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data_source: 'not_connected' }) });
+});
 page.on('pageerror', error => errors.push(error.message));
 page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
 page.on('response', response => { if (response.status() >= 400) errors.push(`HTTP ${response.status()}: ${response.url()}`); });
 page.on('requestfailed', request => {
   const pathname = new URL(request.url()).pathname;
-  const expectedUnmountCancellation = ['/api/v1/reporting/run-activity', '/api/v1/reporting/test-time-by-configuration'].includes(pathname) && request.failure()?.errorText === 'net::ERR_ABORTED';
+  const expectedUnmountCancellation = ['/api/v1/reporting/run-activity', '/api/v1/reporting/test-time-by-configuration', '/api/v1/units/search'].includes(pathname) && request.failure()?.errorText === 'net::ERR_ABORTED';
   if (!expectedUnmountCancellation) errors.push(`Request failed: ${request.url()} ${request.failure()?.errorText}`);
 });
 const check = label => { checks.push(label); console.log(`PASS ${label}`); };
@@ -247,7 +252,9 @@ try {
   await assertFocus(page.getByRole('searchbox', { name: 'Look up a unit' }));
   await page.getByRole('searchbox', { name: 'Look up a unit' }).fill('  demo-sw-001  ');
   await page.getByRole('heading', { name: 'DEMO-18793', exact: true }).waitFor();
-  check('Unit wavelength control, lookup empty state, and example recovery');
+  await assertText(page.getByRole('status').filter({ hasText: 'Live reporting is off' }), 'showing the synthetic demo unit');
+  assert.ok(unitSearchRequests.some(url => url.searchParams.get('q') === 'DEMO-18793'));
+  check('Unit demo fallback, wavelength control, lookup empty state, and example recovery');
 
   await page.getByRole('navigation', { name: 'Main', exact: true }).getByRole('link', { name: 'Failures & replacements' }).click();
   await page.getByRole('button', { name: '24 ch', exact: true }).click();
@@ -378,6 +385,7 @@ try {
     releaseImport();
     await recoveryPage.getByRole('heading', { name: 'Unable to load this screen' }).waitFor();
     await recoveryPage.unrouteAll({ behavior: 'wait' });
+    await recoveryPage.route('**/api/v1/units/search?*', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data_source: 'not_connected' }) }));
     await recoveryPage.getByRole('button', { name: 'Reload screen' }).click();
     await recoveryPage.getByRole('heading', { name: 'DEMO-18793', exact: true }).waitFor();
     check('Delayed route shows loading state; simulated import failure shows recovery UI and reload succeeds');

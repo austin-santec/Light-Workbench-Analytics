@@ -1,19 +1,74 @@
 import { WAVELENGTH_OPTIONS } from '../mock/presentation';
-import { serialFromHash } from '../lib/routes';
+import { serialFromHash, unitRouteFromHash, liveUnitLink } from '../lib/routes';
 import { PreviewButton } from '../components/PreviewControl';
 import { SegmentedControl } from '../components/SegmentedControl';
-import { Fragment, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import { css } from '../lib/css';
 import { getUnitValues } from '../mock/unit';
 import type { UnitState } from '../types';
+import { searchUnits, UnitLookupClientError } from '../lib/api/unitLookup';
+import { LiveUnitView } from '../components/unit/LiveUnitView';
+
+type ConnectionState =
+  | { kind: 'checking' }
+  | { kind: 'live' }
+  | { kind: 'demo'; note: string };
+
+function setUnitSidebarMode(connected: boolean): void {
+  window.dispatchEvent(new CustomEvent('lwa-unit-context', { detail: { connected } }));
+}
 
 export default function Unit() {
  const lookup = useRef<HTMLInputElement>(null);
  const [serial, setSerial] = useState(() => serialFromHash());
+ const [route, setRoute] = useState(unitRouteFromHash);
+ const [connection, setConnection] = useState<ConnectionState>({ kind: 'checking' });
  const found = ['DEMO-18793', 'DEMO-SW-001'].includes(serial.trim().toUpperCase());
  const [state, setState] = useState<UnitState>({ wl: 'both' });
  const values = getUnitValues(state);
  const { accent, chartDescription, ilBars, ilGrid, warnY, failY, bandY, failH, cells, steps, extras, repl, attempts } = values;
+
+ const navigate = useCallback((unitId: number | null, runId: number | null, mode: 'push' | 'replace' = 'push') => {
+   const href = unitId === null ? '#/unit' : liveUnitLink(unitId, runId);
+   history[mode === 'replace' ? 'replaceState' : 'pushState'](null, '', href);
+   setRoute(unitRouteFromHash(href));
+ }, []);
+
+ useEffect(() => {
+   const sync = () => setRoute(unitRouteFromHash());
+   window.addEventListener('hashchange', sync);
+   window.addEventListener('popstate', sync);
+   return () => { window.removeEventListener('hashchange', sync); window.removeEventListener('popstate', sync); };
+ }, []);
+
+ useEffect(() => {
+   const controller = new AbortController();
+   const probe = route.serial?.trim() && route.serial.trim().length >= 2 ? route.serial.trim() : 'DEMO';
+   searchUnits(probe, controller.signal).then(result => {
+     if (result.data_source === 'test_database') {
+       setConnection({ kind: 'live' });
+       setUnitSidebarMode(true);
+     } else {
+       setConnection({ kind: 'demo', note: result.data_source === 'not_connected' ? 'Live reporting is off; showing the synthetic demo unit.' : 'Live lookup was not found; showing the synthetic demo unit.' });
+       setUnitSidebarMode(false);
+     }
+   }).catch(error => {
+     if (error instanceof DOMException && error.name === 'AbortError') return;
+     const note = error instanceof UnitLookupClientError && error.kind === 'database'
+       ? `Live database check failed (${error.code ?? 'reporting_error'}); showing the synthetic demo unit.`
+       : error instanceof UnitLookupClientError && error.kind === 'invalid_response'
+         ? 'The live response was not recognized; showing the synthetic demo unit.'
+         : 'Backend not reachable on 127.0.0.1:8000; showing the synthetic demo unit.';
+     setConnection({ kind: 'demo', note });
+     setUnitSidebarMode(false);
+   });
+   return () => controller.abort();
+   // Connection mode is established once per mounted Unit screen. Live searches have their own requests.
+   // eslint-disable-next-line react-hooks/exhaustive-deps
+ }, []);
+
+ if (route.malformed) return <section className="empty-state" role="status"><h1>Unit or run not found</h1><p>The URL contains a malformed unit or run ID.</p><a className="lnk empty-action" href="#/unit">Return to unit lookup</a></section>;
+ if (connection.kind === 'live') return <LiveUnitView route={route} onNavigate={navigate} />;
  return (<>
 
     <div style={css("display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:10px")}>
@@ -28,6 +83,7 @@ export default function Unit() {
     </div>
 
     <p id="unit-lookup-help" className="preview-note">Lookup searches the single fixture DEMO-18793 / DEMO-SW-001. Export and copy actions are disabled previews.</p>
+    <p className="demo-connection-note" role="status">{connection.kind === 'checking' ? 'Checking whether live reporting is connected; the synthetic demo remains available.' : connection.note}</p>
     {found ? <>
     <section style={css("background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px;display:flex;flex-direction:column;gap:16px")}>
       <div style={css("display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;gap:14px")}>

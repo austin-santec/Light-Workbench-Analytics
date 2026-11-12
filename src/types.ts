@@ -3,6 +3,7 @@ export type ScreenId = 'overview' | 'failures' | 'unit' | 'queries';
 export type TimeRange = 'today' | 'yesterday' | 'week' | 'month';
 export type ChannelCount = 24 | 36 | 48;
 export type Wavelength = 'both' | '1310' | '1550';
+export type LiveWavelength = 'both' | 'first' | 'second';
 export type QueryView = 'table' | 'chart';
 export type Model = 'OSX-150' | 'OSX-100';
 export type MeasurementMode = 'SM' | 'MM';

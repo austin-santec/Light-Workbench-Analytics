@@ -1,5 +1,26 @@
+import { useEffect, useState } from 'react';
 import type { ScreenId } from '../../types';
-import { NAV_ITEMS, unitLink } from '../../lib/routes';
+import { liveUnitLink, NAV_ITEMS, unitLink } from '../../lib/routes';
+
+const RECENT_UNITS_KEY = 'lwa-recent-live-units';
+const UNIT_CONTEXT_EVENT = 'lwa-unit-context';
+
+interface RecentLiveUnit { unitId: number; serial: string }
+
+function readRecentUnits(): RecentLiveUnit[] {
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem(RECENT_UNITS_KEY) ?? '[]');
+    if (!Array.isArray(value)) return [];
+    return value.filter((item): item is RecentLiveUnit => {
+      if (typeof item !== 'object' || item === null || Array.isArray(item)) return false;
+      const keys = Object.keys(item).sort();
+      const record = item as Record<string, unknown>;
+      return keys.length === 2 && keys[0] === 'serial' && keys[1] === 'unitId'
+        && Number.isSafeInteger(record.unitId) && (record.unitId as number) > 0
+        && typeof record.serial === 'string' && record.serial.length > 0;
+    }).slice(0, 5);
+  } catch { return []; }
+}
 
 function NavigationIcon({ screen }: { screen: ScreenId }) {
   return <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinejoin="round" strokeLinecap="round">
@@ -19,6 +40,17 @@ export function DemoStatus() {
 }
 
 export function Sidebar({ active }: { active?: ScreenId }) {
+  const [liveUnits, setLiveUnits] = useState(false);
+  const [recentUnits, setRecentUnits] = useState<RecentLiveUnit[]>(readRecentUnits);
+  useEffect(() => {
+    const update = (event: Event) => {
+      const detail = (event as CustomEvent<{ connected?: unknown }>).detail;
+      if (typeof detail?.connected === 'boolean') setLiveUnits(detail.connected);
+      setRecentUnits(readRecentUnits());
+    };
+    window.addEventListener(UNIT_CONTEXT_EVENT, update);
+    return () => window.removeEventListener(UNIT_CONTEXT_EVENT, update);
+  }, []);
   return <aside className="app-sidebar">
     <div className="app-brand">
       <svg width="32" height="32" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="#e60013" /><path d="M6 20.5h6.5L16 10l3.5 10.5H26" fill="none" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" /></svg>
@@ -38,10 +70,14 @@ export function Sidebar({ active }: { active?: ScreenId }) {
         ['Multimode · last 30 days', 'var(--o2)'],
       ].map(([label, color]) => <span key={label} className="saved-view"><span style={{ background: color }} aria-hidden="true" />{label}</span>)}
     </div>}
-    {active === 'unit' && <nav aria-label="Example units" className="example-units">
+    {active === 'unit' && (liveUnits ? <nav aria-label="Recently viewed live units" className="example-units">
+      <span className="navigation-heading">Recently viewed live units</span>
+      {recentUnits.length === 0 && <span className="recent-units-empty">Open a unit to add it here.</span>}
+      {recentUnits.map(item => <a key={item.unitId} href={liveUnitLink(item.unitId)} className="nav-a">{item.serial}<span style={{ background: 'var(--accent)' }} aria-hidden="true" /></a>)}
+    </nav> : <nav aria-label="Example units" className="example-units">
       <span className="navigation-heading">Example units</span>
       {['DEMO-18793', 'DEMO-18801', 'DEMO-18761'].map((serial, i) => <a key={serial} href={unitLink(serial)} className="nav-a">{serial}<span style={{ background: i === 1 ? 'var(--o2)' : 'var(--o3)' }} aria-hidden="true" /></a>)}
-    </nav>}
+    </nav>)}
     <DemoStatus />
   </aside>;
 }

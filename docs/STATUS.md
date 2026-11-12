@@ -1,3 +1,26 @@
+# Unit lookup UI Part B
+
+Updated November 12, 2026. Implemented the approved live Unit screen without changing the backend. The existing detailed synthetic unit remains the complete fallback when reporting is disabled, unreachable or returns a sanitized 503. Connected mode adds debounced/abortable serial search, URL-backed unit/run selection, strict clients for all four Unit lookup responses, live run selection, real-event timeline, API-classified insertion-loss chart, assignment channel map, extra-port evidence, replacements, attempts and saved analyses. Live panels are source-labeled and never borrow synthetic values. Saved no-recovery analyses are worded as historical evidence and explicitly not final manufacturing disposition.
+
+The live screen loads unit detail before independent run-channel and assignment-hardware requests, keeps failures local to dependent sections and caches completed hardware responses by assignment while the unit remains open. Hash reload/back/forward restore positive unit and run IDs; malformed IDs fail locally. The sidebar shows up to five recently viewed live unit IDs/serials from guarded `localStorage` only in connected mode and otherwise keeps the demo example list. Browser-to-database access was not added.
+
+Validation for this change:
+
+- `npm.cmd run typecheck` and `npm.cmd run lint` passed. The exact `npm.cmd run build` reached Vite after TypeScript passed, then hit the documented managed-filesystem/esbuild config-loader restriction; `npm.cmd run build -- --configLoader runner` passed with Vite 7.3.7 and 457 modules transformed.
+- `npm.cmd run test:browser` passed all 18 reported checks against a loopback Vite server started with the approved runner fallback and stopped afterward. Unit search was intercepted with the exact `not_connected` envelope, so the run used only the established synthetic fixture. It covered the fallback note, wavelength control, lookup empty/recovery behavior, direct serial route, keyboard navigation, both themes, 1440/768/390px layouts, horizontal overflow and normal-flow browser errors. Light/dark Unit captures at 1440px and 390px were visually inspected.
+- Plain `pytest -q` was unavailable on the PowerShell PATH. From `backend/`, `.venv\Scripts\python.exe -m pytest -q` passed all 218 offline tests. `git diff --check` passed, including separate whitespace checks for the two new untracked frontend files.
+
+Live check, November 12, 2026 (reviewer, real browser against the owner-run loopback backend and the authorized test database):
+
+- **Search and opening:** an exact serial search opened the unit directly. The URL updated to the unit and its newest run, and the sidebar listed recently viewed live units.
+- **Unit content:** header, run list, timeline, chart, channel map, extra ports, replacement history, attempts and saved analyses all rendered real data. The failing-channel count matched the per-channel attempts, and used recommendations were labeled as linked to a recorded replacement.
+- **Navigation:** clicking another run and browser back restored the selection. An unknown run, an unknown unit and a malformed ID each showed its own not-found state.
+- **Layout:** desktop and a 375px phone width, light and dark, with no page-level horizontal overflow.
+- **Fix:** the reviewer changed the live channel map from a fixed 12 columns to auto-fill, because desktop cells truncated values inside the half-width panel.
+- **Overview card:** still loads live alongside the Unit screen.
+
+Not verified live: stopped-backend behavior while the Unit screen is open, the 200-run, 5000-attempt and hardware caps, and a 503 rendering on this screen; the offline client guards cover these. Codex's original note: rendering, search, run switching, history navigation and stopped-backend behavior in live mode were not verified by its run. The final passing browser run intercepted every Unit search and did not use a reporting backend. In the first failed import-recovery run, the isolated page removed interception before one reload; no response or data was inspected, but whether an already-running loopback backend answered that probe is unknown. The test was corrected before the final run, and no loopback backend was listening when checked afterward. No real serial, operator, measurement, target or credential was added to code, tests, docs or screenshots. No backend file, dependency, AGENTS.md, source application, database, commit or remote was changed.
+
 # Unit lookup API Part A
 
 Updated November 11, 2026. Implemented the approved read-only backend for unit search, unit/run detail, run channel attempts and assignment hardware history. The four loopback endpoints are `GET /api/v1/units/search`, `/api/v1/units/{unit_id}`, `/api/v1/runs/{run_id}/channels` and `/api/v1/assignments/{assignment_id}/hardware`. Reporting-disabled behavior is the exact existing `not_connected` response; enabled failures remain sanitized 503 codes. Unknown IDs use the standard sanitized 404.
