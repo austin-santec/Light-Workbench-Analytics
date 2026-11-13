@@ -9,10 +9,15 @@ import { getOverviewValues } from '../mock/overview';
 import type { OverviewState, Purpose, TimeRange } from '../types';
 import { LiveRunActivityCard } from '../components/LiveRunActivityCard';
 import { loadChannelActivity, type ChannelActivityConnectedResponse, type ChannelActivityPeriodKey } from '../lib/api/channelActivity';
+import { loadFailureRate, type FailureRateConnectedResponse } from '../lib/api/failureRate';
 
 type ChannelActivityState =
   | { kind: 'loading' | 'demo' | 'error' }
   | { kind: 'connected'; data: ChannelActivityConnectedResponse };
+
+type FailureRateState =
+  | { kind: 'loading' | 'demo' | 'error' }
+  | { kind: 'connected'; data: FailureRateConnectedResponse };
 
 const PERIOD_FOR_RANGE: Record<TimeRange, ChannelActivityPeriodKey> = {
   today: 'today', yesterday: 'yesterday', week: 'this_week', month: 'last_30_days',
@@ -52,11 +57,56 @@ function liveThroughputChart(data: ChannelActivityConnectedResponse) {
   return { bars, barGrid };
 }
 
+function lineSegments(values: readonly (number | null)[], x: (index: number) => number, y: (value: number) => number) {
+  const segments: string[] = [];
+  let current = '';
+  values.forEach((value, index) => {
+    if (value === null) {
+      if (current) segments.push(current);
+      current = '';
+      return;
+    }
+    current += `${current ? ' L' : 'M'}${x(index).toFixed(1)} ${y(value).toFixed(1)}`;
+  });
+  if (current) segments.push(current);
+  return segments;
+}
+
+function liveFailureSparkline(data: FailureRateConnectedResponse) {
+  const values = data.daily.map(day => day.rate === null ? null : day.rate * 100);
+  const maximum = Math.max(1, ...values.filter((value): value is number => value !== null));
+  const x = (index: number) => values.length === 1 ? 80 : index * 160 / (values.length - 1);
+  const y = (value: number) => 31 - value / maximum * 28;
+  const points = values.flatMap((value, index) => value === null ? [] : [{ x: x(index), y: y(value), index }]);
+  return { segments: lineSegments(values, x, y), points };
+}
+
+function liveFailureRateChart(data: FailureRateConnectedResponse) {
+  const values = data.daily.map(day => day.rate === null ? null : day.rate * 100);
+  const maximumValue = Math.max(1, ...values.filter((value): value is number => value !== null));
+  const maximum = Math.max(1, Math.ceil(maximumValue));
+  const x0 = 52, x1 = 616, y0 = 20, y1 = 186;
+  const x = (index: number) => x0 + (x1 - x0) * index / (values.length - 1);
+  const y = (value: number) => y1 - (y1 - y0) * value / maximum;
+  const points = values.flatMap((value, index) => value === null ? [] : [{
+    x: x(index), y: y(value), value, date: data.daily[index].date,
+    partial: data.daily[index].partial, unknown: data.daily[index].unknown_criteria,
+  }]);
+  const labels = data.daily.flatMap((day, index) => (index % 5 === 0 || index === data.daily.length - 1) ? [{ x: x(index), date: day.date.slice(5) }] : []);
+  const grid = [0, 1, 2, 3, 4].map(part => {
+    const value = maximum * part / 4;
+    return { y: y(value), label: `${Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1)}%` };
+  });
+  return { segments: lineSegments(values, x, y), points, labels, grid };
+}
+
 export default function Overview() {
  const [state, setState] = useState<OverviewState>({ range: 'today', cfg: 0, purp: { production: true, engineering: false, training: false, calibration: false } });
  const [livePurposeCounts, setLivePurposeCounts] = useState<Record<Purpose, number> | null>(null);
  const [channelActivity, setChannelActivity] = useState<ChannelActivityState>({ kind: 'loading' });
  const [channelRefresh, setChannelRefresh] = useState(0);
+ const [failureRate, setFailureRate] = useState<FailureRateState>({ kind: 'loading' });
+ const [failureRefresh, setFailureRefresh] = useState(0);
  const updateLivePurposeCounts = useCallback((counts: Record<Purpose, number> | null) => setLivePurposeCounts(counts), []);
  const resetPurpose = () => setState(current => ({ ...current, purp: { ...PRODUCTION_ONLY } }));
  const values = getOverviewValues(state);
@@ -70,10 +120,21 @@ export default function Overview() {
      .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setChannelActivity({ kind: 'error' }); });
    return () => controller.abort();
  }, [channelRefresh, purposeKey, state.range, selectedPurposes]);
+ useEffect(() => {
+   const controller = new AbortController();
+   loadFailureRate(selectedPurposes, null, null, controller.signal)
+     .then(result => setFailureRate(result.data_source === 'test_database' ? { kind: 'connected', data: result } : { kind: 'demo' }))
+     .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setFailureRate({ kind: 'error' }); });
+   return () => controller.abort();
+ }, [failureRefresh, purposeKey, selectedPurposes]);
  const liveChannelData = channelActivity.kind === 'connected' ? channelActivity.data : null;
  const livePeriod = liveChannelData?.periods[PERIOD_FOR_RANGE[state.range]];
  const liveSpark = liveChannelData ? sparkline(liveChannelData.daily.map(day => day.channels_tested), 160, 34) : null;
  const liveChart = liveChannelData ? liveThroughputChart(liveChannelData) : null;
+ const liveFailureData = failureRate.kind === 'connected' ? failureRate.data : null;
+ const liveFailurePeriod = liveFailureData?.periods[PERIOD_FOR_RANGE[state.range]];
+ const liveFailureSpark = liveFailureData ? liveFailureSparkline(liveFailureData) : null;
+ const liveFailureChart = liveFailureData ? liveFailureRateChart(liveFailureData) : null;
  const includedPurposes = selectedPurposes.map(purpose => PURPOSE_LABELS[purpose]).join(' + ');
  return (<>
 
@@ -99,7 +160,7 @@ export default function Overview() {
       </div>
     </header>
 
-    <p id="overview-scope" className="preview-note">Summary range/purpose: counts, yields, outcomes and activity. Live channel activity follows the selected range and Run purpose. Model, Mode, Channels, Station and Operator are disabled previews and are not applied to it. Other historical charts and sparklines stay fixed.</p>
+    <p id="overview-scope" className="preview-note">Summary range/purpose: counts, yields, outcomes and activity. Live channel activity and first-observation failure rate follow the selected range and Run purpose. Model, Mode, Channels, Station and Operator are disabled previews and are not applied to them. Other historical charts and sparklines stay fixed.</p>
     <section aria-label="Summary filters and global previews" aria-describedby="overview-scope" style={css("display:flex;flex-wrap:wrap;align-items:center;gap:10px 12px;padding:10px;background:var(--panel);border:1px solid var(--line);border-radius:14px")}>
       <SegmentedControl label="Time range" options={TIME_RANGES} value={state.range} onChange={range => setState(current => ({ ...current, range }))} size="summary" describedBy="overview-scope" />
       <span aria-hidden="true" style={css("width:1px;height:28px;background:var(--line)")}></span>
@@ -152,6 +213,7 @@ export default function Overview() {
     <section aria-label="Key metrics" style={css("display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px")}>
       {kpis.map((demoKpi, index2) => {
         const isLiveChannel = index2 === 0 && livePeriod && liveSpark;
+        const isLiveFailure = index2 === 3 && liveFailurePeriod && liveFailureSpark;
         const k = isLiveChannel ? {
           ...demoKpi,
           value: livePeriod.channels_tested.toLocaleString('en-US'),
@@ -159,25 +221,36 @@ export default function Overview() {
           sub: `${livePeriod.attempts.toLocaleString('en-US')} ${livePeriod.attempts === 1 ? 'attempt' : 'attempts'} · ${livePeriod.units.toLocaleString('en-US')} ${livePeriod.units === 1 ? 'unit' : 'units'}`,
           line: liveSpark.line,
           area: liveSpark.area,
+        } : isLiveFailure ? {
+          ...demoKpi,
+          value: liveFailurePeriod.rate === null ? '—' : `${(liveFailurePeriod.rate * 100).toFixed(1)}%`,
+          delta: '',
+          sub: `${liveFailurePeriod.failed.toLocaleString('en-US')} of ${liveFailurePeriod.observed.toLocaleString('en-US')} first channel observations · strict > run limits`,
+          line: '',
+          area: '',
         } : demoKpi;
         const lastPoint = isLiveChannel ? k.line.split(' ').at(-1)?.split(',') : null;
         return <Fragment key={index2}>
         <div style={css("background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 16px 12px;display:flex;flex-direction:column;gap:6px;min-width:0")}>
           <span style={css("display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12.5px;color:var(--muted);font-weight:500")}>
             <span>{k.label}</span>
-            {index2 === 0 && <span style={css(isLiveChannel
+            {(index2 === 0 || index2 === 3) && <span style={css((isLiveChannel || isLiveFailure)
               ? "font-size:10px;font-weight:650;letter-spacing:.04em;text-transform:uppercase;padding:3px 7px;border-radius:999px;background:color-mix(in srgb,var(--accent) 10%,var(--panel));color:var(--accent-ink)"
-              : "font-size:10px;font-weight:650;letter-spacing:.04em;text-transform:uppercase;padding:3px 7px;border-radius:999px;background:var(--panel2);color:var(--muted)")}>{isLiveChannel ? 'Live · test database' : 'Demo'}</span>}
+              : "font-size:10px;font-weight:650;letter-spacing:.04em;text-transform:uppercase;padding:3px 7px;border-radius:999px;background:var(--panel2);color:var(--muted)")}>{isLiveChannel || isLiveFailure ? 'Live · test database' : 'Demo'}</span>}
           </span>
           {isLiveChannel && <span style={css("font-size:10.5px;color:var(--muted)")}>Channels with test activity · {includedPurposes}</span>}
+          {isLiveFailure && <span style={css("font-size:10.5px;color:var(--muted)")}>First observation per run-channel · {includedPurposes}</span>}
           <div style={css("display:flex;align-items:baseline;gap:8px;flex-wrap:wrap")}>
             <span style={css("font-size:30px;line-height:1.05;font-weight:650;letter-spacing:-0.025em;font-variant-numeric:tabular-nums;color:" + String(k.valueColor))}>{k.value}</span>
-            {!isLiveChannel && <span style={css("font-size:12px;font-weight:600;padding:2px 7px;border-radius:6px;background:" + String(k.dBg) + ";color:" + String(k.dFg) + ";white-space:nowrap")}>{k.delta}</span>}
+            {!isLiveChannel && !isLiveFailure && <span style={css("font-size:12px;font-weight:600;padding:2px 7px;border-radius:6px;background:" + String(k.dBg) + ";color:" + String(k.dFg) + ";white-space:nowrap")}>{k.delta}</span>}
           </div>
           <span style={css("font-size:12px;color:var(--muted);min-height:17px")}>{k.sub}</span>
+          {isLiveFailure && liveFailurePeriod.unknown_criteria > 0 && <span style={css("font-size:11px;color:var(--warn-fg)")}>{liveFailurePeriod.unknown_criteria.toLocaleString('en-US')} first observations excluded: unknown criteria</span>}
           <svg viewBox="0 0 160 34" preserveAspectRatio="none" aria-hidden="true" style={css("width:100%;height:30px;display:block;margin-top:2px")}>
-            <path d={k.area} style={css("fill:" + String(accent) + ";fill-opacity:0.08;stroke:none")}></path>
-            <polyline points={k.line} vectorEffect="non-scaling-stroke" style={css("fill:none;stroke:" + String(accent) + ";stroke-width:1.6;stroke-linejoin:round;stroke-linecap:round")}></polyline>
+            {!isLiveFailure && <path d={k.area} style={css("fill:" + String(accent) + ";fill-opacity:0.08;stroke:none")}></path>}
+            {!isLiveFailure && <polyline points={k.line} vectorEffect="non-scaling-stroke" style={css("fill:none;stroke:" + String(accent) + ";stroke-width:1.6;stroke-linejoin:round;stroke-linecap:round")}></polyline>}
+            {isLiveFailure && liveFailureSpark.segments.map((path, index) => <path key={index} d={path} vectorEffect="non-scaling-stroke" style={css("fill:none;stroke:" + String(accent) + ";stroke-width:1.6;stroke-linejoin:round;stroke-linecap:round")} />)}
+            {isLiveFailure && liveFailureSpark.points.map(point => <circle key={point.index} cx={point.x} cy={point.y} r="1.4" vectorEffect="non-scaling-stroke" style={css("fill:var(--panel);stroke:" + String(accent) + ";stroke-width:1.2")} />)}
             {isLiveChannel && lastPoint && <circle cx={lastPoint[0]} cy={lastPoint[1]} r="3" vectorEffect="non-scaling-stroke" style={css("fill:var(--panel);stroke:" + String(accent) + ";stroke-width:1.5;stroke-dasharray:2 1")} />}
           </svg>
         </div>
@@ -227,14 +300,18 @@ export default function Overview() {
         <div style={css("display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;gap:10px")}>
           <div style={css("display:flex;flex-direction:column;gap:3px")}>
             <h2 style={css("margin:0;font-size:16px;font-weight:600")}>Daily channel failure rate</h2>
-            <span style={css("font-size:12.5px;color:var(--muted)")}>First-pass channels over the fail limit at either wavelength, last 20 workdays.</span>
+            <span style={css("font-size:12.5px;color:var(--muted)")}>{liveFailureData ? 'First observation per run-channel; retest runs have their own first observations. Thirty complete Pacific dates plus today, partial.' : 'First-pass channels over the fail limit at either wavelength, last 20 workdays.'}</span>
+            <span style={css(liveFailureData
+              ? "align-self:flex-start;font-size:10px;font-weight:650;letter-spacing:.04em;text-transform:uppercase;padding:3px 7px;border-radius:999px;background:color-mix(in srgb,var(--accent) 10%,var(--panel));color:var(--accent-ink)"
+              : "align-self:flex-start;font-size:10px;font-weight:650;letter-spacing:.04em;text-transform:uppercase;padding:3px 7px;border-radius:999px;background:var(--panel2);color:var(--muted)")}>{liveFailureData ? `Live · test database · ${includedPurposes}` : 'Demo'}</span>
           </div>
-          <div style={css("display:flex;gap:14px;font-size:12px;color:var(--muted);align-items:center")}>
+          <div style={css("display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px 14px;font-size:12px;color:var(--muted);align-items:center")}>
             <span style={css("display:inline-flex;align-items:center;gap:6px")}><span style={css("width:14px;height:2.5px;background:" + String(accent) + ";border-radius:2px")}></span>Daily</span>
-            <span style={css("display:inline-flex;align-items:center;gap:6px")}><span style={css("width:14px;border-top:1.5px dashed var(--muted)")}></span>30-day avg 3.9%</span>
+            <span style={css("display:inline-flex;align-items:center;gap:6px")}><span style={css("width:14px;border-top:1.5px dashed var(--muted)")}></span>{liveFailureData ? 'Strict > run limits' : '30-day avg 3.9%'}</span>
+            <button type="button" onClick={() => setFailureRefresh(value => value + 1)} style={css("min-height:32px;padding:0 9px;border-radius:7px;border:1px solid var(--line);background:var(--panel);color:var(--ink2);font-size:11.5px;font-weight:600")}>Refresh failure rate</button>
           </div>
         </div>
-        <svg viewBox="0 0 640 220" role="img" aria-label="Line chart of daily channel failure rate over 20 workdays, ranging 3.3 to 4.5 percent, 4.1 percent today" style={css("width:100%;height:auto;display:block")}>
+        {!liveFailureData && <svg viewBox="0 0 640 220" role="img" aria-label="Line chart of daily channel failure rate over 20 workdays, ranging 3.3 to 4.5 percent, 4.1 percent today" style={css("width:100%;height:auto;display:block")}>
           {lineGrid.map((g, index5) => <Fragment key={index5}>
             <g >
               <line x1="44" x2="624" y1={g.y} y2={g.y} style={css("stroke:var(--grid);stroke-width:1")}></line>
@@ -251,7 +328,19 @@ export default function Overview() {
             </g>
           </Fragment>)}
           <text x={lastX} y={lastY} style={css("font-size:12px;font-weight:650;fill:var(--ink);text-anchor:end")}>4.1% today</text>
-        </svg>
+        </svg>}
+        {liveFailureData && liveFailureChart && <svg viewBox="0 0 640 220" role="img" aria-label={`Live daily first-observation run-channel failure rate using strict greater-than each run's saved limit snapshot, Pacific dates ${liveFailureData.daily[0].date} through ${liveFailureData.daily.at(-1)?.date}; null-rate dates are gaps and today is partial`} style={css("width:100%;height:auto;display:block")}>
+          <desc>Q02 first-observation failure fraction by Pacific local date. Retest runs have their own first observations. Equality at a saved run limit passes; only strict greater-than fails.</desc>
+          {liveFailureChart.grid.map((grid, index) => <g key={index}>
+            <line x1="44" x2="624" y1={grid.y} y2={grid.y} style={css("stroke:var(--grid);stroke-width:1")} />
+            <text x="36" y={grid.y + 4} style={css("font-size:11px;fill:var(--muted);text-anchor:end;font-family:'Geist Mono',monospace")}>{grid.label}</text>
+          </g>)}
+          {liveFailureChart.segments.map((path, index) => <path key={index} d={path} style={css("fill:none;stroke:" + String(accent) + ";stroke-width:2.2;stroke-linejoin:round;stroke-linecap:round")} />)}
+          {liveFailureChart.points.map(point => <circle key={point.date} cx={point.x} cy={point.y} r={point.partial ? 5 : 3} style={css("fill:var(--panel);stroke:" + String(accent) + ";stroke-width:1.8" + (point.partial ? ";stroke-dasharray:2 1" : ''))}>
+            <title>{`${point.date}: ${point.value.toFixed(1)}% · ${point.unknown} unknown criteria${point.partial ? ' · partial' : ''}`}</title>
+          </circle>)}
+          {liveFailureChart.labels.map(label => <text key={label.date} x={label.x} y="208" style={css("font-size:11px;fill:var(--muted);text-anchor:middle")}>{label.date}</text>)}
+        </svg>}
       </div>
 
       <div style={css("flex:1 1 480px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:10px")}>

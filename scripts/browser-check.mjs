@@ -13,6 +13,7 @@ let runActivityMode = 'not_connected';
 const runActivityRequests = [];
 const configurationTimingRequests = [];
 const channelActivityRequests = [];
+const failureRateRequests = [];
 const replacementActivityRequests = [];
 const unitSearchRequests = [];
 const purposeTotals = { production: 2, engineering: 3, training: 1, calibration: 4 };
@@ -23,6 +24,12 @@ const channelPeriodTotals = {
   engineering: { today: 120, yesterday: 216, this_week: 552, last_30_days: 3552 },
   training: { today: 0, yesterday: 48, this_week: 144, last_30_days: 648 },
   calibration: { today: 0, yesterday: 0, this_week: 48, last_30_days: 288 },
+};
+const failurePeriodTotals = {
+  production: { today: [5, 100, 2], yesterday: [10, 250, 0], this_week: [20, 400, 3], last_30_days: [48, 1200, 7] },
+  engineering: { today: [2, 20, 1], yesterday: [3, 30, 0], this_week: [5, 60, 1], last_30_days: [12, 180, 2] },
+  training: { today: [0, 0, 0], yesterday: [1, 10, 1], this_week: [1, 20, 1], last_30_days: [4, 70, 2] },
+  calibration: { today: [0, 0, 0], yesterday: [0, 0, 0], this_week: [0, 5, 0], last_30_days: [1, 30, 0] },
 };
 const sampleState = n => n === 0 ? 'no_data' : n < 10 ? 'small_sample' : 'ok';
 const durationStatistics = (n, multiplier) => ({
@@ -134,6 +141,39 @@ const channelActivityFixture = url => {
     incomplete: false,
   };
 };
+const failureRateFixture = url => {
+  const purposes = url.searchParams.getAll('purpose');
+  const selected = purposes.length ? purposes : ['production'];
+  const total = key => selected.reduce((sum, purpose) => sum.map((value, index) => value + failurePeriodTotals[purpose][key][index]), [0, 0, 0]);
+  const counts = ([failed, observed, unknown]) => ({ failed, observed, rate: observed ? failed / observed : null, unknown_criteria: unknown });
+  const daily = Array.from({ length: 31 }, (_, index) => {
+    const date = new Date(Date.UTC(2026, 9, 14 + index));
+    const label = date.toISOString().slice(0, 10);
+    const noData = index === 5 || index === 12;
+    const observed = noData ? 0 : selected.length * (80 + index);
+    const failed = noData ? 0 : selected.reduce((sum, _purpose, purposeIndex) => sum + ((index + purposeIndex) % 7), 0);
+    return {
+      date: label,
+      start_utc: `${label}T07:00:00Z`,
+      end_utc: index === 30 ? '2026-11-13T20:00:00Z' : `${new Date(date.getTime() + 86400000).toISOString().slice(0, 10)}T07:00:00Z`,
+      partial: index === 30,
+      ...counts([failed, observed, noData ? 1 : index % 9 === 0 ? 2 : 0]),
+    };
+  });
+  const period = (key, start, end, partial) => ({ start_utc: start, end_utc: end, partial, ...counts(total(key)) });
+  return {
+    data_source: 'test_database', tls: 'encrypted_unverified', extracted_at_utc: '2026-11-13T20:00:00Z', timezone: 'America/Los_Angeles',
+    filters: { purpose: selected, wavelength_mode: null, switch_model: null },
+    classification_rule: 'strict >, run limit snapshot',
+    periods: {
+      today: period('today', '2026-11-13T08:00:00Z', '2026-11-13T20:00:00Z', true),
+      yesterday: period('yesterday', '2026-11-12T08:00:00Z', '2026-11-13T08:00:00Z', false),
+      this_week: period('this_week', '2026-11-09T08:00:00Z', '2026-11-13T20:00:00Z', true),
+      last_30_days: period('last_30_days', '2026-10-14T07:00:00Z', '2026-11-13T08:00:00Z', false),
+    },
+    daily, incomplete: false,
+  };
+};
 const replacementActivityFixture = url => {
   const counts = (events, channels, units, linked = 0, notCurrent = 0) => ({
     events, channels_replaced: channels, units,
@@ -197,6 +237,15 @@ await page.route('**/api/v1/reporting/channel-activity?*', async route => {
     body: JSON.stringify(runActivityMode === 'not_connected' ? { data_source: 'not_connected' } : channelActivityFixture(url)),
   });
 });
+await page.route('**/api/v1/reporting/failure-rate?*', async route => {
+  const url = new URL(route.request().url());
+  failureRateRequests.push(url);
+  await route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify(runActivityMode === 'not_connected' ? { data_source: 'not_connected' } : failureRateFixture(url)),
+  });
+});
 await page.route('**/api/v1/reporting/replacement-activity*', async route => {
   const url = new URL(route.request().url());
   replacementActivityRequests.push(url);
@@ -215,7 +264,7 @@ page.on('console', message => { if (message.type() === 'error') errors.push(mess
 page.on('response', response => { if (response.status() >= 400) errors.push(`HTTP ${response.status()}: ${response.url()}`); });
 page.on('requestfailed', request => {
   const pathname = new URL(request.url()).pathname;
-  const expectedUnmountCancellation = ['/api/v1/reporting/run-activity', '/api/v1/reporting/test-time-by-configuration', '/api/v1/reporting/channel-activity', '/api/v1/reporting/replacement-activity', '/api/v1/units/search'].includes(pathname) && request.failure()?.errorText === 'net::ERR_ABORTED';
+  const expectedUnmountCancellation = ['/api/v1/reporting/run-activity', '/api/v1/reporting/test-time-by-configuration', '/api/v1/reporting/channel-activity', '/api/v1/reporting/failure-rate', '/api/v1/reporting/replacement-activity', '/api/v1/units/search'].includes(pathname) && request.failure()?.errorText === 'net::ERR_ABORTED';
   if (!expectedUnmountCancellation) errors.push(`Request failed: ${request.url()} ${request.failure()?.errorText}`);
 });
 const check = label => { checks.push(label); console.log(`PASS ${label}`); };
@@ -255,8 +304,11 @@ try {
   assert.equal(startedBefore.toISOString().slice(11), '00:00:00.000Z');
   assert.equal(firstLiveRequest.searchParams.get('purpose'), 'production');
   assert.equal(channelActivityRequests.at(-1).searchParams.getAll('purpose').join(','), 'production');
-  await page.getByRole('region', { name: 'Key metrics' }).getByText('Demo', { exact: true }).waitFor();
-  check('Live card not-connected state and 30 complete UTC day request window');
+  assert.equal(failureRateRequests.at(-1).searchParams.getAll('purpose').join(','), 'production');
+  await page.getByRole('region', { name: 'Key metrics' }).getByText('Demo', { exact: true }).first().waitFor();
+  assert.equal(await page.getByRole('region', { name: 'Key metrics' }).getByText('Demo', { exact: true }).count(), 2);
+  await page.getByText('First-pass channels over the fail limit at either wavelength, last 20 workdays.').waitFor();
+  check('Live card, channel activity, and failure rate keep the demo path when not connected');
 
   await visit('/failures');
   const replacementPanel = page.getByRole('region', { name: 'Replacement activity' });
@@ -270,6 +322,7 @@ try {
   await downPage.route('**/api/v1/reporting/run-activity?*', route => route.abort('connectionrefused'));
   await downPage.route('**/api/v1/reporting/test-time-by-configuration?*', route => route.abort('connectionrefused'));
   await downPage.route('**/api/v1/reporting/channel-activity?*', route => route.abort('connectionrefused'));
+  await downPage.route('**/api/v1/reporting/failure-rate?*', route => route.abort('connectionrefused'));
   await downPage.route('**/api/v1/reporting/replacement-activity*', route => route.abort('connectionrefused'));
   try {
     await downPage.goto(`${base}/#/`, { waitUntil: 'domcontentloaded' });
@@ -294,6 +347,7 @@ try {
   runActivityMode = 'connected';
   await liveCard.getByRole('button', { name: 'Refresh live data' }).click();
   await page.getByRole('button', { name: 'Refresh channel activity' }).click();
+  await page.getByRole('button', { name: 'Refresh failure rate' }).click();
   await liveCard.getByText('Raw run activity, not units').waitFor();
   await assertText(liveCard, 'Encrypted, certificate not verified');
   await liveCard.getByText('Runs started').locator('..').getByText('2', { exact: true }).waitFor();
@@ -305,11 +359,19 @@ try {
   assert.equal(configurationTimingRequests.at(-1).searchParams.get('purpose'), 'production');
   await assertText(page.getByRole('button', { name: /^Engineering / }), '3');
   assert.ok((await page.getByRole('button', { name: /^Engineering / }).innerText()).includes('3'));
-  await page.getByRole('region', { name: 'Key metrics' }).getByText('Live · test database', { exact: true }).waitFor();
+  await page.getByRole('region', { name: 'Key metrics' }).getByText('Live · test database', { exact: true }).first().waitFor();
   await assertText(page.getByRole('region', { name: 'Key metrics' }), '1,018 attempts · 21 units');
+  await assertText(page.getByRole('region', { name: 'Key metrics' }), '5 of 100 first channel observations · strict > run limits');
+  await assertText(page.getByRole('region', { name: 'Key metrics' }), '2 first observations excluded: unknown criteria');
+  assert.equal(await page.getByRole('region', { name: 'Key metrics' }).getByText('Live · test database', { exact: true }).count(), 2);
   assert.equal(await page.getByRole('img', { name: /^Live bar chart of channels/ }).locator('rect').count(), 31);
+  const liveFailureChart = page.getByRole('img', { name: /^Live daily first-observation run-channel failure rate/ });
+  await liveFailureChart.waitFor();
+  assert.equal(await liveFailureChart.locator('path').count(), 3);
+  await assertText(page.getByText('First observation per run-channel; retest runs have their own first observations.'), 'Pacific dates');
+  assert.equal(failureRateRequests.at(-1).searchParams.getAll('purpose').join(','), 'production');
   await assertText(page.getByText('Thirty complete local dates plus today in Pacific time; today is partial.'), 'Pacific time');
-  check('Live card connected counts, configuration timing, samples, TLS, and live purpose-chip counts');
+  check('Synthetic connected channel activity and Q02 tile/chart, null gaps, criteria note, labels, and refresh');
 
   await visit('/failures');
   await replacementPanel.getByText('Channels replaced').waitFor();
@@ -332,13 +394,16 @@ try {
   await assertFocus(page.getByRole('link', { name: 'Skip to content' }));
   await page.keyboard.press('Enter');
   await assertFocus(page.locator('main'));
-  const fixedTrend = await page.getByRole('img', { name: /^Line chart of daily/ }).locator('path').last().getAttribute('d');
+  const productionFailureTrend = await page.getByRole('img', { name: /^Live daily first-observation/ }).locator('path').last().getAttribute('d');
 
   await page.getByRole('button', { name: 'This week', exact: true }).click();
   await assertText(page.getByRole('region', { name: 'Key metrics' }), '8,184');
   await page.getByRole('button', { name: /^Engineering / }).click();
   await assertText(page.getByRole('heading', { level: 1 }), 'Production + engineering');
   await assertText(page.getByRole('region', { name: 'Key metrics' }), '8,736');
+  await page.getByText('Live · test database · Production + Engineering', { exact: true }).first().waitFor();
+  assert.equal(failureRateRequests.at(-1).searchParams.getAll('purpose').join(','), 'production,engineering');
+  assert.notEqual(await page.getByRole('img', { name: /^Live daily first-observation/ }).locator('path').last().getAttribute('d'), productionFailureTrend);
   await liveCard.getByText('Runs started').locator('..').getByText('5', { exact: true }).waitFor();
   await liveCard.getByText('Select one purpose or all to see timing').waitFor();
   await liveCard.getByText('Select one purpose or all to see times by configuration').waitFor();
@@ -358,14 +423,14 @@ try {
   await page.getByRole('button', { name: /OSX-150 SM 36 ch/ }).click();
   assert.ok((await page.getByRole('img', { name: /^Histogram of/ }).getAttribute('aria-label')).includes('36 channels'));
   check('Configuration selection updates histogram');
-  assert.equal(await page.getByRole('img', { name: /^Line chart of daily/ }).locator('path').last().getAttribute('d'), fixedTrend);
+  assert.equal(await page.getByRole('img', { name: /^Live daily first-observation/ }).locator('path').last().getAttribute('d'), productionFailureTrend);
   await page.getByRole('button', { name: 'Yesterday', exact: true }).focus();
   await page.keyboard.press('Space');
   await assertText(page.getByRole('region', { name: 'Key metrics' }), '2,520');
   await page.keyboard.press('Tab');
   await page.keyboard.press('Enter');
   await assertText(page.getByRole('region', { name: 'Key metrics' }), '8,184');
-  check('Skip link, keyboard range selection, visible focus, and fixed historical trend scope');
+  check('Skip link, keyboard range selection, visible focus, and restored production Q02 trend');
 
   const table = page.getByRole('table', { name: 'Recently finished units' });
   await page.getByLabel('Activity model').selectOption('OSX-100');

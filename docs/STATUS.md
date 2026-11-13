@@ -1,3 +1,23 @@
+# Live Q02 channel failure rate
+
+Updated November 13, 2026. Implemented the approved Q02 slice without connecting to SQL Server. `GET /api/v1/reporting/failure-rate` returns first-observation run-channel N, D, nullable N/D and unknown criteria for the shared Pacific periods and 31-day series. It applies population A, ranks the first accepted attempt across each run-channel's full history before filtering its write time into P, treats a retest run as a new run-channel sequence, and uses the owner-approved strict `>` rule against each run's saved limit snapshot. This is not first-pass unit yield, unit failure or final disposition.
+
+Two fixed per-window/per-run aggregate statements use deterministic bounded candidate runs and SQL's guarded decimal limit parse. A separate TOP 5001 criteria read detects the 5000-run cap. Python reuses `parse_limit_snapshot` and admits a run's SQL counts only when the strict validated Python fail limit equals SQL's parsed limit; invalid snapshots and SQL/Python mismatches are excluded from N/D and reported as unknown criteria. No new schema object, column gate, grant or write is introduced.
+
+The Overview's existing Channel failure rate tile and daily chart now switch together to Q02 only when connected. They show the N/D basis, strict rule, included purposes, partial today and unknown criteria; null-rate days are SVG gaps. Manual refresh and filter changes abort superseded requests. Reporting-off, unreachable, invalid and sanitized-failure paths retain the complete labeled demo. Browser checks use synthetic DEMO responses only.
+
+Offline verification passed all 256 backend tests, Ruff check/format, `pip check`, frontend typecheck/lint, and the runner-fallback Vite build (461 modules). The exact default build reached Vite but hit the documented managed-filesystem config-loader restriction; `npm.cmd run build -- --configLoader runner` passed. The 22-check real-browser suite passed against an owned loopback Vite server with no console/page/request errors. It covered exact not-connected demo behavior, backend-down fallback, synthetic connected Q02 values, null gaps, unknown criteria, strict labels, mixed purposes, refresh/abort behavior, keyboard interactions, both themes and 1440/768/390px layouts. Light 1440px and dark 390px connected Overview captures were visually inspected. `git diff --check` and the UTF-8 mojibake scan passed.
+
+No database, real backend data, credential, target detail, commit or push was used. Live API values, Unit lookup reconciliation, and live query execution/plan/cost remain unverified.
+
+Reviewer live check, November 13, 2026, against the authorized test database:
+
+- **API:** the endpoint executed successfully, including the candidate-run grouping on the snapshot column, for production, engineering and both purposes. No unknown criteria or SQL/Python limit mismatches occurred.
+- **Reconciliation with Unit lookup:** daily N/D matched the per-run current classifications for runs without retests: one production run gave 7 of 49, and one engineering run gave 1 of 4. A day combining a full run with a short same-day retest run counted each run's first observations separately (48 + 2 = 50 observed, 3 failed), as Q02 defines.
+- **Browser:** the Overview tile matched the API for all four ranges, and the daily chart showed null days as gaps.
+
+Not verified live: query plan/cost at production volume, and 503 rendering against the real backend (covered by synthetic browser checks).
+
 # Live replacement activity
 
 Updated November 13, 2026. Implemented the approved next Milestone 4B slice without connecting to SQL Server: `GET /api/v1/reporting/replacement-activity` returns R01 recorded events, R02 exact distinct assignment/channels, distinct units and R04 events/unit for all plus five attribution buckets over the shared Pacific periods and 31-day series. Null related runs remain unattributed; later voided, excluded or superseded related runs remain counted and are flagged. Administrative exclusions remain zero because none are authoritative. The optional exact model filter follows the event's historical assignment.

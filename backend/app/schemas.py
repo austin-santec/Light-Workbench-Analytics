@@ -254,6 +254,38 @@ class ChannelActivityConnectedResponse(BaseModel):
     incomplete: bool
 
 
+class FailureRateCountsResponse(BaseModel):
+    failed: int = Field(ge=0)
+    observed: int = Field(ge=0)
+    rate: float | None = Field(default=None, ge=0, le=1)
+    unknown_criteria: int = Field(ge=0)
+
+
+class FailureRatePeriodResponse(FailureRateCountsResponse):
+    start_utc: AwareDatetime
+    end_utc: AwareDatetime
+    partial: bool
+
+
+class FailureRateDayResponse(FailureRatePeriodResponse):
+    date: date
+
+
+class FailureRateConnectedResponse(BaseModel):
+    data_source: Literal["test_database"] = "test_database"
+    tls: Literal["verified", "encrypted_unverified"]
+    extracted_at_utc: AwareDatetime
+    timezone: Literal["America/Los_Angeles"] = "America/Los_Angeles"
+    filters: ChannelActivityFilters
+    classification_rule: Literal["strict >, run limit snapshot"] = "strict >, run limit snapshot"
+    periods: dict[
+        Literal["today", "yesterday", "this_week", "last_30_days"],
+        FailureRatePeriodResponse,
+    ]
+    daily: list[FailureRateDayResponse]
+    incomplete: bool
+
+
 class ReplacementActivityFilters(BaseModel):
     switch_model: str | None
 

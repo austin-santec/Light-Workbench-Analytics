@@ -185,6 +185,23 @@ class ChannelActivityMetrics(BaseModel):
     incomplete: bool = False
 
 
+class FailureRateCounts(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    failed: int = Field(ge=0)
+    observed: int = Field(ge=0)
+    rate: float | None = Field(default=None, ge=0, le=1)
+    unknown_criteria: int = Field(ge=0)
+
+
+class FailureRateMetrics(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    periods: dict[str, FailureRateCounts]
+    daily: tuple[FailureRateCounts, ...]
+    incomplete: bool
+
+
 class ReplacementActivityQuery(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
 

@@ -404,7 +404,7 @@ Stable ID: `quality.first_observation_run_channel_failure_fraction`.
 - **Question / formula / N-D:** What share of first recorded channel observations fail? D = first accepted logical pair per `(run_id,logical_channel)` whose first-write time is in P and parent satisfies A; N = those pairs failing either saved-limit comparison.
 - **Time / population / keys / source:** First-ever write for the run/channel, then period filter; S01/S05/S08, D04. Prior-history lookup required; do not select first row only inside P.
 - **Missing / limitations:** Exclude/identify unknown criteria/history; zero D→null. A new retest run has its own first observation, so this is explicitly not first-pass unit yield. Heatmaps can split N/D by logical position and G.
-- **Drill / verification:** First measurement ID and criteria; E01, E07, E11/E15. **Status: Proposed; owner intent aligned, technical verification pending; feasibility F2.**
+- **Drill / verification:** First measurement ID and criteria; E01, E07, E11/E15. **Status: Implemented for the authorized test-database diagnostic with strict D04; offline verified, live reconciliation and query-cost verification pending; feasibility F2.**
 
 ### Q03 — First-pass unit yield
 

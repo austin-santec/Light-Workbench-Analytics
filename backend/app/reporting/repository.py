@@ -1,5 +1,6 @@
 import math
 from datetime import UTC, datetime
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Protocol
 
 from app.reporting.adapter import ReportingError, SqlServerAdapter
@@ -11,6 +12,8 @@ from app.reporting.models import (
     CompletionStatus,
     ConfigurationTestTime,
     DurationStatistics,
+    FailureRateCounts,
+    FailureRateMetrics,
     ReplacementActivityCounts,
     ReplacementActivityMetrics,
     ReplacementActivityQuery,
@@ -37,12 +40,14 @@ from app.reporting.unit_lookup import (
     get_assignment_hardware,
     get_run_channels,
     get_unit_detail,
+    parse_limit_snapshot,
     search_units,
 )
 from app.schemas import RunPurpose
 
 RUN_ACTIVITY_ROW_CAP = 5000
 TEST_TIME_BY_CONFIGURATION_ROW_CAP = 5000
+FAILURE_RATE_RUN_CAP = 5000
 
 
 def _channel_activity_sql(window_count: int) -> str:
@@ -156,6 +161,98 @@ ORDER BY w.window_ordinal
 
 CHANNEL_ACTIVITY_PERIOD_SQL = _channel_activity_sql(len(PERIOD_KEYS))
 CHANNEL_ACTIVITY_DAILY_SQL = _channel_activity_sql(31)
+
+
+def _failure_rate_candidate_runs_sql(run_cap: int) -> str:
+    return f"""
+candidate_runs AS (
+    SELECT TOP ({run_cap}) r.run_id, r.wavelength_mode,
+        r.limit_snapshot_json, r.front_panel_channel_count
+    FROM dbo.IL_MEASUREMENTS AS seed
+    JOIN dbo.IL_RUNS AS r ON r.run_id = seed.run_id
+    JOIN dbo.UNIT_SWITCH_ASSIGNMENTS AS a ON a.assignment_id = r.assignment_id
+    JOIN dbo.SWITCHES AS s ON s.switch_id = a.switch_id
+    WHERE seed.written_at_utc >= ? AND seed.written_at_utc < ?
+        AND seed.measurement_role = 'logical_channel'
+        AND r.analysis_status NOT IN ('excluded', 'superseded')
+        AND r.superseded_by_run_id IS NULL
+        AND r.run_purpose IN (?, ?, ?, ?)
+        AND r.front_panel_channel_count IS NOT NULL
+        AND r.front_panel_channel_count > 0
+        AND (? IS NULL OR r.wavelength_mode = ?)
+        AND (? IS NULL OR s.switch_model = ?)
+    GROUP BY r.run_id, r.wavelength_mode,
+        r.limit_snapshot_json, r.front_panel_channel_count
+    ORDER BY r.run_id
+)
+"""
+
+
+def _failure_rate_sql(window_count: int) -> str:
+    window_values = ", ".join("(?, ?, ?)" for _ in range(window_count))
+    candidate_runs = _failure_rate_candidate_runs_sql(FAILURE_RATE_RUN_CAP)
+    return f"""
+WITH window_bounds(window_ordinal, start_utc, end_utc) AS (
+    SELECT window_ordinal, start_utc, end_utc
+    FROM (VALUES {window_values}) AS supplied(window_ordinal, start_utc, end_utc)
+),
+{candidate_runs.strip()},
+ranked_observations AS (
+    SELECT m.run_id, m.logical_channel, m.measurement_id,
+        m.wavelength_1_il_db, m.wavelength_2_il_db, m.written_at_utc,
+        ROW_NUMBER() OVER (
+            PARTITION BY m.run_id, m.logical_channel
+            ORDER BY m.written_at_utc, m.measurement_id
+        ) AS observation_rank
+    FROM candidate_runs AS r
+    JOIN dbo.IL_MEASUREMENTS AS m ON m.run_id = r.run_id
+    WHERE m.measurement_role = 'logical_channel'
+        AND m.logical_channel >= 1
+        AND m.logical_channel <= r.front_panel_channel_count
+),
+first_observations AS (
+    SELECT run_id, logical_channel, measurement_id,
+        wavelength_1_il_db, wavelength_2_il_db, written_at_utc
+    FROM ranked_observations
+    WHERE observation_rank = 1
+),
+parsed_runs AS (
+    SELECT r.run_id,
+        TRY_CONVERT(DECIMAL(9,4), JSON_VALUE(
+            CASE WHEN ISJSON(r.limit_snapshot_json) = 1
+                THEN r.limit_snapshot_json ELSE NULL END,
+            '$.fail_above_db'
+        )) AS sql_fail_limit
+    FROM candidate_runs AS r
+),
+windowed_observations AS (
+    SELECT w.window_ordinal, f.run_id,
+        f.wavelength_1_il_db, f.wavelength_2_il_db, p.sql_fail_limit
+    FROM window_bounds AS w
+    JOIN first_observations AS f
+        ON f.written_at_utc >= w.start_utc AND f.written_at_utc < w.end_utc
+    JOIN parsed_runs AS p ON p.run_id = f.run_id
+)
+SELECT window_ordinal, run_id, COUNT_BIG(*) AS observed,
+    SUM(CASE WHEN sql_fail_limit IS NOT NULL AND (
+            wavelength_1_il_db > sql_fail_limit
+            OR wavelength_2_il_db > sql_fail_limit
+        ) THEN CONVERT(BIGINT, 1) ELSE CONVERT(BIGINT, 0) END) AS failed_sql,
+    sql_fail_limit
+FROM windowed_observations
+GROUP BY window_ordinal, run_id, sql_fail_limit
+ORDER BY window_ordinal, run_id
+"""
+
+
+FAILURE_RATE_PERIOD_SQL = _failure_rate_sql(len(PERIOD_KEYS))
+FAILURE_RATE_DAILY_SQL = _failure_rate_sql(31)
+FAILURE_RATE_LIMITS_SQL = f"""
+WITH {_failure_rate_candidate_runs_sql(FAILURE_RATE_RUN_CAP + 1).strip()}
+SELECT run_id, wavelength_mode, limit_snapshot_json
+FROM candidate_runs
+ORDER BY run_id
+"""
 
 ATTRIBUTION_KEYS = (
     "all",
@@ -482,6 +579,123 @@ def summarize_channel_activity(
     )
 
 
+def _failure_rate_filter_parameters(
+    query: ChannelActivityQuery, boundaries: ChannelActivityBoundaries
+) -> tuple:
+    purposes = tuple(str(purpose) for purpose in query.purposes)
+    padded_purposes = purposes + (purposes[-1],) * (len(RunPurpose) - len(purposes))
+    return (
+        boundaries.periods["last_30_days"].start_utc.replace(tzinfo=None),
+        boundaries.extracted_at_utc.replace(tzinfo=None),
+        *padded_purposes,
+        query.wavelength_mode,
+        query.wavelength_mode,
+        query.switch_model,
+        query.switch_model,
+    )
+
+
+def build_failure_rate_queries(
+    query: ChannelActivityQuery, boundaries: ChannelActivityBoundaries
+) -> tuple[tuple[str, tuple], tuple[str, tuple], tuple[str, tuple]]:
+    query = ChannelActivityQuery.model_validate(query.model_dump())
+    filters = _failure_rate_filter_parameters(query, boundaries)
+    period_windows = tuple(boundaries.periods[key] for key in PERIOD_KEYS)
+    return (
+        (
+            FAILURE_RATE_PERIOD_SQL,
+            (*_window_parameters(period_windows), *filters),
+        ),
+        (
+            FAILURE_RATE_DAILY_SQL,
+            (*_window_parameters(boundaries.daily), *filters),
+        ),
+        (FAILURE_RATE_LIMITS_SQL, filters),
+    )
+
+
+def _normalized_sql_limit(value: object) -> Decimal | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ReportingError("schema_incompatible")
+    try:
+        result = Decimal(str(value)).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+    except (InvalidOperation, TypeError, ValueError):
+        raise ReportingError("schema_incompatible") from None
+    if not result.is_finite():
+        raise ReportingError("schema_incompatible")
+    return result
+
+
+def _validated_failure_limits(limit_rows: list[tuple]) -> tuple[dict[int, Decimal | None], bool]:
+    incomplete = len(limit_rows) > FAILURE_RATE_RUN_CAP
+    limits: dict[int, Decimal | None] = {}
+    for row in limit_rows[:FAILURE_RATE_RUN_CAP]:
+        if len(row) != 3 or type(row[0]) is not int or row[0] <= 0:
+            raise ReportingError("schema_incompatible")
+        run_id, mode, snapshot = row
+        if run_id in limits or mode not in {"SM", "MM"}:
+            raise ReportingError("schema_incompatible")
+        parsed = parse_limit_snapshot(snapshot, mode)
+        limits[run_id] = None if parsed is None else parsed["fail_above_db"]
+    return limits, incomplete
+
+
+def _summarize_failure_rows(
+    rows: list[tuple], expected_windows: int, validated_limits: dict[int, Decimal | None]
+) -> tuple[FailureRateCounts, ...]:
+    totals = [{"failed": 0, "observed": 0, "unknown_criteria": 0} for _ in range(expected_windows)]
+    seen: set[tuple[int, int]] = set()
+    for row in rows:
+        if len(row) != 5:
+            raise ReportingError("schema_incompatible")
+        ordinal, run_id, observed, failed_sql, raw_sql_limit = row
+        if (
+            type(ordinal) is not int
+            or not 0 <= ordinal < expected_windows
+            or type(run_id) is not int
+            or run_id <= 0
+            or type(observed) is not int
+            or observed <= 0
+            or type(failed_sql) is not int
+            or not 0 <= failed_sql <= observed
+            or (ordinal, run_id) in seen
+            or run_id not in validated_limits
+        ):
+            raise ReportingError("schema_incompatible")
+        seen.add((ordinal, run_id))
+        sql_limit = _normalized_sql_limit(raw_sql_limit)
+        python_limit = validated_limits[run_id]
+        if python_limit is None or sql_limit != python_limit:
+            totals[ordinal]["unknown_criteria"] += observed
+            continue
+        totals[ordinal]["failed"] += failed_sql
+        totals[ordinal]["observed"] += observed
+    return tuple(
+        FailureRateCounts(
+            failed=total["failed"],
+            observed=total["observed"],
+            rate=(total["failed"] / total["observed"] if total["observed"] else None),
+            unknown_criteria=total["unknown_criteria"],
+        )
+        for total in totals
+    )
+
+
+def summarize_failure_rate(
+    period_rows: list[tuple], daily_rows: list[tuple], limit_rows: list[tuple]
+) -> FailureRateMetrics:
+    validated_limits, incomplete = _validated_failure_limits(limit_rows)
+    period_counts = _summarize_failure_rows(period_rows, len(PERIOD_KEYS), validated_limits)
+    daily_counts = _summarize_failure_rows(daily_rows, 31, validated_limits)
+    return FailureRateMetrics(
+        periods=dict(zip(PERIOD_KEYS, period_counts, strict=True)),
+        daily=daily_counts,
+        incomplete=incomplete,
+    )
+
+
 def build_replacement_activity_queries(
     query: ReplacementActivityQuery, boundaries: ChannelActivityBoundaries
 ) -> tuple[tuple[str, tuple], tuple[str, tuple]]:
@@ -737,6 +951,9 @@ class ReportingRepository(Protocol):
     def get_channel_activity(
         self, query: ChannelActivityQuery, boundaries: ChannelActivityBoundaries
     ) -> ChannelActivityMetrics: ...
+    def get_failure_rate(
+        self, query: ChannelActivityQuery, boundaries: ChannelActivityBoundaries
+    ) -> FailureRateMetrics: ...
     def get_replacement_activity(
         self, query: ReplacementActivityQuery, boundaries: ChannelActivityBoundaries
     ) -> ReplacementActivityMetrics: ...
@@ -850,6 +1067,25 @@ class SqlServerReportingRepository:
             period_rows = cursor.execute(*period_query).fetchmany(len(PERIOD_KEYS) + 1)
             daily_rows = cursor.execute(*daily_query).fetchmany(32)
             return summarize_channel_activity(period_rows, daily_rows)
+
+    def get_failure_rate(
+        self, query: ChannelActivityQuery, boundaries: ChannelActivityBoundaries
+    ) -> FailureRateMetrics:
+        query = ChannelActivityQuery.model_validate(query.model_dump())
+        period_query, daily_query, limits_query = build_failure_rate_queries(query, boundaries)
+        with self._adapter.cursor() as cursor:
+            self._preflight(cursor)
+            period_rows = cursor.execute(*period_query).fetchmany(
+                len(PERIOD_KEYS) * FAILURE_RATE_RUN_CAP + 1
+            )
+            daily_rows = cursor.execute(*daily_query).fetchmany(31 * FAILURE_RATE_RUN_CAP + 1)
+            limit_rows = cursor.execute(*limits_query).fetchmany(FAILURE_RATE_RUN_CAP + 1)
+            if (
+                len(period_rows) > len(PERIOD_KEYS) * FAILURE_RATE_RUN_CAP
+                or len(daily_rows) > 31 * FAILURE_RATE_RUN_CAP
+            ):
+                raise ReportingError("schema_incompatible")
+            return summarize_failure_rate(period_rows, daily_rows, limit_rows)
 
     def get_replacement_activity(
         self, query: ReplacementActivityQuery, boundaries: ChannelActivityBoundaries

@@ -1,6 +1,6 @@
 # Light Workbench Analytics
 
-A browser-based analytics design foundation for Light Workbench. Milestones 0–2 retain the Claude dashboard and establish an independent synthetic FastAPI foundation. Milestone 3 adds an offline-tested, opt-in SQL Server reporting adapter and the first bounded aggregate endpoint. The frontend still runs independently using its own fixtures; one clearly separated Overview card can consume that endpoint when the local backend is available. No authentication, final production metrics, hardware integration, or hosting is implemented.
+A browser-based analytics design foundation for Light Workbench. Milestones 0–2 retain the Claude dashboard and establish an independent synthetic FastAPI foundation. Milestone 3 adds an offline-tested, opt-in SQL Server reporting adapter; approved bounded diagnostics now cover run/configuration timing, channel and replacement activity, Q02 first-observation channel failure rate, and unit lookup. The frontend still runs independently using its own fixtures and switches only approved views to connected test-database data. No authentication, final production metrics, hardware integration, or hosting is implemented.
 
 ## Run locally
 
@@ -11,7 +11,7 @@ npm.cmd ci
 npm.cmd run dev
 ```
 
-Open the Local URL printed by Vite, normally <http://127.0.0.1:5173/>. `npm.cmd` avoids Windows PowerShell's script execution-policy restriction; `npm` works in other shells. No environment file, backend, or database credentials are needed for the synthetic screens. With the backend off, the live card reports that `127.0.0.1:8000` is not reachable and the rest of the Overview continues to work.
+Open the Local URL printed by Vite, normally <http://127.0.0.1:5173/>. `npm.cmd` avoids Windows PowerShell's script execution-policy restriction; `npm` works in other shells. No environment file, backend, or database credentials are needed for the synthetic screens. With the backend off, connected panels report or retain their labeled demo state and the application continues to work.
 
 ```powershell
 npm.cmd run typecheck
@@ -87,7 +87,7 @@ See [API contracts](docs/API_CONTRACTS.md) for query parameters, response exampl
 
 ## Optional local reporting
 
-Read [reporting database guidance](docs/REPORTING_DATABASE.md) before configuring any target. The repository supports schema/permission checks, bounded run reads, run diagnostics and the Pacific-calendar `/api/v1/reporting/channel-activity` aggregate. Reporting is lazy and disabled by default; synthetic fixtures remain independently runnable. The runtime dependency `tzdata` supplies the IANA Pacific rules on Windows and is constrained in `backend/requirements-dev.lock`.
+Read [reporting database guidance](docs/REPORTING_DATABASE.md) before configuring any target. The repository supports schema/permission checks, bounded run reads, run diagnostics, and Pacific-calendar channel-activity, replacement-activity and Q02 failure-rate aggregates. Reporting is lazy and disabled by default; synthetic fixtures remain independently runnable. The runtime dependency `tzdata` supplies the IANA Pacific rules on Windows and is constrained in `backend/requirements-dev.lock`.
 
 From `backend/`, installing the optional 64-bit adapter and checking the default disabled state is safe without SQL Server:
 
@@ -120,7 +120,7 @@ docs/                    Design audit, proposed plan, status, notices
 ## Demo behavior and limits
 
 - Navigate among all four original screens. Theme preference persists locally; keyboard navigation focuses the shared page frame and skip link. Failed lazy imports offer reload recovery.
-- Overview range/purpose controls update synthetic counts, yields, outcomes and recent activity. Average time follows range/configuration only; configuration buttons select the histogram. Historical charts and sparklines keep fixed demo periods. The separate **Live · test database** card follows Run purpose only and uses the last 30 complete UTC days.
+- Overview range/purpose controls update synthetic counts, yields, outcomes and recent activity. Average time follows range/configuration only; configuration buttons select the histogram. The separate run diagnostics use the last 30 complete UTC days. When reporting is connected, the Channels tested and Channel failure rate tile/chart pairs use bounded Pacific-calendar APIs, label every included purpose, and otherwise retain their synthetic demo values.
 - Recent activity supports trimmed, case-insensitive serial search, model/station filters, sorting, reset, and empty states. It is a small fixture list, not the full aggregate dataset.
 - Unit lookup contains one detailed fixture, `DEMO-18793` / `DEMO-SW-001`. Other serials show an empty state; wavelength controls work.
 - Query table/chart buttons switch the same fixed results; library search filters titles only and has an empty state. Illustrative schema expansion works. SQL is displayed as text and never executed.

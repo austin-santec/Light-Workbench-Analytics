@@ -26,6 +26,9 @@ from app.schemas import (
     ChannelActivityQueryParams,
     DemoRunQuery,
     DemoRunsResponse,
+    FailureRateConnectedResponse,
+    FailureRateDayResponse,
+    FailureRatePeriodResponse,
     HealthResponse,
     ReplacementActivityConnectedResponse,
     ReplacementActivityDayResponse,
@@ -289,6 +292,59 @@ def channel_activity(
             wavelength_mode=query.wavelength_mode,
             switch_model=query.switch_model,
         ),
+        periods=periods,
+        daily=daily,
+        incomplete=metrics.incomplete,
+    )
+
+
+@router.get(
+    "/reporting/failure-rate",
+    response_model=FailureRateConnectedResponse | RunActivityNotConnectedResponse,
+    responses={503: {"model": ReportingFailureResponse}},
+    tags=["reporting"],
+)
+def failure_rate(
+    query: Annotated[ChannelActivityQuery, Depends(validated_channel_activity_query)],
+    access: Annotated[ReportingAccess | None, Depends(get_reporting_access)],
+    extracted_at: Annotated[datetime, Depends(get_extracted_at_utc)],
+) -> FailureRateConnectedResponse | RunActivityNotConnectedResponse | JSONResponse:
+    """First-observation run-channel failure fraction over Pacific calendar windows."""
+    if access is None:
+        return RunActivityNotConnectedResponse()
+    boundaries = compute_channel_activity_boundaries(extracted_at)
+    try:
+        metrics = access.repository.get_failure_rate(query, boundaries)
+    except ReportingError as exc:
+        return JSONResponse(status_code=503, content={"code": exc.code})
+
+    periods = {
+        key: FailureRatePeriodResponse(
+            start_utc=boundaries.periods[key].start_utc,
+            end_utc=boundaries.periods[key].end_utc,
+            partial=boundaries.periods[key].partial,
+            **metrics.periods[key].model_dump(),
+        )
+        for key in PERIOD_KEYS
+    }
+    daily = [
+        FailureRateDayResponse(
+            date=window.local_date,
+            start_utc=window.start_utc,
+            end_utc=window.end_utc,
+            partial=window.partial,
+            **counts.model_dump(),
+        )
+        for window, counts in zip(boundaries.daily, metrics.daily, strict=True)
+    ]
+    return FailureRateConnectedResponse(
+        tls=access.tls,
+        extracted_at_utc=boundaries.extracted_at_utc,
+        filters={
+            "purpose": list(query.purposes),
+            "wavelength_mode": query.wavelength_mode,
+            "switch_model": query.switch_model,
+        },
         periods=periods,
         daily=daily,
         incomplete=metrics.incomplete,
