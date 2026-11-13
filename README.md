@@ -87,7 +87,7 @@ See [API contracts](docs/API_CONTRACTS.md) for query parameters, response exampl
 
 ## Optional local reporting
 
-Read [reporting database guidance](docs/REPORTING_DATABASE.md) before configuring any target. The repository supports schema/permission checks, bounded run reads and the aggregate `/api/v1/reporting/run-activity` route. Reporting is lazy and disabled by default; synthetic endpoints remain unchanged.
+Read [reporting database guidance](docs/REPORTING_DATABASE.md) before configuring any target. The repository supports schema/permission checks, bounded run reads, run diagnostics and the Pacific-calendar `/api/v1/reporting/channel-activity` aggregate. Reporting is lazy and disabled by default; synthetic fixtures remain independently runnable. The runtime dependency `tzdata` supplies the IANA Pacific rules on Windows and is constrained in `backend/requirements-dev.lock`.
 
 From `backend/`, installing the optional 64-bit adapter and checking the default disabled state is safe without SQL Server:
 

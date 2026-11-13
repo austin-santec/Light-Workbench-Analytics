@@ -63,6 +63,21 @@ class RunQuery(BaseModel):
         return self
 
 
+class ChannelActivityQuery(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
+
+    purposes: tuple[RunPurpose, ...] = (RunPurpose.PRODUCTION,)
+    wavelength_mode: Literal["SM", "MM"] | None = None
+    switch_model: str | None = Field(default=None, min_length=1, max_length=30)
+
+    @field_validator("purposes")
+    @classmethod
+    def selected_purposes(cls, value: tuple[RunPurpose, ...]) -> tuple[RunPurpose, ...]:
+        if not 1 <= len(value) <= len(RunPurpose) or len(set(value)) != len(value):
+            raise ValueError("One to four unique purposes are required")
+        return value
+
+
 class RunMetadata(BaseModel):
     """Internal read model; serials are sensitive, and this is not an HTTP DTO."""
 
@@ -149,3 +164,22 @@ class TestTimeByConfigurationMetrics(BaseModel):
 
     configurations: tuple[ConfigurationTestTime, ...]
     incomplete: bool
+
+
+class ChannelActivityCounts(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    channels_tested: int = Field(ge=0)
+    attempts: int = Field(ge=0)
+    units: int = Field(ge=0)
+    runs: int = Field(ge=0)
+    extra_candidate_attempts: int = Field(ge=0)
+    excluded_unknown_boundary: int = Field(ge=0)
+
+
+class ChannelActivityMetrics(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    periods: dict[str, ChannelActivityCounts]
+    daily: tuple[ChannelActivityCounts, ...]
+    incomplete: bool = False

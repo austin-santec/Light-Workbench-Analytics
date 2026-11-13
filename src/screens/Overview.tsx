@@ -1,21 +1,80 @@
 import { ConfigurationTable } from './ConfigurationTable';
-import { TIME_RANGES, PRODUCTION_ONLY, togglePurpose } from '../mock/presentation';
+import { TIME_RANGES, PRODUCTION_ONLY, PURPOSES, sparkline, togglePurpose } from '../mock/presentation';
 import { PreviewButton, PreviewSelect } from '../components/PreviewControl';
 import { SegmentedControl } from '../components/SegmentedControl';
-import { Fragment, useCallback, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { RecentActivity } from '../components/RecentActivity';
 import { css } from '../lib/css';
 import { getOverviewValues } from '../mock/overview';
-import type { OverviewState, Purpose } from '../types';
+import type { OverviewState, Purpose, TimeRange } from '../types';
 import { LiveRunActivityCard } from '../components/LiveRunActivityCard';
+import { loadChannelActivity, type ChannelActivityConnectedResponse, type ChannelActivityPeriodKey } from '../lib/api/channelActivity';
+
+type ChannelActivityState =
+  | { kind: 'loading' | 'demo' | 'error' }
+  | { kind: 'connected'; data: ChannelActivityConnectedResponse };
+
+const PERIOD_FOR_RANGE: Record<TimeRange, ChannelActivityPeriodKey> = {
+  today: 'today', yesterday: 'yesterday', week: 'this_week', month: 'last_30_days',
+};
+
+const PURPOSE_LABELS: Record<Purpose, string> = {
+  production: 'Production', engineering: 'Engineering', training: 'Training', calibration: 'Calibration',
+};
+
+function liveThroughputChart(data: ChannelActivityConnectedResponse) {
+  const maximum = Math.max(1, ...data.daily.map(day => day.channels_tested));
+  const gridMaximum = Math.max(4, Math.ceil(maximum / 4) * 4);
+  const x0 = 52, x1 = 624, y1 = 172, height = 146;
+  const step = (x1 - x0) / data.daily.length;
+  const width = Math.max(5, step * 0.62);
+  const bars = data.daily.map((day, index) => {
+    const barHeight = day.channels_tested ? height * day.channels_tested / gridMaximum : 2;
+    const x = x0 + index * step + (step - width) / 2;
+    const localDate = new Date(`${day.date}T12:00:00Z`);
+    const showLabel = index % 5 === 0 || index === data.daily.length - 1;
+    return {
+      x: x.toFixed(1), cx: (x + width / 2).toFixed(1), y: (y1 - barHeight).toFixed(1),
+      h: barHeight.toFixed(1), w: width.toFixed(1), vy: (y1 - barHeight - 5).toFixed(1),
+      value: day.channels_tested ? day.channels_tested.toLocaleString('en-US') : '',
+      wd: showLabel ? new Intl.DateTimeFormat('en-US', { weekday: 'narrow', timeZone: 'UTC' }).format(localDate) : '',
+      day: showLabel ? day.date.slice(5) : '', date: day.date, partial: day.partial,
+      fill: day.partial ? 'color-mix(in srgb,var(--accent) 35%,var(--panel))' : 'var(--accent)',
+    };
+  });
+  const barGrid = [0, 1, 2, 3, 4].map(part => {
+    const value = gridMaximum * part / 4;
+    return {
+      y: (y1 - height * part / 4).toFixed(1), ty: (y1 - height * part / 4 + 4).toFixed(1),
+      label: value >= 1000 ? `${(value / 1000).toFixed(value % 1000 ? 1 : 0)}k` : String(value),
+    };
+  });
+  return { bars, barGrid };
+}
 
 export default function Overview() {
  const [state, setState] = useState<OverviewState>({ range: 'today', cfg: 0, purp: { production: true, engineering: false, training: false, calibration: false } });
  const [livePurposeCounts, setLivePurposeCounts] = useState<Record<Purpose, number> | null>(null);
+ const [channelActivity, setChannelActivity] = useState<ChannelActivityState>({ kind: 'loading' });
+ const [channelRefresh, setChannelRefresh] = useState(0);
  const updateLivePurposeCounts = useCallback((counts: Record<Purpose, number> | null) => setLivePurposeCounts(counts), []);
  const resetPurpose = () => setState(current => ({ ...current, purp: { ...PRODUCTION_ONLY } }));
  const values = getOverviewValues(state);
  const { accent, d, kpis, purposes, scope, cfgRows, sel, hist, meanX, meanLX, outSegs, outLegend, linePath, areaPath, lineGrid, dots, avgY, lastX, lastY, bars, barGrid, stations, cells, legendCells, runs } = values;
+ const selectedPurposes = useMemo(() => PURPOSES.filter(purpose => state.purp[purpose]), [state.purp]);
+ const purposeKey = selectedPurposes.join(',');
+ useEffect(() => {
+   const controller = new AbortController();
+   loadChannelActivity(selectedPurposes, null, null, controller.signal)
+     .then(result => setChannelActivity(result.data_source === 'test_database' ? { kind: 'connected', data: result } : { kind: 'demo' }))
+     .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setChannelActivity({ kind: 'error' }); });
+   return () => controller.abort();
+ }, [channelRefresh, purposeKey, state.range, selectedPurposes]);
+ const liveChannelData = channelActivity.kind === 'connected' ? channelActivity.data : null;
+ const livePeriod = liveChannelData?.periods[PERIOD_FOR_RANGE[state.range]];
+ const liveSpark = liveChannelData ? sparkline(liveChannelData.daily.map(day => day.channels_tested), 160, 34) : null;
+ const liveChart = liveChannelData ? liveThroughputChart(liveChannelData) : null;
+ const includedPurposes = selectedPurposes.map(purpose => PURPOSE_LABELS[purpose]).join(' + ');
  return (<>
 
     <header style={css("display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:14px")}>
@@ -40,7 +99,7 @@ export default function Overview() {
       </div>
     </header>
 
-    <p id="overview-scope" className="preview-note">Summary range/purpose: counts, yields, outcomes and activity. Average time follows range/configuration only. Historical charts and sparklines stay fixed; configuration selects its histogram. Other controls are disabled previews.</p>
+    <p id="overview-scope" className="preview-note">Summary range/purpose: counts, yields, outcomes and activity. Live channel activity follows the selected range and Run purpose. Model, Mode, Channels, Station and Operator are disabled previews and are not applied to it. Other historical charts and sparklines stay fixed.</p>
     <section aria-label="Summary filters and global previews" aria-describedby="overview-scope" style={css("display:flex;flex-wrap:wrap;align-items:center;gap:10px 12px;padding:10px;background:var(--panel);border:1px solid var(--line);border-radius:14px")}>
       <SegmentedControl label="Time range" options={TIME_RANGES} value={state.range} onChange={range => setState(current => ({ ...current, range }))} size="summary" describedBy="overview-scope" />
       <span aria-hidden="true" style={css("width:1px;height:28px;background:var(--line)")}></span>
@@ -91,20 +150,38 @@ export default function Overview() {
     </>}
 
     <section aria-label="Key metrics" style={css("display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px")}>
-      {kpis.map((k, index2) => <Fragment key={index2}>
+      {kpis.map((demoKpi, index2) => {
+        const isLiveChannel = index2 === 0 && livePeriod && liveSpark;
+        const k = isLiveChannel ? {
+          ...demoKpi,
+          value: livePeriod.channels_tested.toLocaleString('en-US'),
+          delta: '',
+          sub: `${livePeriod.attempts.toLocaleString('en-US')} ${livePeriod.attempts === 1 ? 'attempt' : 'attempts'} · ${livePeriod.units.toLocaleString('en-US')} ${livePeriod.units === 1 ? 'unit' : 'units'}`,
+          line: liveSpark.line,
+          area: liveSpark.area,
+        } : demoKpi;
+        const lastPoint = isLiveChannel ? k.line.split(' ').at(-1)?.split(',') : null;
+        return <Fragment key={index2}>
         <div style={css("background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 16px 12px;display:flex;flex-direction:column;gap:6px;min-width:0")}>
-          <span style={css("font-size:12.5px;color:var(--muted);font-weight:500")}>{k.label}</span>
+          <span style={css("display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12.5px;color:var(--muted);font-weight:500")}>
+            <span>{k.label}</span>
+            {index2 === 0 && <span style={css(isLiveChannel
+              ? "font-size:10px;font-weight:650;letter-spacing:.04em;text-transform:uppercase;padding:3px 7px;border-radius:999px;background:color-mix(in srgb,var(--accent) 10%,var(--panel));color:var(--accent-ink)"
+              : "font-size:10px;font-weight:650;letter-spacing:.04em;text-transform:uppercase;padding:3px 7px;border-radius:999px;background:var(--panel2);color:var(--muted)")}>{isLiveChannel ? 'Live · test database' : 'Demo'}</span>}
+          </span>
+          {isLiveChannel && <span style={css("font-size:10.5px;color:var(--muted)")}>Channels with test activity · {includedPurposes}</span>}
           <div style={css("display:flex;align-items:baseline;gap:8px;flex-wrap:wrap")}>
             <span style={css("font-size:30px;line-height:1.05;font-weight:650;letter-spacing:-0.025em;font-variant-numeric:tabular-nums;color:" + String(k.valueColor))}>{k.value}</span>
-            <span style={css("font-size:12px;font-weight:600;padding:2px 7px;border-radius:6px;background:" + String(k.dBg) + ";color:" + String(k.dFg) + ";white-space:nowrap")}>{k.delta}</span>
+            {!isLiveChannel && <span style={css("font-size:12px;font-weight:600;padding:2px 7px;border-radius:6px;background:" + String(k.dBg) + ";color:" + String(k.dFg) + ";white-space:nowrap")}>{k.delta}</span>}
           </div>
           <span style={css("font-size:12px;color:var(--muted);min-height:17px")}>{k.sub}</span>
           <svg viewBox="0 0 160 34" preserveAspectRatio="none" aria-hidden="true" style={css("width:100%;height:30px;display:block;margin-top:2px")}>
             <path d={k.area} style={css("fill:" + String(accent) + ";fill-opacity:0.08;stroke:none")}></path>
             <polyline points={k.line} vectorEffect="non-scaling-stroke" style={css("fill:none;stroke:" + String(accent) + ";stroke-width:1.6;stroke-linejoin:round;stroke-linecap:round")}></polyline>
+            {isLiveChannel && lastPoint && <circle cx={lastPoint[0]} cy={lastPoint[1]} r="3" vectorEffect="non-scaling-stroke" style={css("fill:var(--panel);stroke:" + String(accent) + ";stroke-width:1.5;stroke-dasharray:2 1")} />}
           </svg>
         </div>
-      </Fragment>)}
+      </Fragment>})}
     </section>
 
     <section style={css("display:flex;flex-wrap:wrap;gap:12px")}>
@@ -181,24 +258,29 @@ export default function Overview() {
         <div style={css("display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;gap:10px")}>
           <div style={css("display:flex;flex-direction:column;gap:3px")}>
             <h2 style={css("margin:0;font-size:16px;font-weight:600")}>Channels tested per day</h2>
-            <span style={css("font-size:12.5px;color:var(--muted)")}>Last 14 days. Today is partial, as of 08:27.</span>
+            <span style={css("font-size:12.5px;color:var(--muted)")}>{liveChannelData ? 'Thirty complete local dates plus today in Pacific time; today is partial.' : 'Last 14 days. Today is partial, as of 08:27.'}</span>
+            <span style={css(liveChannelData
+              ? "align-self:flex-start;font-size:10px;font-weight:650;letter-spacing:.04em;text-transform:uppercase;padding:3px 7px;border-radius:999px;background:color-mix(in srgb,var(--accent) 10%,var(--panel));color:var(--accent-ink)"
+              : "align-self:flex-start;font-size:10px;font-weight:650;letter-spacing:.04em;text-transform:uppercase;padding:3px 7px;border-radius:999px;background:var(--panel2);color:var(--muted)")}>{liveChannelData ? `Live · test database · ${includedPurposes}` : 'Demo'}</span>
           </div>
-          <div style={css("display:flex;gap:14px;font-size:12px;color:var(--muted);align-items:center")}>
-            <span style={css("display:inline-flex;align-items:center;gap:6px")}><span style={css("width:10px;height:10px;border-radius:3px;background:" + String(accent))}></span>Workday</span>
+          <div style={css("display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px 14px;font-size:12px;color:var(--muted);align-items:center")}>
+            <span style={css("display:inline-flex;align-items:center;gap:6px")}><span style={css("width:10px;height:10px;border-radius:3px;background:" + String(accent))}></span>{liveChannelData ? 'Local date' : 'Workday'}</span>
             <span style={css("display:inline-flex;align-items:center;gap:6px")}><span style={css("width:10px;height:10px;border-radius:3px;background:color-mix(in srgb," + String(accent) + " 35%,var(--panel))")}></span>Today, partial</span>
+            <button type="button" onClick={() => setChannelRefresh(value => value + 1)} style={css("min-height:32px;padding:0 9px;border-radius:7px;border:1px solid var(--line);background:var(--panel);color:var(--ink2);font-size:11.5px;font-weight:600")}>Refresh channel activity</button>
           </div>
         </div>
-        <svg viewBox="0 0 640 220" role="img" aria-label="Bar chart of channels tested per day, about 2,300 to 2,600 per workday, 1,008 so far today" style={css("width:100%;height:auto;display:block")}>
-          {barGrid.map((g, index7) => <Fragment key={index7}>
+        <svg viewBox="0 0 640 220" role="img" aria-label={liveChannelData ? `Live bar chart of channels with test activity for 31 Pacific local dates, ${includedPurposes}; ${liveChannelData.daily.at(-1)?.channels_tested ?? 0} today so far` : 'Bar chart of channels tested per day, about 2,300 to 2,600 per workday, 1,008 so far today'} style={css("width:100%;height:auto;display:block")}>
+          {(liveChart?.barGrid ?? barGrid).map((g, index7) => <Fragment key={index7}>
             <g >
               <line x1="48" x2="624" y1={g.y} y2={g.y} style={css("stroke:var(--grid);stroke-width:1")}></line>
               <text x="40" y={g.ty} style={css("font-size:11px;fill:var(--muted);text-anchor:end;font-family:'Geist Mono',monospace")}>{g.label}</text>
             </g>
           </Fragment>)}
-          {bars.map((b, index8) => <Fragment key={index8}>
+          {(liveChart?.bars ?? bars).map((b, index8) => <Fragment key={index8}>
             <g >
-              <rect x={b.x} y={b.y} width="28" height={b.h} rx="4" style={css("fill:" + String(b.fill))}></rect>
-              <text x={b.cx} y={b.vy} style={css("font-size:10px;fill:var(--ink2);text-anchor:middle;font-family:'Geist Mono',monospace")}>{b.value}</text>
+              {'date' in b && <title>{`${String(b.date)}: ${b.value || '0'} channels with test activity${'partial' in b && b.partial === true ? ' (partial)' : ''}`}</title>}
+              <rect x={b.x} y={b.y} width={'w' in b ? String(b.w) : '28'} height={b.h} rx="4" style={css("fill:" + String(b.fill) + ('partial' in b && b.partial === true ? ';stroke:var(--accent);stroke-width:1;stroke-dasharray:2 2' : ''))}></rect>
+              {!liveChannelData && <text x={b.cx} y={b.vy} style={css("font-size:10px;fill:var(--ink2);text-anchor:middle;font-family:'Geist Mono',monospace")}>{b.value}</text>}
               <text x={b.cx} y="190" style={css("font-size:10.5px;fill:var(--muted);text-anchor:middle")}>{b.wd}</text>
               <text x={b.cx} y="206" style={css("font-size:11px;fill:var(--ink2);text-anchor:middle;font-weight:500")}>{b.day}</text>
             </g>

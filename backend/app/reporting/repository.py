@@ -3,7 +3,11 @@ from datetime import UTC, datetime
 from typing import Protocol
 
 from app.reporting.adapter import ReportingError, SqlServerAdapter
+from app.reporting.channel_activity import PERIOD_KEYS, ChannelActivityBoundaries
 from app.reporting.models import (
+    ChannelActivityCounts,
+    ChannelActivityMetrics,
+    ChannelActivityQuery,
     CompletionStatus,
     ConfigurationTestTime,
     DurationStatistics,
@@ -36,6 +40,119 @@ from app.schemas import RunPurpose
 
 RUN_ACTIVITY_ROW_CAP = 5000
 TEST_TIME_BY_CONFIGURATION_ROW_CAP = 5000
+
+
+def _channel_activity_sql(window_count: int) -> str:
+    window_values = ", ".join("(?, ?, ?)" for _ in range(window_count))
+    return f"""
+WITH window_bounds(window_ordinal, start_utc, end_utc) AS (
+    SELECT window_ordinal, start_utc, end_utc
+    FROM (VALUES {window_values}) AS supplied(window_ordinal, start_utc, end_utc)
+),
+measurement_population AS (
+    SELECT w.window_ordinal, m.measurement_id, m.measurement_role,
+        m.logical_channel, m.physical_port, r.run_id,
+        r.front_panel_channel_count, a.unit_id
+    FROM window_bounds AS w
+    JOIN dbo.IL_MEASUREMENTS AS m
+        ON m.written_at_utc >= w.start_utc AND m.written_at_utc < w.end_utc
+    JOIN dbo.IL_RUNS AS r ON r.run_id = m.run_id
+    JOIN dbo.UNIT_SWITCH_ASSIGNMENTS AS a ON a.assignment_id = r.assignment_id
+    JOIN dbo.SWITCHES AS s ON s.switch_id = a.switch_id
+    WHERE m.written_at_utc >= ? AND m.written_at_utc < ?
+        AND r.analysis_status NOT IN ('excluded', 'superseded')
+        AND r.superseded_by_run_id IS NULL
+        AND r.run_purpose IN (?, ?, ?, ?)
+        AND (? IS NULL OR r.wavelength_mode = ?)
+        AND (? IS NULL OR s.switch_model = ?)
+),
+valid_logical AS (
+    SELECT window_ordinal, measurement_id, logical_channel, run_id, unit_id
+    FROM measurement_population
+    WHERE measurement_role = 'logical_channel'
+        AND front_panel_channel_count IS NOT NULL
+        AND front_panel_channel_count > 0
+        AND logical_channel >= 1
+        AND logical_channel <= front_panel_channel_count
+),
+channel_counts AS (
+    SELECT window_ordinal, COUNT_BIG(*) AS channels_tested
+    FROM (
+        SELECT DISTINCT window_ordinal, unit_id, logical_channel
+        FROM valid_logical
+    ) AS distinct_channels
+    GROUP BY window_ordinal
+),
+attempt_counts AS (
+    SELECT window_ordinal, COUNT_BIG(*) AS attempts
+    FROM (
+        SELECT DISTINCT window_ordinal, measurement_id
+        FROM valid_logical
+    ) AS distinct_attempts
+    GROUP BY window_ordinal
+),
+unit_counts AS (
+    SELECT window_ordinal, COUNT_BIG(*) AS units
+    FROM (
+        SELECT DISTINCT window_ordinal, unit_id
+        FROM valid_logical
+    ) AS distinct_units
+    GROUP BY window_ordinal
+),
+run_counts AS (
+    SELECT window_ordinal, COUNT_BIG(*) AS runs
+    FROM (
+        SELECT DISTINCT window_ordinal, run_id
+        FROM valid_logical
+    ) AS distinct_runs
+    GROUP BY window_ordinal
+),
+extra_counts AS (
+    SELECT window_ordinal, COUNT_BIG(*) AS extra_candidate_attempts
+    FROM (
+        SELECT DISTINCT window_ordinal, measurement_id
+        FROM measurement_population
+        WHERE measurement_role = 'extra_candidate'
+            AND front_panel_channel_count IS NOT NULL
+            AND front_panel_channel_count > 0
+            AND physical_port > front_panel_channel_count
+    ) AS distinct_extras
+    GROUP BY window_ordinal
+),
+excluded_counts AS (
+    SELECT window_ordinal, COUNT_BIG(*) AS excluded_unknown_boundary
+    FROM (
+        SELECT DISTINCT window_ordinal, measurement_id
+        FROM measurement_population
+        WHERE measurement_role = 'logical_channel'
+            AND (
+                front_panel_channel_count IS NULL
+                OR front_panel_channel_count <= 0
+                OR logical_channel IS NULL
+                OR logical_channel < 1
+                OR logical_channel > front_panel_channel_count
+            )
+    ) AS distinct_excluded
+    GROUP BY window_ordinal
+)
+SELECT w.window_ordinal,
+    COALESCE(c.channels_tested, 0), COALESCE(a.attempts, 0),
+    COALESCE(u.units, 0), COALESCE(r.runs, 0),
+    COALESCE(e.extra_candidate_attempts, 0),
+    COALESCE(x.excluded_unknown_boundary, 0)
+FROM window_bounds AS w
+LEFT JOIN channel_counts AS c ON c.window_ordinal = w.window_ordinal
+LEFT JOIN attempt_counts AS a ON a.window_ordinal = w.window_ordinal
+LEFT JOIN unit_counts AS u ON u.window_ordinal = w.window_ordinal
+LEFT JOIN run_counts AS r ON r.window_ordinal = w.window_ordinal
+LEFT JOIN extra_counts AS e ON e.window_ordinal = w.window_ordinal
+LEFT JOIN excluded_counts AS x ON x.window_ordinal = w.window_ordinal
+ORDER BY w.window_ordinal
+"""
+
+
+CHANNEL_ACTIVITY_PERIOD_SQL = _channel_activity_sql(len(PERIOD_KEYS))
+CHANNEL_ACTIVITY_DAILY_SQL = _channel_activity_sql(31)
 
 RUN_FIELDS = (
     "run_id",
@@ -173,6 +290,77 @@ def build_test_time_by_configuration_query(query: RunQuery) -> tuple[str, tuple]
         + " ORDER BY r.run_started_at_utc, r.run_id"
     )
     return sql, tuple(params)
+
+
+def _window_parameters(windows: tuple) -> tuple:
+    return tuple(
+        value
+        for ordinal, window in enumerate(windows)
+        for value in (
+            ordinal,
+            window.start_utc.replace(tzinfo=None),
+            window.end_utc.replace(tzinfo=None),
+        )
+    )
+
+
+def build_channel_activity_queries(
+    query: ChannelActivityQuery, boundaries: ChannelActivityBoundaries
+) -> tuple[tuple[str, tuple], tuple[str, tuple]]:
+    query = ChannelActivityQuery.model_validate(query.model_dump())
+    period_windows = tuple(boundaries.periods[key] for key in PERIOD_KEYS)
+    purposes = tuple(str(purpose) for purpose in query.purposes)
+    padded_purposes = purposes + (purposes[-1],) * (len(RunPurpose) - len(purposes))
+    filters = (
+        boundaries.periods["last_30_days"].start_utc.replace(tzinfo=None),
+        boundaries.extracted_at_utc.replace(tzinfo=None),
+        *padded_purposes,
+        query.wavelength_mode,
+        query.wavelength_mode,
+        query.switch_model,
+        query.switch_model,
+    )
+    period_params = (*_window_parameters(period_windows), *filters)
+    daily_params = (*_window_parameters(boundaries.daily), *filters)
+    return (
+        (CHANNEL_ACTIVITY_PERIOD_SQL, period_params),
+        (CHANNEL_ACTIVITY_DAILY_SQL, daily_params),
+    )
+
+
+def _channel_activity_counts(rows: list[tuple], expected: int) -> tuple[ChannelActivityCounts, ...]:
+    if len(rows) != expected:
+        raise ReportingError("schema_incompatible")
+    results = []
+    for ordinal, row in enumerate(rows):
+        if len(row) != 7 or row[0] != ordinal:
+            raise ReportingError("schema_incompatible")
+        values = row[1:]
+        if any(type(value) is not int or value < 0 for value in values):
+            raise ReportingError("schema_incompatible")
+        results.append(
+            ChannelActivityCounts(
+                channels_tested=values[0],
+                attempts=values[1],
+                units=values[2],
+                runs=values[3],
+                extra_candidate_attempts=values[4],
+                excluded_unknown_boundary=values[5],
+            )
+        )
+    return tuple(results)
+
+
+def summarize_channel_activity(
+    period_rows: list[tuple], daily_rows: list[tuple]
+) -> ChannelActivityMetrics:
+    period_counts = _channel_activity_counts(period_rows, len(PERIOD_KEYS))
+    daily_counts = _channel_activity_counts(daily_rows, 31)
+    return ChannelActivityMetrics(
+        periods=dict(zip(PERIOD_KEYS, period_counts, strict=True)),
+        daily=daily_counts,
+        incomplete=False,
+    )
 
 
 def _sample_state(n: int) -> SampleState:
@@ -372,6 +560,9 @@ class ReportingRepository(Protocol):
     def list_runs(self, query: RunQuery) -> RunPage: ...
     def get_run_activity(self, query: RunQuery) -> RunActivityMetrics: ...
     def get_test_time_by_configuration(self, query: RunQuery) -> TestTimeByConfigurationMetrics: ...
+    def get_channel_activity(
+        self, query: ChannelActivityQuery, boundaries: ChannelActivityBoundaries
+    ) -> ChannelActivityMetrics: ...
     def search_units(self, text: str) -> dict: ...
     def get_unit_detail(self, unit_id: int) -> dict | None: ...
     def get_run_channels(self, run_id: int) -> dict | None: ...
@@ -471,6 +662,17 @@ class SqlServerReportingRepository:
             return summarize_test_time_by_configuration(
                 rows[:TEST_TIME_BY_CONFIGURATION_ROW_CAP], incomplete=incomplete
             )
+
+    def get_channel_activity(
+        self, query: ChannelActivityQuery, boundaries: ChannelActivityBoundaries
+    ) -> ChannelActivityMetrics:
+        query = ChannelActivityQuery.model_validate(query.model_dump())
+        period_query, daily_query = build_channel_activity_queries(query, boundaries)
+        with self._adapter.cursor() as cursor:
+            self._preflight(cursor)
+            period_rows = cursor.execute(*period_query).fetchmany(len(PERIOD_KEYS) + 1)
+            daily_rows = cursor.execute(*daily_query).fetchmany(32)
+            return summarize_channel_activity(period_rows, daily_rows)
 
     def search_units(self, text: str) -> dict:
         with self._adapter.cursor() as cursor:

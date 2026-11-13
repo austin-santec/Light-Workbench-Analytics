@@ -1,3 +1,32 @@
+# Live channel activity
+
+Updated November 13, 2026. Implemented the approved first Milestone 4B volume metric slice without connecting to SQL Server. `GET /api/v1/reporting/channel-activity` computes Pacific today/yesterday/this-week/last-30-complete-date boundaries from one injectable extraction instant and returns direct exact period aggregates plus 30 complete local dates and partial today. The Overview's Channels tested tile and daily chart switch together to V06 activity coverage when connected, label every included purpose, retain the complete demo on any unavailable state, and never combine live and demo data within either view.
+
+The two fixed parameterized SQL statements run after the existing preflight on one short-lived connection. Each joins measurement writes to the historical run assignment/unit and switch model, applies population A current-run predicates, and uses derived distinct tables before `COUNT_BIG`. Period totals are independent of daily totals. V07 accepted logical attempts, distinct units/runs, V11 extra candidates and unknown/out-of-range boundary exclusions are companions. No new object/grant or database write is introduced. Migration review confirmed no index led by `IL_MEASUREMENTS.written_at_utc`; live plan/cost validation therefore remains required.
+
+The owner-approved `tzdata==2025.2` dependency is recorded in `pyproject.toml` and the tested constraints. The exact `.venv\Scripts\python.exe -m pip install tzdata==2025.2` command was attempted, but the managed sandbox blocked PyPI access and no cached wheel or package was present. Installation into `backend/.venv` therefore remains for a network-enabled owner environment. No substitute timezone data was vendored or taken from the source application's environment.
+
+Verification in this environment:
+
+- Backend `ruff check .` and `ruff format --check .` passed. `pytest -q` could not collect because the uninstalled package makes `ZoneInfo('America/Los_Angeles')` fail at import, so the new and regression Python tests are not claimed as passed. `pip check` reported no broken requirements against the pre-existing editable package metadata; an attempted no-dependency editable metadata refresh failed because the sandbox venv cannot import its build backend, so that result does not establish `tzdata` installation.
+- Frontend `npm.cmd run typecheck` and `npm.cmd run lint` passed. Exact `npm.cmd run build` reached Vite after TypeScript and hit the documented managed-filesystem config-loader restriction; `npm.cmd run build -- --configLoader runner` passed with 458 modules transformed.
+- `npm.cmd run test:browser` passed all 18 checks against a task-started/stopped loopback Vite server. Interception covered the exact not-connected demo path and a synthetic connected 31-day response, range/purpose changes, partial-today rendering, both themes and 1440/768/390px layouts. Light/dark Overview captures at 1440px and 390px were visually inspected. No real backend or database was used, so live rendering remains unverified.
+- `git diff --check` passed. No AGENTS.md change, database connection, real record, credential, target detail, commit or push occurred.
+
+Reviewer follow-up and live check, November 13, 2026:
+
+- **Dependency and tests:** the reviewer installed `tzdata==2025.2` into `backend/.venv`. All 236 backend tests then passed, including the DST and week-edge boundary tests, along with `pip check`, ruff and the frontend checks.
+- **Encoding fix:** mis-encoded middle dots (`Â·`) in the Overview live labels were fixed, along with the browser check that had asserted the mis-encoded text. The live subline now uses singular "attempt"/"unit" for 1.
+- **Live API check** against the authorized test database, with default production plus engineering, both purposes, and engineering with SM and model filters:
+  - every period, daily length and filter returned `test_database`;
+  - Pacific boundaries were correct on both sides of the November 1 DST change, and the week started Monday;
+  - the optional NULL mode/model filters bound correctly;
+  - distinct semantics held: the combined purposes kept the same channel count with more attempts where an engineering retest touched production channels;
+  - yesterday's count matched the run shown by Unit lookup.
+- **Browser:** the KPI tile changed with every range chip and purpose selection and matched the API exactly. The live per-day chart rendered 31 bars with today partial.
+
+Not verified live: query plan/cost at production volume (no `written_at_utc` index), and 503 rendering on this tile.
+
 # Unit lookup UI Part B
 
 Updated November 12, 2026. Implemented the approved live Unit screen without changing the backend. The existing detailed synthetic unit remains the complete fallback when reporting is disabled, unreachable or returns a sanitized 503. Connected mode adds debounced/abortable serial search, URL-backed unit/run selection, strict clients for all four Unit lookup responses, live run selection, real-event timeline, API-classified insertion-loss chart, assignment channel map, extra-port evidence, replacements, attempts and saved analyses. Live panels are source-labeled and never borrow synthetic values. Saved no-recovery analyses are worded as historical evidence and explicitly not final manufacturing disposition.

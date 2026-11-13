@@ -12,10 +12,17 @@ const checks = [];
 let runActivityMode = 'not_connected';
 const runActivityRequests = [];
 const configurationTimingRequests = [];
+const channelActivityRequests = [];
 const unitSearchRequests = [];
 const purposeTotals = { production: 2, engineering: 3, training: 1, calibration: 4 };
 const purposeOpenRuns = { production: 0, engineering: 1, training: 0, calibration: 0 };
 const purposeConfirmed = { production: 1, engineering: 1, training: 0, calibration: 0 };
+const channelPeriodTotals = {
+  production: { today: 1008, yesterday: 2520, this_week: 8184, last_30_days: 51048 },
+  engineering: { today: 120, yesterday: 216, this_week: 552, last_30_days: 3552 },
+  training: { today: 0, yesterday: 48, this_week: 144, last_30_days: 648 },
+  calibration: { today: 0, yesterday: 0, this_week: 48, last_30_days: 288 },
+};
 const sampleState = n => n === 0 ? 'no_data' : n < 10 ? 'small_sample' : 'ok';
 const durationStatistics = (n, multiplier) => ({
   n,
@@ -88,6 +95,44 @@ const configurationTimingFixture = url => {
     }],
   };
 };
+const channelActivityFixture = url => {
+  const purposes = url.searchParams.getAll('purpose');
+  const selected = purposes.length ? purposes : ['production'];
+  const total = key => selected.reduce((sum, purpose) => sum + channelPeriodTotals[purpose][key], 0);
+  const daily = Array.from({ length: 31 }, (_, index) => {
+    const date = new Date(Date.UTC(2026, 9, 14 + index));
+    const dateLabel = date.toISOString().slice(0, 10);
+    const channels = index === 30 ? total('today') : selected.reduce((sum, purpose, purposeIndex) => sum + ((index + 3) * (purposeIndex + 2) * (channelPeriodTotals[purpose].last_30_days ? 3 : 0)), 0);
+    return {
+      date: dateLabel,
+      start_utc: `${dateLabel}T07:00:00Z`,
+      end_utc: index === 30 ? '2026-11-13T20:00:00Z' : `${new Date(date.getTime() + 86400000).toISOString().slice(0, 10)}T07:00:00Z`,
+      partial: index === 30,
+      channels_tested: channels,
+      attempts: channels + (channels ? 5 : 0),
+      units: channels ? Math.max(1, Math.ceil(channels / 48)) : 0,
+      runs: channels ? Math.max(1, Math.ceil(channels / 96)) : 0,
+      extra_candidate_attempts: channels ? 2 : 0,
+      excluded_unknown_boundary: channels ? 1 : 0,
+    };
+  });
+  const period = (key, start, end, partial) => {
+    const channels = total(key);
+    return { start_utc: start, end_utc: end, partial, channels_tested: channels, attempts: channels + (channels ? 10 : 0), units: channels ? Math.max(1, Math.ceil(channels / 48)) : 0, runs: channels ? Math.max(1, Math.ceil(channels / 96)) : 0, extra_candidate_attempts: channels ? 3 : 0, excluded_unknown_boundary: channels ? 1 : 0 };
+  };
+  return {
+    data_source: 'test_database', tls: 'encrypted_unverified', extracted_at_utc: '2026-11-13T20:00:00Z', timezone: 'America/Los_Angeles',
+    filters: { purpose: selected, wavelength_mode: null, switch_model: null },
+    periods: {
+      today: period('today', '2026-11-13T08:00:00Z', '2026-11-13T20:00:00Z', true),
+      yesterday: period('yesterday', '2026-11-12T08:00:00Z', '2026-11-13T08:00:00Z', false),
+      this_week: period('this_week', '2026-11-09T08:00:00Z', '2026-11-13T20:00:00Z', true),
+      last_30_days: period('last_30_days', '2026-10-14T07:00:00Z', '2026-11-13T08:00:00Z', false),
+    },
+    daily,
+    incomplete: false,
+  };
+};
 await page.route('**/api/v1/reporting/run-activity?*', async route => {
   const url = new URL(route.request().url());
   runActivityRequests.push(url);
@@ -106,6 +151,15 @@ await page.route('**/api/v1/reporting/test-time-by-configuration?*', async route
     body: JSON.stringify(runActivityMode === 'not_connected' ? { data_source: 'not_connected' } : configurationTimingFixture(url)),
   });
 });
+await page.route('**/api/v1/reporting/channel-activity?*', async route => {
+  const url = new URL(route.request().url());
+  channelActivityRequests.push(url);
+  await route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify(runActivityMode === 'not_connected' ? { data_source: 'not_connected' } : channelActivityFixture(url)),
+  });
+});
 await page.route('**/api/v1/units/search?*', async route => {
   unitSearchRequests.push(new URL(route.request().url()));
   await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data_source: 'not_connected' }) });
@@ -115,7 +169,7 @@ page.on('console', message => { if (message.type() === 'error') errors.push(mess
 page.on('response', response => { if (response.status() >= 400) errors.push(`HTTP ${response.status()}: ${response.url()}`); });
 page.on('requestfailed', request => {
   const pathname = new URL(request.url()).pathname;
-  const expectedUnmountCancellation = ['/api/v1/reporting/run-activity', '/api/v1/reporting/test-time-by-configuration', '/api/v1/units/search'].includes(pathname) && request.failure()?.errorText === 'net::ERR_ABORTED';
+  const expectedUnmountCancellation = ['/api/v1/reporting/run-activity', '/api/v1/reporting/test-time-by-configuration', '/api/v1/reporting/channel-activity', '/api/v1/units/search'].includes(pathname) && request.failure()?.errorText === 'net::ERR_ABORTED';
   if (!expectedUnmountCancellation) errors.push(`Request failed: ${request.url()} ${request.failure()?.errorText}`);
 });
 const check = label => { checks.push(label); console.log(`PASS ${label}`); };
@@ -154,11 +208,14 @@ try {
   assert.equal(startedBefore.getTime() - startedFrom.getTime(), 30 * 24 * 60 * 60 * 1000);
   assert.equal(startedBefore.toISOString().slice(11), '00:00:00.000Z');
   assert.equal(firstLiveRequest.searchParams.get('purpose'), 'production');
+  assert.equal(channelActivityRequests.at(-1).searchParams.getAll('purpose').join(','), 'production');
+  await page.getByRole('region', { name: 'Key metrics' }).getByText('Demo', { exact: true }).waitFor();
   check('Live card not-connected state and 30 complete UTC day request window');
 
   const downPage = await browser.newPage({ viewport: { width: 900, height: 800 } });
   await downPage.route('**/api/v1/reporting/run-activity?*', route => route.abort('connectionrefused'));
   await downPage.route('**/api/v1/reporting/test-time-by-configuration?*', route => route.abort('connectionrefused'));
+  await downPage.route('**/api/v1/reporting/channel-activity?*', route => route.abort('connectionrefused'));
   try {
     await downPage.goto(`${base}/#/`, { waitUntil: 'domcontentloaded' });
     await downPage.getByRole('region', { name: 'Run activity' }).getByText('Backend not reachable on 127.0.0.1:8000').first().waitFor();
@@ -167,6 +224,7 @@ try {
 
   runActivityMode = 'connected';
   await liveCard.getByRole('button', { name: 'Refresh live data' }).click();
+  await page.getByRole('button', { name: 'Refresh channel activity' }).click();
   await liveCard.getByText('Raw run activity, not units').waitFor();
   await assertText(liveCard, 'Encrypted, certificate not verified');
   await liveCard.getByText('Runs started').locator('..').getByText('2', { exact: true }).waitFor();
@@ -178,6 +236,10 @@ try {
   assert.equal(configurationTimingRequests.at(-1).searchParams.get('purpose'), 'production');
   await assertText(page.getByRole('button', { name: /^Engineering / }), '3');
   assert.ok((await page.getByRole('button', { name: /^Engineering / }).innerText()).includes('3'));
+  await page.getByRole('region', { name: 'Key metrics' }).getByText('Live · test database', { exact: true }).waitFor();
+  await assertText(page.getByRole('region', { name: 'Key metrics' }), '1,018 attempts · 21 units');
+  assert.equal(await page.getByRole('img', { name: /^Live bar chart of channels/ }).locator('rect').count(), 31);
+  await assertText(page.getByText('Thirty complete local dates plus today in Pacific time; today is partial.'), 'Pacific time');
   check('Live card connected counts, configuration timing, samples, TLS, and live purpose-chip counts');
 
   await page.reload();

@@ -1,6 +1,6 @@
 """Transport models, deliberately independent of frontend presentation contracts."""
 
-from datetime import UTC
+from datetime import UTC, date
 from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
 from typing import Annotated, Literal
@@ -109,6 +109,14 @@ class TestTimeByConfigurationQueryParams(BaseModel):
     wavelength_mode: Literal["SM", "MM"] | None = None
 
 
+class ChannelActivityQueryParams(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    purpose: list[RunPurpose] = Field(default_factory=lambda: [RunPurpose.PRODUCTION])
+    wavelength_mode: Literal["SM", "MM"] | None = None
+    switch_model: str | None = None
+
+
 class RunActivityWindow(BaseModel):
     started_from: AwareDatetime
     started_before: AwareDatetime
@@ -199,6 +207,45 @@ class TestTimeByConfigurationConnectedResponse(BaseModel):
     filters: TestTimeByConfigurationFilters
     incomplete: bool
     configurations: list[ConfigurationTestTimeResponse]
+
+
+class ChannelActivityFilters(BaseModel):
+    purpose: list[RunPurpose]
+    wavelength_mode: Literal["SM", "MM"] | None
+    switch_model: str | None
+
+
+class ChannelActivityCountsResponse(BaseModel):
+    channels_tested: int = Field(ge=0)
+    attempts: int = Field(ge=0)
+    units: int = Field(ge=0)
+    runs: int = Field(ge=0)
+    extra_candidate_attempts: int = Field(ge=0)
+    excluded_unknown_boundary: int = Field(ge=0)
+
+
+class ChannelActivityPeriodResponse(ChannelActivityCountsResponse):
+    start_utc: AwareDatetime
+    end_utc: AwareDatetime
+    partial: bool
+
+
+class ChannelActivityDayResponse(ChannelActivityPeriodResponse):
+    date: date
+
+
+class ChannelActivityConnectedResponse(BaseModel):
+    data_source: Literal["test_database"] = "test_database"
+    tls: Literal["verified", "encrypted_unverified"]
+    extracted_at_utc: AwareDatetime
+    timezone: Literal["America/Los_Angeles"] = "America/Los_Angeles"
+    filters: ChannelActivityFilters
+    periods: dict[
+        Literal["today", "yesterday", "this_week", "last_30_days"],
+        ChannelActivityPeriodResponse,
+    ]
+    daily: list[ChannelActivityDayResponse]
+    incomplete: bool
 
 
 class ReportingFailureResponse(BaseModel):

@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
@@ -8,11 +9,21 @@ from pydantic import ValidationError
 
 from app import __version__
 from app.reporting.adapter import ReportingError, SqlServerAdapter
+from app.reporting.channel_activity import (
+    PACIFIC_TIMEZONE_NAME,
+    PERIOD_KEYS,
+    compute_channel_activity_boundaries,
+)
 from app.reporting.config import ReportingSettings
-from app.reporting.models import RunQuery
+from app.reporting.models import ChannelActivityQuery, RunQuery
 from app.reporting.repository import ReportingRepository, SqlServerReportingRepository
 from app.schemas import (
     AssignmentHardwareConnectedResponse,
+    ChannelActivityConnectedResponse,
+    ChannelActivityDayResponse,
+    ChannelActivityFilters,
+    ChannelActivityPeriodResponse,
+    ChannelActivityQueryParams,
     DemoRunQuery,
     DemoRunsResponse,
     HealthResponse,
@@ -94,6 +105,27 @@ def validated_test_time_by_configuration_query(
             for item in exc.errors(include_url=False, include_input=False, include_context=False)
         ]
         raise RequestValidationError(errors) from None
+
+
+def validated_channel_activity_query(
+    params: Annotated[ChannelActivityQueryParams, Query()],
+) -> ChannelActivityQuery:
+    try:
+        return ChannelActivityQuery(
+            purposes=tuple(params.purpose),
+            wavelength_mode=params.wavelength_mode,
+            switch_model=params.switch_model,
+        )
+    except ValidationError as exc:
+        errors = [
+            item | {"loc": ("query", *item["loc"])}
+            for item in exc.errors(include_url=False, include_input=False, include_context=False)
+        ]
+        raise RequestValidationError(errors) from None
+
+
+def get_extracted_at_utc() -> datetime:
+    return datetime.now(UTC)
 
 
 @router.get("/health/live", response_model=HealthResponse, tags=["health"])
@@ -188,6 +220,60 @@ def test_time_by_configuration(
         ),
         incomplete=metrics.incomplete,
         configurations=[configuration.model_dump() for configuration in metrics.configurations],
+    )
+
+
+@router.get(
+    "/reporting/channel-activity",
+    response_model=ChannelActivityConnectedResponse | RunActivityNotConnectedResponse,
+    responses={503: {"model": ReportingFailureResponse}},
+    tags=["reporting"],
+)
+def channel_activity(
+    query: Annotated[ChannelActivityQuery, Depends(validated_channel_activity_query)],
+    access: Annotated[ReportingAccess | None, Depends(get_reporting_access)],
+    extracted_at: Annotated[datetime, Depends(get_extracted_at_utc)],
+) -> ChannelActivityConnectedResponse | RunActivityNotConnectedResponse | JSONResponse:
+    """Exact accepted channel activity over Pacific calendar windows."""
+    if access is None:
+        return RunActivityNotConnectedResponse()
+    boundaries = compute_channel_activity_boundaries(extracted_at)
+    try:
+        metrics = access.repository.get_channel_activity(query, boundaries)
+    except ReportingError as exc:
+        return JSONResponse(status_code=503, content={"code": exc.code})
+
+    periods = {}
+    for key in PERIOD_KEYS:
+        window = boundaries.periods[key]
+        periods[key] = ChannelActivityPeriodResponse(
+            start_utc=window.start_utc,
+            end_utc=window.end_utc,
+            partial=window.partial,
+            **metrics.periods[key].model_dump(),
+        )
+    daily = [
+        ChannelActivityDayResponse(
+            date=window.local_date,
+            start_utc=window.start_utc,
+            end_utc=window.end_utc,
+            partial=window.partial,
+            **counts.model_dump(),
+        )
+        for window, counts in zip(boundaries.daily, metrics.daily, strict=True)
+    ]
+    return ChannelActivityConnectedResponse(
+        tls=access.tls,
+        extracted_at_utc=boundaries.extracted_at_utc,
+        timezone=PACIFIC_TIMEZONE_NAME,
+        filters=ChannelActivityFilters(
+            purpose=list(query.purposes),
+            wavelength_mode=query.wavelength_mode,
+            switch_model=query.switch_model,
+        ),
+        periods=periods,
+        daily=daily,
+        incomplete=metrics.incomplete,
     )
 
 

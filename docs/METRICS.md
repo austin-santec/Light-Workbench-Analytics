@@ -1,6 +1,6 @@
 # Production metric definitions — Milestone 4A
 
-**Final owner decisions incorporated November 6, 2026; this update is prepared for review.** The prior reconciliation is committed at `7801ae409c0d2110834cf6b6aa4c53334c3437ba`. D05/D06/D07/D08/D14 below incorporate the final decisions; other approvals remain in force. Approval of intent does not certify source completeness or production readiness. This canonical document authorizes no implementation, database connection, schema change or real-record HTTP access. Milestone 3 Stage B remains unapproved; Milestone 4B is not started. Dashboard values are synthetic design examples, not manufacturing evidence.
+**Final owner decisions incorporated November 6, 2026; V06/V07/V11 diagnostic implementation authorized November 13, 2026.** The prior reconciliation is committed at `7801ae409c0d2110834cf6b6aa4c53334c3437ba`. D05/D06/D07/D08/D14 below incorporate the final decisions; other approvals remain in force. Approval and a bounded test-database diagnostic do not certify source completeness, query cost or production readiness. Dashboard fixture values remain synthetic design examples, not manufacturing evidence.
 
 All **42 existing stable IDs, including the 35 original IDs, are retained without renaming**. The prior seven companion contracts remain: V12 assignment/mode coverage; V13 cross-run remeasurement; T09–T12 run-active, general elapsed, combined run diagnostics and per-unit totals; R07 current recommendations. T12 now specifies the primary finished-unit cumulative duration. One additional companion, Q11, is necessary to specify a recovery percentage with its own resolved-configuration denominator without changing Q05's recovery-count meaning. The catalog now contains **43 contracts**. No other metric IDs are added. Technical feasibility remains separate from owner approval.
 
@@ -126,7 +126,7 @@ Stable ID: `volume.unique_logical_channels_tested`.
 - **Question / formula / N-D:** How many distinct logical channels per unit received testing? Count distinct `(unit_id,logical_channel)` with A writes in P; no denominator. This is the primary channel KPI (D02).
 - **Time / population / keys / source:** Measurement write time; A; historical assignment→unit join, S01/S05. Repeated attempts/runs/modes/assignments for the same unit and logical position do not increase this period's unique coverage. V12 preserves assignment/mode diagnostics.
 - **Missing / limitations:** Missing N/role is unknown. Physical ports and wavelengths do not multiply channels. One channel tested on two days counts in each day but once in the combined period; call this activity coverage, not finished capacity (D02).
-- **Drill / verification:** Unit/channel and contributing assignments/modes/attempts; E01, E07, E13/E18. **Status: Proposed; feasibility F1; D02 intent approved, joins/coverage unverified.**
+- **Drill / verification:** Unit/channel and contributing assignments/modes/attempts; E01, E07, E13/E18. **Status: Implemented as a bounded test-database diagnostic; owner intent approved, offline semantics tested, live technical/query-plan verification pending; feasibility F1.**
 
 ### V07 — Accepted front-panel measurement attempts
 
@@ -135,7 +135,7 @@ Stable ID: `volume.accepted_logical_attempts`.
 - **Question / formula / N-D:** How many persisted measurement actions were accepted? Count distinct `measurement_id` in A/P; no denominator. A paired two-wavelength row is one attempt.
 - **Time / population / keys / source:** `written_at_utc`; A; measurement ID/unique UUID for retry diagnostics; S01/S05. Keep all accepted attempts, not only current views.
 - **Missing / limitations:** Missing IDs/invalid roles excluded with diagnostics. Temporary/rejected/unwritten readings are absent, so this is not hardware request count. Superseded attempts within a valid run still count as activity.
-- **Drill / verification:** Run/channel/attempt/paired wavelengths; E01, E07. **Status: Proposed; feasibility F1.**
+- **Drill / verification:** Run/channel/attempt/paired wavelengths; E01, E07. **Status: Implemented as a bounded test-database diagnostic companion; offline semantics tested, live technical verification pending; feasibility F1.**
 
 ### V08 — Run-channels retested
 
@@ -171,7 +171,7 @@ Stable ID: `volume.accepted_extra_attempts`.
 - **Question / formula / N-D:** How much recorded supplemental candidate testing occurred? Distinct measurement IDs with `measurement_role=extra_candidate`, physical port above a known positive run N, and A's parent-run validity/purpose, in P; no denominator.
 - **Time / population / keys / source:** Written time; role-specific population (not A's logical-role predicate); S01/0006; measurement ID, group by assignment/physical port or G.
 - **Missing / limitations:** Logical channel is NULL by design. Missing boundary/candidate context is unknown; unaccepted probing is not represented. Never add to V06 or treat as finished front-panel coverage.
-- **Drill / verification:** Role, port, parent run, boundary; E14. **Status: Proposed; feasibility F1.**
+- **Drill / verification:** Role, port, parent run, boundary; E14. **Status: Implemented as a bounded test-database diagnostic companion; offline semantics tested, live technical verification pending; feasibility F1.**
 
 ### V12 — Assignment/mode/logical-channel activity coverage
 
@@ -593,8 +593,8 @@ Owner item not separately approved: the proposed all-models/all-modes fallback f
 
 Technical verification remains: threshold/rounding reconciliation; valid-workflow source-effective consistency; historical identity and full unit-run inventory, including long-separated retests and supplemental work; verified current unit outcomes/latest finished dates and resolved corrective outcomes; missing active intervals; corrective sequence/current-map evidence; current recommendation applicability/freshness; candidate suitability/full allocation; authoritative administrative-error evidence; All Current Configurations inventory semantics; DST/comparison/persistence behavior; bounded history/exact aggregation/incomplete status and non-production acceptance. Source evidence establishes code/schema facts, not real stored-record quality. Missing conclusive failure/date or complete history can block T12/Q11 even when elapsed diagnostics or recovery counts are available; active-only T05/T09/T12, interruption T06, uninterrupted T07, final disposition Q10 and historical as-of remain unsupported/deferred as specified. T08's episode/workflow-span proposal is superseded, not a planned requirement.
 
-## Recommended first implementation batch — separate authorization required
+## Implementation sequence
 
-Owner review of the supplied intent is complete; **Milestone 4B is not started**. After explicit 4B authorization and separately authorized Stage B evidence, consider V01–V07/V11/V12 with separate clocks/audit categories and exact period distincts, then V08–V10/V13 after predecessor verification. R01–R04 can follow with matched populations/correction evidence. T12 is the primary duration contract, but must remain unavailable/incomplete wherever unit outcome/date or full history cannot be verified; an earlier elapsed run diagnostic must be labeled secondary and cannot substitute for the finished-unit KPI. Current quality/recovery requires threshold, resolution, provenance, candidate and freshness acceptance.
+The first authorized Milestone 4B slice implements V06 with V07/V11 and distinct-unit/run companions as a bounded diagnostic. Live technical/query-plan verification remains pending. Every other catalog item still requires its own authorization and evidence; V08–V10/V13 require predecessor verification, and R01–R04 require matched populations/correction evidence. T12 remains the primary duration contract and must stay unavailable/incomplete wherever unit outcome/date or full history cannot be verified; the earlier elapsed run diagnostic cannot substitute for it. Current quality/recovery still requires threshold, resolution, provenance, candidate and freshness acceptance.
 
 Do not treat semantic approval as completed queries, classification or production readiness. First-pass yield/historical as-of remain Deferred; no episodes, extra configurations or completion actions are authorized. Use E01–E27 as future fixtures; no application tests were changed. Prior reconciliation is committed at the reference baseline; this final documentation update introduces no database connection, source change, real-data endpoint, extended engine, commit or push.
