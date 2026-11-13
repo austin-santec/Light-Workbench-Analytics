@@ -117,6 +117,12 @@ class ChannelActivityQueryParams(BaseModel):
     switch_model: str | None = None
 
 
+class ReplacementActivityQueryParams(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    switch_model: str | None = None
+
+
 class RunActivityWindow(BaseModel):
     started_from: AwareDatetime
     started_before: AwareDatetime
@@ -245,6 +251,48 @@ class ChannelActivityConnectedResponse(BaseModel):
         ChannelActivityPeriodResponse,
     ]
     daily: list[ChannelActivityDayResponse]
+    incomplete: bool
+
+
+class ReplacementActivityFilters(BaseModel):
+    switch_model: str | None
+
+
+class ReplacementActivityCountsResponse(BaseModel):
+    events: int = Field(ge=0)
+    channels_replaced: int = Field(ge=0)
+    units: int = Field(ge=0)
+    events_per_unit: float | None = Field(default=None, ge=0)
+    from_recommendation: int = Field(ge=0)
+    related_run_not_current: int = Field(ge=0)
+
+
+class ReplacementActivityPeriodResponse(BaseModel):
+    start_utc: AwareDatetime
+    end_utc: AwareDatetime
+    partial: bool
+    by_attribution: dict[
+        Literal["all", "production", "engineering", "training", "calibration", "unattributed"],
+        ReplacementActivityCountsResponse,
+    ]
+
+
+class ReplacementActivityDayResponse(ReplacementActivityPeriodResponse):
+    date: date
+
+
+class ReplacementActivityConnectedResponse(BaseModel):
+    data_source: Literal["test_database"] = "test_database"
+    tls: Literal["verified", "encrypted_unverified"]
+    extracted_at_utc: AwareDatetime
+    timezone: Literal["America/Los_Angeles"] = "America/Los_Angeles"
+    filters: ReplacementActivityFilters
+    periods: dict[
+        Literal["today", "yesterday", "this_week", "last_30_days"],
+        ReplacementActivityPeriodResponse,
+    ]
+    daily: list[ReplacementActivityDayResponse]
+    administrative_exclusions: int = Field(ge=0)
     incomplete: bool
 
 

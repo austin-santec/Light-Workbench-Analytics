@@ -111,6 +111,16 @@ Channel map, replacements, extra ports and spare lists are each capped at 500; a
 
 All insertion-loss and analysis loss/improvement values serialize as JSON numbers rounded to four decimal places. SQL `DECIMAL(9,4)` values are retained as `Decimal` until response serialization. Every returned timestamp is UTC-aware and serializes with `Z`.
 
+### Replacement activity
+
+`GET /api/v1/reporting/replacement-activity?switch_model=<exact model>` returns recorded replacement activity for Pacific today, yesterday, this week, the last 30 complete Pacific dates, and a 31-date daily series ending with partial today. The optional model filter is exact and follows each event's historical assignment to its switch. There is no purpose filter.
+
+Each period contains `start_utc`, exclusive `end_utc`, `partial`, and `by_attribution` with exact `all`, `production`, `engineering`, `training`, `calibration`, and `unattributed` buckets. Every bucket returns distinct replacement `events`, distinct `(assignment_id, logical_channel)` `channels_replaced`, distinct `units`, nullable `events_per_unit`, `from_recommendation`, and `related_run_not_current`. The ratio is null at zero units; its event numerator and unit denominator remain present. Daily entries carry the same shape so consumers can use exact all/production counts without adding buckets. `administrative_exclusions` is zero because the reviewed schema provides no authoritative classification; `incomplete` is currently false.
+
+All replacement records in `[start_utc,end_utc)` count, including repeated replacements, returns to an initial port, null related runs, and related runs now voided, excluded or superseded. A null related run is `unattributed`; otherwise the related run purpose selects exactly one bucket. Recommendation linkage does not prove compliance or verified physical work. Disabled reporting returns exactly `{"data_source":"not_connected"}` and enabled failures use the established sanitized 503 envelope.
+
+The Failures & replacements screen fetches this endpoint independently on mount and manual refresh, aborts superseded/unmounted requests, and selects among the four server period totals without refetching. Its live panel never replaces or mixes values into the existing synthetic failure/recovery content. The strict client validates all keys, six attribution buckets, nonnegative counts, 31 ordered dates, partial-today placement, zero administrative exclusions, filter echo and sanitized error codes.
+
 ### Overview frontend consumption
 
 During Vite development, `/api` is proxied to loopback `http://127.0.0.1:8000`; production build output has no proxy configuration. The Overview card computes the last 30 complete UTC days and sends the exclusive current-UTC-midnight boundary, keeping the window at exactly 30 days. It refetches on mount, Run purpose changes and manual refresh only.

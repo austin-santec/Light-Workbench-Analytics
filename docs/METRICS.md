@@ -326,7 +326,7 @@ Stable ID: `replacement.recorded_events`.
 - **Question / formula / N-D:** How many valid replacement records document workload? Distinct `replacement_id` in X; no denominator. Primary replacement KPI; show total recorded, verified administrative exclusions and counted events separately.
 - **Time / population / keys / source:** Event time, X, replacement ID; S01/S06. Repeated replacements of one channel remain separate events.
 - **Missing / limitations:** Missing related run/link must not drop the event; missing event time is unknown. Saved recommendations are not events. Genuine return to the initial port still counts; no administrative-error exclusion without authoritative evidence. Production attribution remains explicit, not inferred from missing linkage.
-- **Drill / verification:** Assignment, logical/old/new ports, event ID, optional recommendation and later verification; E08/E09. **Status: Proposed; feasibility F1.**
+- **Drill / verification:** Assignment, logical/old/new ports, event ID, optional recommendation and later verification; E08/E09. **Status: Implemented as a bounded replacement-activity diagnostic for all/production/engineering/training/calibration/unattributed buckets; offline semantics verified, live technical/query-plan verification pending; feasibility F1.**
 
 ### R02 — Distinct logical channels replaced
 
@@ -335,7 +335,7 @@ Stable ID: `replacement.unique_logical_channels`.
 - **Question / formula / N-D:** How many distinct assignment-scoped channels have recorded replacement activity? Count distinct `(assignment_id,logical_channel)` in X; no denominator.
 - **Time / population / keys / source:** Replacement event P, X, assignment/channel; S01. Mode does not duplicate one shared physical replacement event.
 - **Missing / limitations:** Two replacements count one channel; two assignments are two channels even for one unit. Not equivalent to current `is_replaced`, nor number of destination ports.
-- **Drill / verification:** All events per key plus effective map; E08, E13. **Status: Proposed; feasibility F1.**
+- **Drill / verification:** All events per key plus effective map; E08, E13. **Status: Implemented as a bounded replacement-activity diagnostic with direct exact distincts; offline semantics verified, live technical/query-plan verification pending; feasibility F1.**
 
 ### R03 — Replacement events per tested unit
 
@@ -353,7 +353,7 @@ Stable ID: `replacement.events_per_replaced_unit`.
 - **Question / formula / N-D:** How much repeat replacement work occurred among affected units? N = R01's events with valid historical assignment→unit linkage; D = distinct unit IDs reached by those same events, including replacement-only units. With complete identity coverage N equals R01; otherwise report unmatched events separately and mark coverage incomplete.
 - **Time / population / keys / source:** Event-time P; X; events and unit grain; S01.
 - **Missing / limitations:** Zero D→null. “Requiring replacement” is not equivalent to recorded replacement activity. Use events per unit with replacement activity; numerator and denominator use exactly the same X filters/validity and historical identity joins. Show unattributable events separately, not divided by known units as if matched.
-- **Drill / verification:** Event histories and distinct units; E08→2/1, versus R02=1. **Status: Proposed; owner intent aligned, technical verification pending; feasibility F1.**
+- **Drill / verification:** Event histories and distinct units; E08→2/1, versus R02=1. **Status: Implemented as a bounded replacement-activity diagnostic returning event and unit counts plus the ratio; offline semantics verified, live technical/query-plan verification pending; feasibility F1.**
 
 ### R05 — Confirmed-extra-port deployment fraction
 

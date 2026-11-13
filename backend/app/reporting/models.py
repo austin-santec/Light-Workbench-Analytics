@@ -183,3 +183,29 @@ class ChannelActivityMetrics(BaseModel):
     periods: dict[str, ChannelActivityCounts]
     daily: tuple[ChannelActivityCounts, ...]
     incomplete: bool = False
+
+
+class ReplacementActivityQuery(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
+
+    switch_model: str | None = Field(default=None, min_length=1, max_length=30)
+
+
+class ReplacementActivityCounts(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    events: int = Field(ge=0)
+    channels_replaced: int = Field(ge=0)
+    units: int = Field(ge=0)
+    events_per_unit: float | None = Field(default=None, ge=0)
+    from_recommendation: int = Field(ge=0)
+    related_run_not_current: int = Field(ge=0)
+
+
+class ReplacementActivityMetrics(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    periods: dict[str, dict[str, ReplacementActivityCounts]]
+    daily: tuple[dict[str, ReplacementActivityCounts], ...]
+    administrative_exclusions: int = 0
+    incomplete: bool = False

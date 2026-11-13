@@ -11,6 +11,9 @@ from app.reporting.models import (
     CompletionStatus,
     ConfigurationTestTime,
     DurationStatistics,
+    ReplacementActivityCounts,
+    ReplacementActivityMetrics,
+    ReplacementActivityQuery,
     RunActivityMetrics,
     RunMetadata,
     RunPage,
@@ -153,6 +156,122 @@ ORDER BY w.window_ordinal
 
 CHANNEL_ACTIVITY_PERIOD_SQL = _channel_activity_sql(len(PERIOD_KEYS))
 CHANNEL_ACTIVITY_DAILY_SQL = _channel_activity_sql(31)
+
+ATTRIBUTION_KEYS = (
+    "all",
+    "production",
+    "engineering",
+    "training",
+    "calibration",
+    "unattributed",
+)
+
+
+def _replacement_activity_sql(window_count: int) -> str:
+    window_values = ", ".join("(?, ?, ?)" for _ in range(window_count))
+    attribution_values = ", ".join(f"('{key}')" for key in ATTRIBUTION_KEYS)
+    return f"""
+WITH window_bounds(window_ordinal, start_utc, end_utc) AS (
+    SELECT window_ordinal, start_utc, end_utc
+    FROM (VALUES {window_values}) AS supplied(window_ordinal, start_utc, end_utc)
+),
+attribution_bounds(attribution) AS (
+    SELECT attribution FROM (VALUES {attribution_values}) AS supplied(attribution)
+),
+replacement_population AS (
+    SELECT w.window_ordinal, x.replacement_id, x.assignment_id,
+        x.logical_channel, a.unit_id,
+        CASE WHEN x.related_run_id IS NULL
+            THEN 'unattributed' ELSE r.run_purpose END AS attribution,
+        CASE WHEN x.source_recommendation_id IS NULL THEN 0 ELSE 1 END AS from_recommendation,
+        CASE WHEN x.related_run_id IS NOT NULL AND (
+            r.void_info_json IS NOT NULL
+            OR r.analysis_status IN ('excluded', 'superseded')
+            OR r.superseded_by_run_id IS NOT NULL
+        ) THEN 1 ELSE 0 END AS related_run_not_current
+    FROM window_bounds AS w
+    JOIN dbo.CHANNEL_REPLACEMENTS AS x
+        ON x.replaced_at_utc >= w.start_utc AND x.replaced_at_utc < w.end_utc
+    JOIN dbo.UNIT_SWITCH_ASSIGNMENTS AS a ON a.assignment_id = x.assignment_id
+    JOIN dbo.SWITCHES AS s ON s.switch_id = a.switch_id
+    LEFT JOIN dbo.IL_RUNS AS r ON r.run_id = x.related_run_id
+    WHERE x.replaced_at_utc >= ? AND x.replaced_at_utc < ?
+        AND (? IS NULL OR s.switch_model = ?)
+),
+bucketed_population AS (
+    SELECT window_ordinal, 'all' AS attribution, replacement_id, assignment_id,
+        logical_channel, unit_id, from_recommendation, related_run_not_current
+    FROM replacement_population
+    UNION ALL
+    SELECT window_ordinal, attribution, replacement_id, assignment_id,
+        logical_channel, unit_id, from_recommendation, related_run_not_current
+    FROM replacement_population
+),
+event_counts AS (
+    SELECT window_ordinal, attribution, COUNT_BIG(*) AS events
+    FROM (
+        SELECT DISTINCT window_ordinal, attribution, replacement_id
+        FROM bucketed_population
+    ) AS distinct_events
+    GROUP BY window_ordinal, attribution
+),
+recommendation_counts AS (
+    SELECT window_ordinal, attribution, COUNT_BIG(*) AS from_recommendation
+    FROM (
+        SELECT DISTINCT window_ordinal, attribution, replacement_id
+        FROM bucketed_population
+        WHERE from_recommendation = 1
+    ) AS distinct_recommendation_events
+    GROUP BY window_ordinal, attribution
+),
+not_current_counts AS (
+    SELECT window_ordinal, attribution, COUNT_BIG(*) AS related_run_not_current
+    FROM (
+        SELECT DISTINCT window_ordinal, attribution, replacement_id
+        FROM bucketed_population
+        WHERE related_run_not_current = 1
+    ) AS distinct_not_current_events
+    GROUP BY window_ordinal, attribution
+),
+channel_counts AS (
+    SELECT window_ordinal, attribution, COUNT_BIG(*) AS channels_replaced
+    FROM (
+        SELECT DISTINCT window_ordinal, attribution, assignment_id, logical_channel
+        FROM bucketed_population
+    ) AS distinct_channels
+    GROUP BY window_ordinal, attribution
+),
+unit_counts AS (
+    SELECT window_ordinal, attribution, COUNT_BIG(*) AS units
+    FROM (
+        SELECT DISTINCT window_ordinal, attribution, unit_id
+        FROM bucketed_population
+    ) AS distinct_units
+    GROUP BY window_ordinal, attribution
+)
+SELECT w.window_ordinal, b.attribution,
+    COALESCE(e.events, 0), COALESCE(c.channels_replaced, 0), COALESCE(u.units, 0),
+    COALESCE(rc.from_recommendation, 0), COALESCE(nc.related_run_not_current, 0)
+FROM window_bounds AS w
+CROSS JOIN attribution_bounds AS b
+LEFT JOIN event_counts AS e
+    ON e.window_ordinal = w.window_ordinal AND e.attribution = b.attribution
+LEFT JOIN channel_counts AS c
+    ON c.window_ordinal = w.window_ordinal AND c.attribution = b.attribution
+LEFT JOIN unit_counts AS u
+    ON u.window_ordinal = w.window_ordinal AND u.attribution = b.attribution
+LEFT JOIN recommendation_counts AS rc
+    ON rc.window_ordinal = w.window_ordinal AND rc.attribution = b.attribution
+LEFT JOIN not_current_counts AS nc
+    ON nc.window_ordinal = w.window_ordinal AND nc.attribution = b.attribution
+ORDER BY w.window_ordinal, CASE b.attribution
+    WHEN 'all' THEN 0 WHEN 'production' THEN 1 WHEN 'engineering' THEN 2
+    WHEN 'training' THEN 3 WHEN 'calibration' THEN 4 ELSE 5 END
+"""
+
+
+REPLACEMENT_ACTIVITY_PERIOD_SQL = _replacement_activity_sql(len(PERIOD_KEYS))
+REPLACEMENT_ACTIVITY_DAILY_SQL = _replacement_activity_sql(31)
 
 RUN_FIELDS = (
     "run_id",
@@ -363,6 +482,61 @@ def summarize_channel_activity(
     )
 
 
+def build_replacement_activity_queries(
+    query: ReplacementActivityQuery, boundaries: ChannelActivityBoundaries
+) -> tuple[tuple[str, tuple], tuple[str, tuple]]:
+    query = ReplacementActivityQuery.model_validate(query.model_dump())
+    filters = (
+        boundaries.periods["last_30_days"].start_utc.replace(tzinfo=None),
+        boundaries.extracted_at_utc.replace(tzinfo=None),
+        query.switch_model,
+        query.switch_model,
+    )
+    period_windows = tuple(boundaries.periods[key] for key in PERIOD_KEYS)
+    return (
+        (REPLACEMENT_ACTIVITY_PERIOD_SQL, (*_window_parameters(period_windows), *filters)),
+        (REPLACEMENT_ACTIVITY_DAILY_SQL, (*_window_parameters(boundaries.daily), *filters)),
+    )
+
+
+def _replacement_activity_counts(
+    rows: list[tuple], expected_windows: int
+) -> tuple[dict[str, ReplacementActivityCounts], ...]:
+    if len(rows) != expected_windows * len(ATTRIBUTION_KEYS):
+        raise ReportingError("schema_incompatible")
+    results = []
+    for ordinal in range(expected_windows):
+        buckets = {}
+        for bucket_index, key in enumerate(ATTRIBUTION_KEYS):
+            row = rows[ordinal * len(ATTRIBUTION_KEYS) + bucket_index]
+            if len(row) != 7 or row[0] != ordinal or row[1] != key:
+                raise ReportingError("schema_incompatible")
+            values = row[2:]
+            if any(type(value) is not int or value < 0 for value in values):
+                raise ReportingError("schema_incompatible")
+            events, channels, units, linked, not_current = values
+            buckets[key] = ReplacementActivityCounts(
+                events=events,
+                channels_replaced=channels,
+                units=units,
+                events_per_unit=None if units == 0 else events / units,
+                from_recommendation=linked,
+                related_run_not_current=not_current,
+            )
+        results.append(buckets)
+    return tuple(results)
+
+
+def summarize_replacement_activity(
+    period_rows: list[tuple], daily_rows: list[tuple]
+) -> ReplacementActivityMetrics:
+    periods = _replacement_activity_counts(period_rows, len(PERIOD_KEYS))
+    daily = _replacement_activity_counts(daily_rows, 31)
+    return ReplacementActivityMetrics(
+        periods=dict(zip(PERIOD_KEYS, periods, strict=True)), daily=daily
+    )
+
+
 def _sample_state(n: int) -> SampleState:
     if n == 0:
         return SampleState.NO_DATA
@@ -563,6 +737,9 @@ class ReportingRepository(Protocol):
     def get_channel_activity(
         self, query: ChannelActivityQuery, boundaries: ChannelActivityBoundaries
     ) -> ChannelActivityMetrics: ...
+    def get_replacement_activity(
+        self, query: ReplacementActivityQuery, boundaries: ChannelActivityBoundaries
+    ) -> ReplacementActivityMetrics: ...
     def search_units(self, text: str) -> dict: ...
     def get_unit_detail(self, unit_id: int) -> dict | None: ...
     def get_run_channels(self, run_id: int) -> dict | None: ...
@@ -673,6 +850,18 @@ class SqlServerReportingRepository:
             period_rows = cursor.execute(*period_query).fetchmany(len(PERIOD_KEYS) + 1)
             daily_rows = cursor.execute(*daily_query).fetchmany(32)
             return summarize_channel_activity(period_rows, daily_rows)
+
+    def get_replacement_activity(
+        self, query: ReplacementActivityQuery, boundaries: ChannelActivityBoundaries
+    ) -> ReplacementActivityMetrics:
+        period_query, daily_query = build_replacement_activity_queries(query, boundaries)
+        with self._adapter.cursor() as cursor:
+            self._preflight(cursor)
+            period_rows = cursor.execute(*period_query).fetchmany(
+                len(PERIOD_KEYS) * len(ATTRIBUTION_KEYS) + 1
+            )
+            daily_rows = cursor.execute(*daily_query).fetchmany(31 * len(ATTRIBUTION_KEYS) + 1)
+            return summarize_replacement_activity(period_rows, daily_rows)
 
     def search_units(self, text: str) -> dict:
         with self._adapter.cursor() as cursor:

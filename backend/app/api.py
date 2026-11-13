@@ -15,7 +15,7 @@ from app.reporting.channel_activity import (
     compute_channel_activity_boundaries,
 )
 from app.reporting.config import ReportingSettings
-from app.reporting.models import ChannelActivityQuery, RunQuery
+from app.reporting.models import ChannelActivityQuery, ReplacementActivityQuery, RunQuery
 from app.reporting.repository import ReportingRepository, SqlServerReportingRepository
 from app.schemas import (
     AssignmentHardwareConnectedResponse,
@@ -27,6 +27,11 @@ from app.schemas import (
     DemoRunQuery,
     DemoRunsResponse,
     HealthResponse,
+    ReplacementActivityConnectedResponse,
+    ReplacementActivityDayResponse,
+    ReplacementActivityFilters,
+    ReplacementActivityPeriodResponse,
+    ReplacementActivityQueryParams,
     ReportingFailureResponse,
     RunActivityConnectedResponse,
     RunActivityFilters,
@@ -116,6 +121,19 @@ def validated_channel_activity_query(
             wavelength_mode=params.wavelength_mode,
             switch_model=params.switch_model,
         )
+    except ValidationError as exc:
+        errors = [
+            item | {"loc": ("query", *item["loc"])}
+            for item in exc.errors(include_url=False, include_input=False, include_context=False)
+        ]
+        raise RequestValidationError(errors) from None
+
+
+def validated_replacement_activity_query(
+    params: Annotated[ReplacementActivityQueryParams, Query()],
+) -> ReplacementActivityQuery:
+    try:
+        return ReplacementActivityQuery(switch_model=params.switch_model)
     except ValidationError as exc:
         errors = [
             item | {"loc": ("query", *item["loc"])}
@@ -273,6 +291,57 @@ def channel_activity(
         ),
         periods=periods,
         daily=daily,
+        incomplete=metrics.incomplete,
+    )
+
+
+@router.get(
+    "/reporting/replacement-activity",
+    response_model=ReplacementActivityConnectedResponse | RunActivityNotConnectedResponse,
+    responses={503: {"model": ReportingFailureResponse}},
+    tags=["reporting"],
+)
+def replacement_activity(
+    query: Annotated[ReplacementActivityQuery, Depends(validated_replacement_activity_query)],
+    access: Annotated[ReportingAccess | None, Depends(get_reporting_access)],
+    extracted_at: Annotated[datetime, Depends(get_extracted_at_utc)],
+) -> ReplacementActivityConnectedResponse | RunActivityNotConnectedResponse | JSONResponse:
+    """Recorded replacement activity over Pacific calendar windows."""
+    if access is None:
+        return RunActivityNotConnectedResponse()
+    boundaries = compute_channel_activity_boundaries(extracted_at)
+    try:
+        metrics = access.repository.get_replacement_activity(query, boundaries)
+    except ReportingError as exc:
+        return JSONResponse(status_code=503, content={"code": exc.code})
+    periods = {
+        key: ReplacementActivityPeriodResponse(
+            start_utc=boundaries.periods[key].start_utc,
+            end_utc=boundaries.periods[key].end_utc,
+            partial=boundaries.periods[key].partial,
+            by_attribution={
+                bucket: counts.model_dump() for bucket, counts in metrics.periods[key].items()
+            },
+        )
+        for key in PERIOD_KEYS
+    }
+    daily = [
+        ReplacementActivityDayResponse(
+            date=window.local_date,
+            start_utc=window.start_utc,
+            end_utc=window.end_utc,
+            partial=window.partial,
+            by_attribution={bucket: value.model_dump() for bucket, value in counts.items()},
+        )
+        for window, counts in zip(boundaries.daily, metrics.daily, strict=True)
+    ]
+    return ReplacementActivityConnectedResponse(
+        tls=access.tls,
+        extracted_at_utc=boundaries.extracted_at_utc,
+        filters=ReplacementActivityFilters(switch_model=query.switch_model),
+        periods=periods,
+        daily=daily,
+        administrative_exclusions=metrics.administrative_exclusions,
         incomplete=metrics.incomplete,
     )
 

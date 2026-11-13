@@ -1,3 +1,19 @@
+# Live replacement activity
+
+Updated November 13, 2026. Implemented the approved next Milestone 4B slice without connecting to SQL Server: `GET /api/v1/reporting/replacement-activity` returns R01 recorded events, R02 exact distinct assignment/channels, distinct units and R04 events/unit for all plus five attribution buckets over the shared Pacific periods and 31-day series. Null related runs remain unattributed; later voided, excluded or superseded related runs remain counted and are flagged. Administrative exclusions remain zero because none are authoritative. The optional exact model filter follows the event's historical assignment.
+
+Two fixed parameterized aggregate statements use a bound 31-day superset, `LEFT JOIN` related runs, derived distinct tables and `COUNT_BIG`; there are no concatenated keys, writes, new objects or grants. The Failures & replacements screen now begins with a separately sourced live panel, its own range control, manual refresh/abort, exact all/production values, attribution row, linkage and not-current notes, and 31-day mini chart. Existing demo KPIs/charts remain unchanged and labeled. The optional Overview replacement subline was not added, avoiding an additional request on that tile.
+
+Offline verification passed 247 backend tests, Ruff check/format, `pip check`, frontend typecheck/lint, the Vite runner-fallback build, and the 22-check real-browser suite. Browser interception covered not-connected, unreachable, sanitized 503 and synthetic connected paths, all four live ranges, attribution/notes, refresh, 31 daily bars, both themes and 1440/768/390px responsive layouts. Light 1440px and dark 390px Failures captures were visually inspected. No real backend/database, real record, target detail, credential, commit or push was used. Live API values, query execution/plan/cost and live-browser number matching remain unverified.
+
+Reviewer live check, November 13, 2026, against the authorized test database:
+
+- **API:** the endpoint returned `test_database` for every period, with and without the model filter.
+- **Reconciliation:** the last-30-day results matched the per-assignment replacement records from the hardware endpoint exactly, including the attribution buckets, distinct channels and units, recommendation linkage, and the related-run-not-current count (records linked to a later voided/excluded run).
+- **Browser:** the Failures panel matched the API for the ranges checked. The layout had no page overflow at 375px.
+
+Not verified live: query plan/cost at production volume, and 503 rendering against the real backend (covered by synthetic browser interception).
+
 # Live channel activity
 
 Updated November 13, 2026. Implemented the approved first Milestone 4B volume metric slice without connecting to SQL Server. `GET /api/v1/reporting/channel-activity` computes Pacific today/yesterday/this-week/last-30-complete-date boundaries from one injectable extraction instant and returns direct exact period aggregates plus 30 complete local dates and partial today. The Overview's Channels tested tile and daily chart switch together to V06 activity coverage when connected, label every included purpose, retain the complete demo on any unavailable state, and never combine live and demo data within either view.
@@ -16,7 +32,7 @@ Verification in this environment:
 Reviewer follow-up and live check, November 13, 2026:
 
 - **Dependency and tests:** the reviewer installed `tzdata==2025.2` into `backend/.venv`. All 236 backend tests then passed, including the DST and week-edge boundary tests, along with `pip check`, ruff and the frontend checks.
-- **Encoding fix:** mis-encoded middle dots (`Â·`) in the Overview live labels were fixed, along with the browser check that had asserted the mis-encoded text. The live subline now uses singular "attempt"/"unit" for 1.
+- **Encoding fix:** a previously mis-encoded middle-dot sequence in the Overview live labels was fixed, along with the browser check that had asserted it. The live subline now uses singular "attempt"/"unit" for 1.
 - **Live API check** against the authorized test database, with default production plus engineering, both purposes, and engineering with SM and model filters:
   - every period, daily length and filter returned `test_database`;
   - Pacific boundaries were correct on both sides of the November 1 DST change, and the week started Monday;

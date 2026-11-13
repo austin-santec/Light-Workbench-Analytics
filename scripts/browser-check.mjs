@@ -13,6 +13,7 @@ let runActivityMode = 'not_connected';
 const runActivityRequests = [];
 const configurationTimingRequests = [];
 const channelActivityRequests = [];
+const replacementActivityRequests = [];
 const unitSearchRequests = [];
 const purposeTotals = { production: 2, engineering: 3, training: 1, calibration: 4 };
 const purposeOpenRuns = { production: 0, engineering: 1, training: 0, calibration: 0 };
@@ -133,6 +134,42 @@ const channelActivityFixture = url => {
     incomplete: false,
   };
 };
+const replacementActivityFixture = url => {
+  const counts = (events, channels, units, linked = 0, notCurrent = 0) => ({
+    events, channels_replaced: channels, units,
+    events_per_unit: units ? events / units : null,
+    from_recommendation: linked, related_run_not_current: notCurrent,
+  });
+  const buckets = multiplier => ({
+    all: counts(12 * multiplier, 9 * multiplier, 6 * multiplier, 5 * multiplier, multiplier),
+    production: counts(7 * multiplier, 6 * multiplier, 4 * multiplier, 3 * multiplier, multiplier),
+    engineering: counts(2 * multiplier, 2 * multiplier, 2 * multiplier),
+    training: counts(multiplier, multiplier, multiplier),
+    calibration: counts(multiplier, multiplier, multiplier),
+    unattributed: counts(multiplier, multiplier, multiplier, multiplier),
+  });
+  const daily = Array.from({ length: 31 }, (_, index) => {
+    const date = new Date(Date.UTC(2026, 9, 14 + index));
+    const label = date.toISOString().slice(0, 10);
+    return {
+      date: label, start_utc: `${label}T07:00:00Z`,
+      end_utc: index === 30 ? '2026-11-13T20:00:00Z' : `${new Date(date.getTime() + 86400000).toISOString().slice(0, 10)}T07:00:00Z`,
+      partial: index === 30, by_attribution: buckets(index % 4 === 0 ? 0 : 1),
+    };
+  });
+  const period = (start, end, partial, multiplier) => ({ start_utc: start, end_utc: end, partial, by_attribution: buckets(multiplier) });
+  return {
+    data_source: 'test_database', tls: 'encrypted_unverified', extracted_at_utc: '2026-11-13T20:00:00Z', timezone: 'America/Los_Angeles',
+    filters: { switch_model: url.searchParams.get('switch_model') },
+    periods: {
+      today: period('2026-11-13T08:00:00Z', '2026-11-13T20:00:00Z', true, 1),
+      yesterday: period('2026-11-12T08:00:00Z', '2026-11-13T08:00:00Z', false, 2),
+      this_week: period('2026-11-09T08:00:00Z', '2026-11-13T20:00:00Z', true, 3),
+      last_30_days: period('2026-10-14T07:00:00Z', '2026-11-13T08:00:00Z', false, 4),
+    },
+    daily, administrative_exclusions: 0, incomplete: false,
+  };
+};
 await page.route('**/api/v1/reporting/run-activity?*', async route => {
   const url = new URL(route.request().url());
   runActivityRequests.push(url);
@@ -160,6 +197,15 @@ await page.route('**/api/v1/reporting/channel-activity?*', async route => {
     body: JSON.stringify(runActivityMode === 'not_connected' ? { data_source: 'not_connected' } : channelActivityFixture(url)),
   });
 });
+await page.route('**/api/v1/reporting/replacement-activity*', async route => {
+  const url = new URL(route.request().url());
+  replacementActivityRequests.push(url);
+  await route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify(runActivityMode === 'not_connected' ? { data_source: 'not_connected' } : replacementActivityFixture(url)),
+  });
+});
 await page.route('**/api/v1/units/search?*', async route => {
   unitSearchRequests.push(new URL(route.request().url()));
   await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data_source: 'not_connected' }) });
@@ -169,7 +215,7 @@ page.on('console', message => { if (message.type() === 'error') errors.push(mess
 page.on('response', response => { if (response.status() >= 400) errors.push(`HTTP ${response.status()}: ${response.url()}`); });
 page.on('requestfailed', request => {
   const pathname = new URL(request.url()).pathname;
-  const expectedUnmountCancellation = ['/api/v1/reporting/run-activity', '/api/v1/reporting/test-time-by-configuration', '/api/v1/reporting/channel-activity', '/api/v1/units/search'].includes(pathname) && request.failure()?.errorText === 'net::ERR_ABORTED';
+  const expectedUnmountCancellation = ['/api/v1/reporting/run-activity', '/api/v1/reporting/test-time-by-configuration', '/api/v1/reporting/channel-activity', '/api/v1/reporting/replacement-activity', '/api/v1/units/search'].includes(pathname) && request.failure()?.errorText === 'net::ERR_ABORTED';
   if (!expectedUnmountCancellation) errors.push(`Request failed: ${request.url()} ${request.failure()?.errorText}`);
 });
 const check = label => { checks.push(label); console.log(`PASS ${label}`); };
@@ -212,15 +258,38 @@ try {
   await page.getByRole('region', { name: 'Key metrics' }).getByText('Demo', { exact: true }).waitFor();
   check('Live card not-connected state and 30 complete UTC day request window');
 
+  await visit('/failures');
+  const replacementPanel = page.getByRole('region', { name: 'Replacement activity' });
+  await replacementPanel.getByText('Live data is off. Start the backend with reporting settings to see test-database numbers.').waitFor();
+  await replacementPanel.getByText('Live · test database', { exact: true }).waitFor();
+  assert.equal(replacementActivityRequests.at(-1).searchParams.has('switch_model'), false);
+  check('Replacement activity demo path keeps the live panel honestly not connected');
+  await visit('/');
+
   const downPage = await browser.newPage({ viewport: { width: 900, height: 800 } });
   await downPage.route('**/api/v1/reporting/run-activity?*', route => route.abort('connectionrefused'));
   await downPage.route('**/api/v1/reporting/test-time-by-configuration?*', route => route.abort('connectionrefused'));
   await downPage.route('**/api/v1/reporting/channel-activity?*', route => route.abort('connectionrefused'));
+  await downPage.route('**/api/v1/reporting/replacement-activity*', route => route.abort('connectionrefused'));
   try {
     await downPage.goto(`${base}/#/`, { waitUntil: 'domcontentloaded' });
     await downPage.getByRole('region', { name: 'Run activity' }).getByText('Backend not reachable on 127.0.0.1:8000').first().waitFor();
     check('Live card backend-down state');
+    await downPage.goto(`${base}/#/failures`, { waitUntil: 'domcontentloaded' });
+    await downPage.getByRole('region', { name: 'Replacement activity' }).getByText('Backend not reachable on 127.0.0.1:8000').waitFor();
+    check('Replacement activity backend-down state');
   } finally { await downPage.close(); }
+
+  const databaseFailurePage = await browser.newPage({ viewport: { width: 900, height: 800 } });
+  await databaseFailurePage.route('**/api/v1/reporting/replacement-activity*', route => route.fulfill({
+    status: 503, contentType: 'application/json', body: JSON.stringify({ code: 'query_timeout' }),
+  }));
+  try {
+    await databaseFailurePage.goto(`${base}/#/failures`, { waitUntil: 'domcontentloaded' });
+    await databaseFailurePage.getByRole('region', { name: 'Replacement activity' }).getByText('Database check failed').waitFor();
+    await databaseFailurePage.getByText('query_timeout', { exact: true }).waitFor();
+    check('Replacement activity sanitized database-failure state');
+  } finally { await databaseFailurePage.close(); }
 
   runActivityMode = 'connected';
   await liveCard.getByRole('button', { name: 'Refresh live data' }).click();
@@ -241,6 +310,21 @@ try {
   assert.equal(await page.getByRole('img', { name: /^Live bar chart of channels/ }).locator('rect').count(), 31);
   await assertText(page.getByText('Thirty complete local dates plus today in Pacific time; today is partial.'), 'Pacific time');
   check('Live card connected counts, configuration timing, samples, TLS, and live purpose-chip counts');
+
+  await visit('/failures');
+  await replacementPanel.getByText('Channels replaced').waitFor();
+  await assertText(replacementPanel, 'of which production: 24');
+  await assertText(replacementPanel, '48 events / 24 units');
+  await assertText(replacementPanel, 'no related run recorded');
+  await assertText(replacementPanel, 'Related run since voided/superseded: 4');
+  await assertText(replacementPanel, 'Administrative-error exclusions: 0');
+  assert.equal(await replacementPanel.getByRole('img', { name: /Daily replacement events/ }).locator('span').count(), 31);
+  await replacementPanel.getByRole('button', { name: 'Today', exact: true }).click();
+  await assertText(replacementPanel, '12 events / 6 units');
+  await replacementPanel.getByRole('button', { name: 'Refresh replacement activity' }).click();
+  assert.ok(replacementActivityRequests.length >= 3);
+  check('Replacement activity synthetic connected path, exact range values, attribution, notes, daily series, and refresh');
+  await visit('/');
 
   await page.reload();
   await page.locator('h1').waitFor();

@@ -5,6 +5,7 @@ import { Fragment, useState } from 'react';
 import { css } from '../lib/css';
 import { getFailuresValues } from '../mock/failures';
 import type { FailuresState } from '../types';
+import { LiveReplacementActivityPanel } from '../components/LiveReplacementActivityPanel';
 
 export default function Failures() {
  const [state, setState] = useState<FailuresState>({ ch: 48 });
@@ -34,6 +35,8 @@ export default function Failures() {
         </PreviewButton>
       </div>
     </header>
+
+    <LiveReplacementActivityPanel />
 
     <p className="preview-note">Fixed synthetic periods: the header filters and export are disabled previews.</p>
     <section aria-label="Key metrics" style={css("display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px")}>
