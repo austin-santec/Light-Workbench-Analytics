@@ -147,6 +147,16 @@ The cohort contains active assignments with population-A accepted logical activi
 
 Disabled reporting returns exactly `{"data_source":"not_connected"}` and enabled failures return the established sanitized 503 code. The Overview tile follows its range/purpose controls, removes history/comparison in live mode and shows the two other failing counts. The Failures live list uses production and shares the live replacement panel's range control, sorts no-measured-recovery first, and shows review/not-evaluated counts separately. Strict clients abort superseded requests, validate the entire response, and retain the unchanged demo UI on unavailable responses. The Overview Unit outcomes panel remains synthetic because its split needs out-of-scope Q03/Q05 evidence.
 
+### Recommendation usage
+
+`GET /api/v1/reporting/recommendation-usage?period=today|yesterday|this_week|last_30_days&purpose=<purpose>[&purpose=...]` returns R06 saved-recommendation linkage for analyses saved in the selected Pacific period. Defaults are `last_30_days` and `production`; purposes are one to four unique values. The response echoes the period and purpose filters, reports extraction time T, and uses the same `not_connected`, validation and sanitized 503 behavior as current unit status.
+
+`analyses` reports the valid cohort, valid analyses with at least one recommendation, and period/purpose-matching analyses excluded only because their context run is excluded, superseded or has a superseding pointer. `recommendations` and `linked` contain distinct recommendation-ID totals split into `required`, `optional` and `other`. Linkage searches replacement records through T, including a replacement outside P. `linked_share` is a four-place decimal string or null at zero recommendations. The linked and all-cohort predicted-improvement objects each return a four-place decimal string plus n, or null at n=0; these values are saved analysis predictions, not measured outcomes.
+
+`unlinked_events` counts period replacement records without a source recommendation whose related run has a selected purpose. `unlinked_unattributed` separately counts unlinked period records with no related run. `linked_events_in_period` is selected-purpose event-time context and is not the linkage numerator, which counts distinct cohort recommendation IDs through T. Missing linkage is unknown recording, not evidence that guidance was ignored.
+
+The Failures panel uses production and the same lifted range as replacement activity and current unit status. Connected content carries the live badge, four R06/context tiles, manual refresh and the required interpretation note. Loading, reporting-off, unreachable, invalid and database-failure states keep the original demo subtitle and all four original demo tiles unchanged. The strict client aborts superseded requests and validates the complete response, category arithmetic, n values, decimal strings and filter echo.
+
 ### Overview frontend consumption
 
 During Vite development, `/api` is proxied to loopback `http://127.0.0.1:8000`; production build output has no proxy configuration. The Overview card computes the last 30 complete UTC days and sends the exclusive current-UTC-midnight boundary, keeping the window at exactly 30 days. It refetches on mount, Run purpose changes and manual refresh only.

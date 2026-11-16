@@ -21,6 +21,8 @@ from app.reporting.models import (
     DurationStatistics,
     FailureRateCounts,
     FailureRateMetrics,
+    RecommendationUsageMetrics,
+    RecommendationUsageQuery,
     ReplacementActivityCounts,
     ReplacementActivityMetrics,
     ReplacementActivityQuery,
@@ -34,6 +36,7 @@ from app.reporting.models import (
     TimingQuality,
     UnitStatusQuery,
 )
+from app.reporting.recommendation_usage import read_recommendation_usage
 from app.reporting.schema import (
     CATALOG_ROW_CAP,
     COLUMN_SQL,
@@ -1080,6 +1083,9 @@ class ReportingRepository(Protocol):
     def get_unit_status(
         self, query: UnitStatusQuery, boundaries: ChannelActivityBoundaries
     ) -> UnitStatusMetrics: ...
+    def get_recommendation_usage(
+        self, query: RecommendationUsageQuery, boundaries: ChannelActivityBoundaries
+    ) -> RecommendationUsageMetrics: ...
     def search_units(self, text: str) -> dict: ...
     def get_unit_detail(self, unit_id: int) -> dict | None: ...
     def get_run_channels(self, run_id: int) -> dict | None: ...
@@ -1230,6 +1236,14 @@ class SqlServerReportingRepository:
         with self._adapter.cursor() as cursor:
             self._preflight(cursor)
             return read_unit_status(cursor, query, boundaries.periods[query.period])
+
+    def get_recommendation_usage(
+        self, query: RecommendationUsageQuery, boundaries: ChannelActivityBoundaries
+    ) -> RecommendationUsageMetrics:
+        query = RecommendationUsageQuery.model_validate(query.model_dump())
+        with self._adapter.cursor() as cursor:
+            self._preflight(cursor)
+            return read_recommendation_usage(cursor, query, boundaries)
 
     def search_units(self, text: str) -> dict:
         with self._adapter.cursor() as cursor:

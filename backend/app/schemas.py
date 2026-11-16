@@ -24,6 +24,7 @@ JsonDecimal = Annotated[
     Decimal,
     PlainSerializer(_decimal_json_number, return_type=float, when_used="json"),
 ]
+FourPlaceDecimalString = Annotated[str, StringConstraints(pattern=r"^-?\d+\.\d{4}$")]
 
 
 class HealthResponse(BaseModel):
@@ -124,6 +125,13 @@ class ReplacementActivityQueryParams(BaseModel):
 
 
 class UnitStatusQueryParams(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    period: Literal["today", "yesterday", "this_week", "last_30_days"] = "last_30_days"
+    purpose: list[RunPurpose] = Field(default_factory=lambda: [RunPurpose.PRODUCTION])
+
+
+class RecommendationUsageQueryParams(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     period: Literal["today", "yesterday", "this_week", "last_30_days"] = "last_30_days"
@@ -466,6 +474,42 @@ class UnitStatusConnectedResponse(BaseModel):
     counts: UnitStatusCounts
     units: list[UnitStatusItem]
     incomplete: bool
+
+
+class RecommendationUsageAnalyses(BaseModel):
+    cohort: int = Field(ge=0)
+    with_recommendations: int = Field(ge=0)
+    on_invalid_runs: int = Field(ge=0)
+
+
+class RecommendationUsageCountsResponse(BaseModel):
+    total: int = Field(ge=0)
+    required: int = Field(ge=0)
+    optional: int = Field(ge=0)
+    other: int = Field(ge=0)
+
+
+class RecommendationUsageAverageResponse(BaseModel):
+    value: FourPlaceDecimalString | None
+    n: int = Field(ge=0)
+
+
+class RecommendationUsageConnectedResponse(BaseModel):
+    data_source: Literal["test_database"] = "test_database"
+    tls: Literal["verified", "encrypted_unverified"]
+    extracted_at_utc: AwareDatetime
+    timezone: Literal["America/Los_Angeles"] = "America/Los_Angeles"
+    period: UnitStatusPeriodResponse
+    filters: UnitStatusFilters
+    analyses: RecommendationUsageAnalyses
+    recommendations: RecommendationUsageCountsResponse
+    linked: RecommendationUsageCountsResponse
+    linked_share: FourPlaceDecimalString | None
+    avg_improvement_linked_db: RecommendationUsageAverageResponse
+    avg_improvement_all_db: RecommendationUsageAverageResponse
+    unlinked_events: int = Field(ge=0)
+    unlinked_unattributed: int = Field(ge=0)
+    linked_events_in_period: int = Field(ge=0)
 
 
 class ReportingFailureResponse(BaseModel):

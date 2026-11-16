@@ -11,12 +11,14 @@ const errors = [];
 const checks = [];
 let runActivityMode = 'not_connected';
 let queryResponseMode = 'success';
+let recommendationUsageMode = 'values';
 const runActivityRequests = [];
 const configurationTimingRequests = [];
 const channelActivityRequests = [];
 const failureRateRequests = [];
 const replacementActivityRequests = [];
 const unitStatusRequests = [];
+const recommendationUsageRequests = [];
 const unitSearchRequests = [];
 const purposeTotals = { production: 2, engineering: 3, training: 1, calibration: 4 };
 const purposeOpenRuns = { production: 0, engineering: 1, training: 0, calibration: 0 };
@@ -248,6 +250,30 @@ const unitStatusFixture = url => {
     incomplete: false,
   };
 };
+const recommendationUsageFixture = url => {
+  const period = url.searchParams.get('period') || 'last_30_days';
+  const purposes = url.searchParams.getAll('purpose').length ? url.searchParams.getAll('purpose') : ['production'];
+  const windows = {
+    today: ['2026-11-13T08:00:00Z', '2026-11-13T20:00:00Z', true],
+    yesterday: ['2026-11-12T08:00:00Z', '2026-11-13T08:00:00Z', false],
+    this_week: ['2026-11-09T08:00:00Z', '2026-11-13T20:00:00Z', true],
+    last_30_days: ['2026-10-14T07:00:00Z', '2026-11-13T08:00:00Z', false],
+  };
+  const [start_utc, end_utc, partial] = windows[period];
+  const empty = recommendationUsageMode === 'nulls';
+  return {
+    data_source: 'test_database', tls: 'encrypted_unverified', extracted_at_utc: '2026-11-13T20:00:00Z', timezone: 'America/Los_Angeles',
+    period: { key: period, start_utc, end_utc, partial }, filters: { purpose: purposes },
+    analyses: { cohort: empty ? 0 : 4, with_recommendations: empty ? 0 : 3, on_invalid_runs: empty ? 0 : 2 },
+    recommendations: { total: empty ? 0 : 5, required: empty ? 0 : 2, optional: empty ? 0 : 2, other: empty ? 0 : 1 },
+    linked: { total: empty ? 0 : 3, required: empty ? 0 : 2, optional: empty ? 0 : 1, other: 0 },
+    linked_share: empty ? null : '0.6000',
+    avg_improvement_linked_db: { value: empty ? null : '0.4250', n: empty ? 0 : 3 },
+    avg_improvement_all_db: { value: empty ? null : '0.3849', n: empty ? 0 : 5 },
+    unlinked_events: empty ? 0 : 4, unlinked_unattributed: empty ? 0 : 1,
+    linked_events_in_period: empty ? 0 : 2,
+  };
+};
 const querySchemaFixture = {
   data_source: 'test_database', tls: 'encrypted_unverified', source: 'reviewed_grant_contract',
   objects: [
@@ -326,6 +352,15 @@ await page.route('**/api/v1/reporting/unit-status?*', async route => {
     body: JSON.stringify(runActivityMode === 'not_connected' ? { data_source: 'not_connected' } : unitStatusFixture(url)),
   });
 });
+await page.route('**/api/v1/reporting/recommendation-usage?*', async route => {
+  const url = new URL(route.request().url());
+  recommendationUsageRequests.push(url);
+  await route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify(runActivityMode === 'not_connected' ? { data_source: 'not_connected' } : recommendationUsageFixture(url)),
+  });
+});
 await page.route('**/api/v1/units/search?*', async route => {
   unitSearchRequests.push(new URL(route.request().url()));
   await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data_source: 'not_connected' }) });
@@ -360,7 +395,7 @@ page.on('response', response => {
 });
 page.on('requestfailed', request => {
   const pathname = new URL(request.url()).pathname;
-  const expectedUnmountCancellation = ['/api/v1/reporting/run-activity', '/api/v1/reporting/test-time-by-configuration', '/api/v1/reporting/channel-activity', '/api/v1/reporting/failure-rate', '/api/v1/reporting/replacement-activity', '/api/v1/reporting/unit-status', '/api/v1/units/search', '/api/v1/query/schema', '/api/v1/query/execute'].includes(pathname) && request.failure()?.errorText === 'net::ERR_ABORTED';
+  const expectedUnmountCancellation = ['/api/v1/reporting/run-activity', '/api/v1/reporting/test-time-by-configuration', '/api/v1/reporting/channel-activity', '/api/v1/reporting/failure-rate', '/api/v1/reporting/replacement-activity', '/api/v1/reporting/unit-status', '/api/v1/reporting/recommendation-usage', '/api/v1/units/search', '/api/v1/query/schema', '/api/v1/query/execute'].includes(pathname) && request.failure()?.errorText === 'net::ERR_ABORTED';
   if (!expectedUnmountCancellation) errors.push(`Request failed: ${request.url()} ${request.failure()?.errorText}`);
 });
 const check = label => { checks.push(label); console.log(`PASS ${label}`); };
@@ -418,7 +453,12 @@ try {
   await replacementPanel.getByText('Live data is off. Start the backend with reporting settings to see test-database numbers.').waitFor();
   await replacementPanel.getByText('Live · test database', { exact: true }).waitFor();
   assert.equal(replacementActivityRequests.at(-1).searchParams.has('switch_model'), false);
-  check('Replacement activity demo path keeps the live panel honestly not connected');
+  const recommendationPanel = page.getByRole('region', { name: 'Recommendation usage' });
+  await recommendationPanel.getByText('From vw_ReplacementRecommendationUsage: recommended swaps that were recorded as replacements.').waitFor();
+  await recommendationPanel.getByText('2,036', { exact: true }).waitFor();
+  await recommendationPanel.getByText('Used as recommended', { exact: true }).waitFor();
+  assert.equal(await recommendationPanel.getByText('Live · test database', { exact: true }).count(), 0);
+  check('Replacement activity is honestly off and recommendation usage keeps the unchanged demo path');
   await visit('/queries');
   await page.getByText('Synthetic query design preview. Schema and SQL are illustrative. No SQL is executed or sent to a server.').waitFor();
   await page.getByRole('button', { name: 'Chart', exact: true }).click();
@@ -435,6 +475,7 @@ try {
   await downPage.route('**/api/v1/reporting/failure-rate?*', route => route.abort('connectionrefused'));
   await downPage.route('**/api/v1/reporting/replacement-activity*', route => route.abort('connectionrefused'));
   await downPage.route('**/api/v1/reporting/unit-status?*', route => route.abort('connectionrefused'));
+  await downPage.route('**/api/v1/reporting/recommendation-usage?*', route => route.abort('connectionrefused'));
   try {
     await downPage.goto(`${base}/#/`, { waitUntil: 'domcontentloaded' });
     await downPage.getByRole('region', { name: 'Run activity' }).getByText('Backend not reachable on 127.0.0.1:8000').first().waitFor();
@@ -507,11 +548,36 @@ try {
   await assertText(liveUnitTable, 'Recovery available');
   assert.equal(unitStatusRequests.at(-1).searchParams.get('period'), 'today');
   assert.equal(unitStatusRequests.at(-1).searchParams.getAll('purpose').join(','), 'production');
+  await recommendationPanel.getByText('Linked to a replacement', { exact: true }).waitFor();
+  await assertText(recommendationPanel, 'Saved recommendations from analyses in Today · replacement links recorded through now.');
+  await assertText(recommendationPanel, '5');
+  await assertText(recommendationPanel, '2 required · 2 optional · 1 other');
+  await assertText(recommendationPanel, '3 60.0%');
+  await assertText(recommendationPanel, '+ 1 unattributed');
+  await assertText(recommendationPanel, '0.42 dB');
+  await assertText(recommendationPanel, '3 linked · all recommendations 0.38 dB (5)');
+  await assertText(recommendationPanel, "A missing link means usage wasn't recorded, not that the recommendation was ignored.");
+  await assertText(recommendationPanel, '2 analyses on voided or superseded runs not counted.');
+  assert.ok((await recommendationPanel.innerText()).includes('·'));
+  assert.equal(recommendationUsageRequests.at(-1).searchParams.get('period'), 'today');
+  assert.equal(recommendationUsageRequests.at(-1).searchParams.getAll('purpose').join(','), 'production');
   await assertText(page.getByText(/review required ·/), '1 review required · 1 not evaluated');
   await page.getByRole('button', { name: 'Refresh unit status' }).click();
   await replacementPanel.getByRole('button', { name: 'Refresh replacement activity' }).click();
+  const recommendationRequestsBeforeRefresh = recommendationUsageRequests.length;
+  await recommendationPanel.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await recommendationPanel.getByText('Linked to a replacement', { exact: true }).waitFor();
+  assert.ok(recommendationUsageRequests.length > recommendationRequestsBeforeRefresh);
+  recommendationUsageMode = 'nulls';
+  await recommendationPanel.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await recommendationPanel.getByText('0', { exact: true }).first().waitFor();
+  assert.ok((await recommendationPanel.innerText()).includes('—'));
+  await assertText(recommendationPanel, '0 linked · all recommendations — (0)');
+  recommendationUsageMode = 'values';
+  await recommendationPanel.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await recommendationPanel.getByText('3 60.0%', { exact: true }).waitFor();
   assert.ok(replacementActivityRequests.length >= 3);
-  check('Replacement activity and current unit status synthetic connected paths, shared range, live table, notes, and refresh');
+  check('Replacement activity, recommendation usage, and current unit status cover shared range, connected/null values, notes, and refresh');
   await visit('/');
 
   await page.reload();
@@ -526,7 +592,7 @@ try {
   await assertText(page.getByRole('region', { name: 'Key metrics' }), '8,184');
   await page.getByRole('button', { name: /^Engineering / }).click();
   await assertText(page.getByRole('heading', { level: 1 }), 'Production + engineering');
-  await assertText(page.getByRole('region', { name: 'Key metrics' }), '8,736');
+  await page.getByRole('region', { name: 'Key metrics' }).getByText('8,736', { exact: true }).waitFor();
   await page.getByText('Live · test database · Production + Engineering', { exact: true }).first().waitFor();
   assert.equal(failureRateRequests.at(-1).searchParams.getAll('purpose').join(','), 'production,engineering');
   assert.notEqual(await page.getByRole('img', { name: /^Live daily first-observation/ }).locator('path').last().getAttribute('d'), productionFailureTrend);

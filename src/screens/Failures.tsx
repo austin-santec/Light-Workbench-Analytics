@@ -7,9 +7,13 @@ import { getFailuresValues } from '../mock/failures';
 import type { FailuresState } from '../types';
 import { LiveReplacementActivityPanel, type LiveReplacementRange } from '../components/LiveReplacementActivityPanel';
 import { loadUnitStatus, type UnitStatus, type UnitStatusConnectedResponse } from '../lib/api/unitStatus';
+import { loadRecommendationUsage, type RecommendationUsageConnectedResponse } from '../lib/api/recommendationUsage';
 
 const STATUS_PERIOD: Record<LiveReplacementRange, 'today' | 'yesterday' | 'this_week' | 'last_30_days'> = {
   today: 'today', yesterday: 'yesterday', week: 'this_week', month: 'last_30_days',
+};
+const RANGE_LABEL: Record<LiveReplacementRange, string> = {
+  today: 'Today', yesterday: 'Yesterday', week: 'This week', month: 'Last 30 days',
 };
 const STATUS_LABEL: Record<UnitStatus, string> = {
   review_required: 'Review required',
@@ -34,6 +38,8 @@ export default function Failures() {
  const [liveRange, setLiveRange] = useState<LiveReplacementRange>('month');
  const [unitStatus, setUnitStatus] = useState<UnitStatusConnectedResponse | null>(null);
  const [unitStatusRefresh, setUnitStatusRefresh] = useState(0);
+ const [recommendationUsage, setRecommendationUsage] = useState<RecommendationUsageConnectedResponse | null>(null);
+ const [recommendationUsageRefresh, setRecommendationUsageRefresh] = useState(0);
  const values = getFailuresValues(state);
  const { accent, kpis, weeks, wGrid, reasons, fbars, fp, topCh, topPort, units } = values;
  useEffect(() => {
@@ -43,6 +49,21 @@ export default function Failures() {
      .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setUnitStatus(null); });
    return () => controller.abort();
  }, [liveRange, unitStatusRefresh]);
+ useEffect(() => {
+   const controller = new AbortController();
+   loadRecommendationUsage(STATUS_PERIOD[liveRange], ['production'], controller.signal)
+     .then(result => setRecommendationUsage(result.data_source === 'test_database' ? result : null))
+     .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setRecommendationUsage(null); });
+   return () => controller.abort();
+ }, [liveRange, recommendationUsageRefresh]);
+ const changeLiveRange = (range: LiveReplacementRange) => {
+   setRecommendationUsage(null);
+   setLiveRange(range);
+ };
+ const refreshRecommendationUsage = () => {
+   setRecommendationUsage(null);
+   setRecommendationUsageRefresh(value => value + 1);
+ };
  const liveFailingUnits = useMemo(() => {
    if (!unitStatus) return [];
    const priority = new Map(FAILING_STATUS.map((status, index) => [status, index]));
@@ -75,7 +96,7 @@ export default function Failures() {
       </div>
     </header>
 
-    <LiveReplacementActivityPanel range={liveRange} onRangeChange={setLiveRange} />
+    <LiveReplacementActivityPanel range={liveRange} onRangeChange={changeLiveRange} />
 
     <p className="preview-note">Fixed synthetic periods: the header filters and export are disabled previews.</p>
     <section aria-label="Key metrics" style={css("display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px")}>
@@ -199,17 +220,27 @@ export default function Failures() {
       </div>
     </section>
 
-    <section style={css("background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;display:flex;flex-wrap:wrap;gap:18px 28px;align-items:center")}>
+    <section aria-label="Recommendation usage" style={css("background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;display:flex;flex-wrap:wrap;gap:18px 28px;align-items:center")}>
       <div style={css("flex:1 1 260px;display:flex;flex-direction:column;gap:3px")}>
         <h2 style={css("margin:0;font-size:16px;font-weight:600")}>Are operators following the analysis?</h2>
-        <span style={css("font-size:12.5px;color:var(--muted)")}>From vw_ReplacementRecommendationUsage: recommended swaps that were recorded as replacements.</span>
+        <span style={css("font-size:12.5px;color:var(--muted)")}>{recommendationUsage ? `Saved recommendations from analyses in ${RANGE_LABEL[liveRange]} · replacement links recorded through now.` : 'From vw_ReplacementRecommendationUsage: recommended swaps that were recorded as replacements.'}</span>
+        {recommendationUsage && <span style={css("align-self:flex-start;margin-top:3px;font-size:10px;font-weight:650;letter-spacing:.05em;text-transform:uppercase;padding:3px 8px;border-radius:999px;background:color-mix(in srgb,var(--accent) 10%,var(--panel));color:var(--accent-ink)")}>Live · test database</span>}
+        {recommendationUsage && <button type="button" onClick={refreshRecommendationUsage} className="lnk" style={css("align-self:flex-start;min-height:28px;border:0;background:transparent;padding:0;font-size:12px")}>Refresh</button>}
       </div>
       <div style={css("flex:2 1 480px;display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px")}>
-        <div style={css("padding:10px 12px;border-radius:10px;background:var(--panel2)")}><div style={css("font-size:12px;color:var(--muted)")}>Recommendations</div><div style={css("font-size:20px;font-weight:650;font-variant-numeric:tabular-nums")}>2,036</div></div>
-        <div style={css("padding:10px 12px;border-radius:10px;background:var(--panel2)")}><div style={css("font-size:12px;color:var(--muted)")}>Used as recommended</div><div style={css("font-size:20px;font-weight:650;font-variant-numeric:tabular-nums")}>1,812 <span style={css("font-size:13px;color:var(--ok-fg)")}>89%</span></div></div>
-        <div style={css("padding:10px 12px;border-radius:10px;background:var(--panel2)")}><div style={css("font-size:12px;color:var(--muted)")}>Manual swaps</div><div style={css("font-size:20px;font-weight:650;font-variant-numeric:tabular-nums")}>145</div></div>
-        <div style={css("padding:10px 12px;border-radius:10px;background:var(--panel2)")}><div style={css("font-size:12px;color:var(--muted)")}>Avg improvement</div><div style={css("font-size:20px;font-weight:650;font-variant-numeric:tabular-nums")}>0.42 dB</div></div>
+        {recommendationUsage ? <>
+          <div style={css("padding:10px 12px;border-radius:10px;background:var(--panel2)")}><div style={css("font-size:12px;color:var(--muted)")}>Recommendations</div><div style={css("font-size:20px;font-weight:650;font-variant-numeric:tabular-nums")}>{recommendationUsage.recommendations.total.toLocaleString()}</div><div style={css("font-size:11.5px;color:var(--ink2)")}>{recommendationUsage.recommendations.required.toLocaleString()} required · {recommendationUsage.recommendations.optional.toLocaleString()} optional{recommendationUsage.recommendations.other > 0 ? ` · ${recommendationUsage.recommendations.other.toLocaleString()} other` : ''}</div></div>
+          <div style={css("padding:10px 12px;border-radius:10px;background:var(--panel2)")}><div style={css("font-size:12px;color:var(--muted)")}>Linked to a replacement</div><div style={css("font-size:20px;font-weight:650;font-variant-numeric:tabular-nums")}>{recommendationUsage.linked.total.toLocaleString()} <span style={css("font-size:13px;color:var(--ok-fg)")}>{recommendationUsage.linked_share === null ? '—' : `${(Number(recommendationUsage.linked_share) * 100).toFixed(1)}%`}</span></div><div style={css("font-size:11.5px;color:var(--ink2)")}>required {recommendationUsage.linked.required.toLocaleString()} · optional {recommendationUsage.linked.optional.toLocaleString()}</div></div>
+          <div style={css("padding:10px 12px;border-radius:10px;background:var(--panel2)")}><div style={css("font-size:12px;color:var(--muted)")}>Swaps without a linked recommendation</div><div style={css("font-size:20px;font-weight:650;font-variant-numeric:tabular-nums")}>{recommendationUsage.unlinked_events.toLocaleString()}</div>{recommendationUsage.unlinked_unattributed > 0 && <div style={css("font-size:11.5px;color:var(--ink2)")}>+ {recommendationUsage.unlinked_unattributed.toLocaleString()} unattributed</div>}</div>
+          <div style={css("padding:10px 12px;border-radius:10px;background:var(--panel2)")}><div style={css("font-size:12px;color:var(--muted)")}>Avg predicted improvement</div><div style={css("font-size:20px;font-weight:650;font-variant-numeric:tabular-nums")}>{recommendationUsage.avg_improvement_linked_db.value === null ? '—' : `${Number(recommendationUsage.avg_improvement_linked_db.value).toFixed(2)} dB`}</div><div style={css("font-size:11.5px;color:var(--ink2)")}>{recommendationUsage.avg_improvement_linked_db.n.toLocaleString()} linked · all recommendations {recommendationUsage.avg_improvement_all_db.value === null ? '—' : `${Number(recommendationUsage.avg_improvement_all_db.value).toFixed(2)} dB`} ({recommendationUsage.avg_improvement_all_db.n.toLocaleString()})</div></div>
+        </> : <>
+          <div style={css("padding:10px 12px;border-radius:10px;background:var(--panel2)")}><div style={css("font-size:12px;color:var(--muted)")}>Recommendations</div><div style={css("font-size:20px;font-weight:650;font-variant-numeric:tabular-nums")}>2,036</div></div>
+          <div style={css("padding:10px 12px;border-radius:10px;background:var(--panel2)")}><div style={css("font-size:12px;color:var(--muted)")}>Used as recommended</div><div style={css("font-size:20px;font-weight:650;font-variant-numeric:tabular-nums")}>1,812 <span style={css("font-size:13px;color:var(--ok-fg)")}>89%</span></div></div>
+          <div style={css("padding:10px 12px;border-radius:10px;background:var(--panel2)")}><div style={css("font-size:12px;color:var(--muted)")}>Manual swaps</div><div style={css("font-size:20px;font-weight:650;font-variant-numeric:tabular-nums")}>145</div></div>
+          <div style={css("padding:10px 12px;border-radius:10px;background:var(--panel2)")}><div style={css("font-size:12px;color:var(--muted)")}>Avg improvement</div><div style={css("font-size:20px;font-weight:650;font-variant-numeric:tabular-nums")}>0.42 dB</div></div>
+        </>}
       </div>
+      {recommendationUsage && <p className="preview-note" style={css("flex:1 1 100%;margin:0")}>A missing link means usage wasn't recorded, not that the recommendation was ignored. Repeated analyses count as repeated opportunities. Improvements are the analysis's predictions, not measured results.{recommendationUsage.analyses.on_invalid_runs > 0 ? ` ${recommendationUsage.analyses.on_invalid_runs.toLocaleString()} analyses on voided or superseded runs not counted.` : ''}</p>}
     </section>
 
     <section style={css("background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 18px 8px;display:flex;flex-direction:column;gap:10px")}>

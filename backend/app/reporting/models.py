@@ -92,6 +92,20 @@ class UnitStatusQuery(BaseModel):
         return value
 
 
+class RecommendationUsageQuery(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
+
+    period: Literal["today", "yesterday", "this_week", "last_30_days"] = "last_30_days"
+    purposes: tuple[RunPurpose, ...] = (RunPurpose.PRODUCTION,)
+
+    @field_validator("purposes")
+    @classmethod
+    def selected_purposes(cls, value: tuple[RunPurpose, ...]) -> tuple[RunPurpose, ...]:
+        if not 1 <= len(value) <= len(RunPurpose) or len(set(value)) != len(value):
+            raise ValueError("One to four unique purposes are required")
+        return value
+
+
 class RunMetadata(BaseModel):
     """Internal read model; serials are sensitive, and this is not an HTTP DTO."""
 
@@ -240,3 +254,35 @@ class ReplacementActivityMetrics(BaseModel):
     daily: tuple[dict[str, ReplacementActivityCounts], ...]
     administrative_exclusions: int = 0
     incomplete: bool = False
+
+
+class RecommendationUsageCounts(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    total: int = Field(ge=0)
+    required: int = Field(ge=0)
+    optional: int = Field(ge=0)
+    other: int = Field(ge=0)
+
+
+class RecommendationUsageAverage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    value: str | None
+    n: int = Field(ge=0)
+
+
+class RecommendationUsageMetrics(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    analyses_cohort: int = Field(ge=0)
+    analyses_with_recommendations: int = Field(ge=0)
+    analyses_on_invalid_runs: int = Field(ge=0)
+    recommendations: RecommendationUsageCounts
+    linked: RecommendationUsageCounts
+    linked_share: str | None
+    avg_improvement_linked_db: RecommendationUsageAverage
+    avg_improvement_all_db: RecommendationUsageAverage
+    unlinked_events: int = Field(ge=0)
+    unlinked_unattributed: int = Field(ge=0)
+    linked_events_in_period: int = Field(ge=0)

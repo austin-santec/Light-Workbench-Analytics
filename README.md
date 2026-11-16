@@ -1,6 +1,6 @@
 # Light Workbench Analytics
 
-A browser-based analytics design foundation for Light Workbench. Milestones 0–2 retain the Claude dashboard and establish an independent synthetic FastAPI foundation. Milestone 3 adds an offline-tested, opt-in SQL Server reporting adapter; approved bounded diagnostics now cover run/configuration timing, channel and replacement activity, Q02 first-observation channel failure rate, current unit status, and unit lookup. The frontend still runs independently using its own fixtures and switches only approved views to connected test-database data. No authentication, final production metrics, hardware integration, or hosting is implemented.
+A browser-based analytics design foundation for Light Workbench. Milestones 0–2 retain the Claude dashboard and establish an independent synthetic FastAPI foundation. Milestone 3 adds an offline-tested, opt-in SQL Server reporting adapter; approved bounded diagnostics now cover run/configuration timing, channel and replacement activity, R06 saved-recommendation linkage, Q02 first-observation channel failure rate, current unit status, and unit lookup. The frontend still runs independently using its own fixtures and switches only approved views to connected test-database data. No authentication, final production metrics, hardware integration, or hosting is implemented.
 
 ## Run locally
 
@@ -87,7 +87,7 @@ See [API contracts](docs/API_CONTRACTS.md) for query parameters, response exampl
 
 ## Optional local reporting
 
-Read [reporting database guidance](docs/REPORTING_DATABASE.md) before configuring any target. The repository supports schema/permission checks, bounded run reads, run diagnostics, Pacific-calendar channel/replacement/Q02 aggregates, the D16 current-unit projection, and the owner-approved local read-only query console. Reporting is lazy and disabled by default; synthetic fixtures remain independently runnable. The runtime dependency `tzdata` supplies the IANA Pacific rules on Windows and is constrained in `backend/requirements-dev.lock`.
+Read [reporting database guidance](docs/REPORTING_DATABASE.md) before configuring any target. The repository supports schema/permission checks, bounded run reads, run diagnostics, Pacific-calendar channel/replacement/R06/Q02 aggregates, the D16 current-unit projection, and the owner-approved local read-only query console. Reporting is lazy and disabled by default; synthetic fixtures remain independently runnable. The runtime dependency `tzdata` supplies the IANA Pacific rules on Windows and is constrained in `backend/requirements-dev.lock`.
 
 The query console is on whenever reporting is enabled. `LWA_REPORTING_CONSOLE_TIMEOUT_SECONDS` defaults to `30` and accepts 1–60 seconds. `LWA_REPORTING_CONSOLE_ROW_CAP` defaults to `5000` and accepts 1–20,000 rows. These bounds do not replace the dedicated identity's SQL permissions. Query text, values, results, and returned SQL Server messages are not logged.
 
@@ -123,6 +123,7 @@ docs/                    Design audit, proposed plan, status, notices
 
 - Navigate among all four original screens. Theme preference persists locally; keyboard navigation focuses the shared page frame and skip link. Failed lazy imports offer reload recovery.
 - Overview range/purpose controls update synthetic counts, yields, outcomes and recent activity. Average time follows range/configuration only; configuration buttons select the histogram. The separate run diagnostics use the last 30 complete UTC days. When reporting is connected, the Channels tested and Channel failure rate tile/chart pairs use bounded Pacific-calendar APIs, label every included purpose, and otherwise retain their synthetic demo values.
+- Failures uses one lifted live range for replacement activity, current unit status and production R06 recommendation linkage. Recommendation loading/off/error states retain the original four demo tiles; a connected response shows linkage and predicted-improvement context with the missing-link caveat.
 - Recent activity supports trimmed, case-insensitive serial search, model/station filters, sorting, reset, and empty states. It is a small fixture list, not the full aggregate dataset.
 - Unit lookup contains one detailed fixture, `DEMO-18793` / `DEMO-SW-001`. Other serials show an empty state; wavelength controls work.
 - Query stays the original fixed synthetic design when reporting is unavailable. Connected mode shows the reviewed granted schema, editable read-only SQL, bounded table/chart results, TSV copy, CSV export, inline sanitized errors, and browser-local draft/history. Cancel aborts only the browser request.

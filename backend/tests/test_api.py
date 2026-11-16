@@ -468,6 +468,7 @@ def test_openapi_matches_error_and_query_contracts(client):
         "/api/v1/reporting/run-activity",
         "/api/v1/reporting/channel-activity",
         "/api/v1/reporting/failure-rate",
+        "/api/v1/reporting/recommendation-usage",
         "/api/v1/reporting/replacement-activity",
         "/api/v1/reporting/test-time-by-configuration",
         "/api/v1/reporting/unit-status",

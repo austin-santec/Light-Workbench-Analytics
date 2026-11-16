@@ -18,6 +18,7 @@ from app.reporting.config import ReportingSettings
 from app.reporting.console_guard import StatementRejected
 from app.reporting.models import (
     ChannelActivityQuery,
+    RecommendationUsageQuery,
     ReplacementActivityQuery,
     RunQuery,
     UnitStatusQuery,
@@ -48,6 +49,11 @@ from app.schemas import (
     QueryResultColumnResponse,
     QuerySchemaConnectedResponse,
     QuerySchemaObjectResponse,
+    RecommendationUsageAnalyses,
+    RecommendationUsageAverageResponse,
+    RecommendationUsageConnectedResponse,
+    RecommendationUsageCountsResponse,
+    RecommendationUsageQueryParams,
     ReplacementActivityConnectedResponse,
     ReplacementActivityDayResponse,
     ReplacementActivityFilters,
@@ -173,6 +179,19 @@ def validated_unit_status_query(
 ) -> UnitStatusQuery:
     try:
         return UnitStatusQuery(period=params.period, purposes=tuple(params.purpose))
+    except ValidationError as exc:
+        errors = [
+            item | {"loc": ("query", *item["loc"])}
+            for item in exc.errors(include_url=False, include_input=False, include_context=False)
+        ]
+        raise RequestValidationError(errors) from None
+
+
+def validated_recommendation_usage_query(
+    params: Annotated[RecommendationUsageQueryParams, Query()],
+) -> RecommendationUsageQuery:
+    try:
+        return RecommendationUsageQuery(period=params.period, purposes=tuple(params.purpose))
     except ValidationError as exc:
         errors = [
             item | {"loc": ("query", *item["loc"])}
@@ -545,6 +564,56 @@ def unit_status(
         counts=metrics.counts,
         units=[asdict(unit) for unit in metrics.units],
         incomplete=metrics.incomplete,
+    )
+
+
+@router.get(
+    "/reporting/recommendation-usage",
+    response_model=RecommendationUsageConnectedResponse | RunActivityNotConnectedResponse,
+    responses={503: {"model": ReportingFailureResponse}},
+    tags=["reporting"],
+)
+def recommendation_usage(
+    query: Annotated[RecommendationUsageQuery, Depends(validated_recommendation_usage_query)],
+    access: Annotated[ReportingAccess | None, Depends(get_reporting_access)],
+    extracted_at: Annotated[datetime, Depends(get_extracted_at_utc)],
+) -> RecommendationUsageConnectedResponse | RunActivityNotConnectedResponse | JSONResponse:
+    """Saved-recommendation linkage and predicted-improvement aggregates."""
+    if access is None:
+        return RunActivityNotConnectedResponse()
+    boundaries = compute_channel_activity_boundaries(extracted_at)
+    try:
+        metrics = access.repository.get_recommendation_usage(query, boundaries)
+    except ReportingError as exc:
+        return JSONResponse(status_code=503, content={"code": exc.code})
+    window = boundaries.periods[query.period]
+    return RecommendationUsageConnectedResponse(
+        tls=access.tls,
+        extracted_at_utc=boundaries.extracted_at_utc,
+        period=UnitStatusPeriodResponse(
+            key=query.period,
+            start_utc=window.start_utc,
+            end_utc=window.end_utc,
+            partial=window.partial,
+        ),
+        filters=UnitStatusFilters(purpose=list(query.purposes)),
+        analyses=RecommendationUsageAnalyses(
+            cohort=metrics.analyses_cohort,
+            with_recommendations=metrics.analyses_with_recommendations,
+            on_invalid_runs=metrics.analyses_on_invalid_runs,
+        ),
+        recommendations=RecommendationUsageCountsResponse(**metrics.recommendations.model_dump()),
+        linked=RecommendationUsageCountsResponse(**metrics.linked.model_dump()),
+        linked_share=metrics.linked_share,
+        avg_improvement_linked_db=RecommendationUsageAverageResponse(
+            **metrics.avg_improvement_linked_db.model_dump()
+        ),
+        avg_improvement_all_db=RecommendationUsageAverageResponse(
+            **metrics.avg_improvement_all_db.model_dump()
+        ),
+        unlinked_events=metrics.unlinked_events,
+        unlinked_unattributed=metrics.unlinked_unattributed,
+        linked_events_in_period=metrics.linked_events_in_period,
     )
 
 
