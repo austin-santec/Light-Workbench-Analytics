@@ -1,6 +1,6 @@
 # Light Workbench Analytics
 
-A browser-based analytics design foundation for Light Workbench. Milestones 0–2 retain the Claude dashboard and establish an independent synthetic FastAPI foundation. Milestone 3 adds an offline-tested, opt-in SQL Server reporting adapter; approved bounded diagnostics now cover run/configuration timing, channel and replacement activity, Q02 first-observation channel failure rate, and unit lookup. The frontend still runs independently using its own fixtures and switches only approved views to connected test-database data. No authentication, final production metrics, hardware integration, or hosting is implemented.
+A browser-based analytics design foundation for Light Workbench. Milestones 0–2 retain the Claude dashboard and establish an independent synthetic FastAPI foundation. Milestone 3 adds an offline-tested, opt-in SQL Server reporting adapter; approved bounded diagnostics now cover run/configuration timing, channel and replacement activity, Q02 first-observation channel failure rate, current unit status, and unit lookup. The frontend still runs independently using its own fixtures and switches only approved views to connected test-database data. No authentication, final production metrics, hardware integration, or hosting is implemented.
 
 ## Run locally
 
@@ -87,7 +87,7 @@ See [API contracts](docs/API_CONTRACTS.md) for query parameters, response exampl
 
 ## Optional local reporting
 
-Read [reporting database guidance](docs/REPORTING_DATABASE.md) before configuring any target. The repository supports schema/permission checks, bounded run reads, run diagnostics, and Pacific-calendar channel-activity, replacement-activity and Q02 failure-rate aggregates. Reporting is lazy and disabled by default; synthetic fixtures remain independently runnable. The runtime dependency `tzdata` supplies the IANA Pacific rules on Windows and is constrained in `backend/requirements-dev.lock`.
+Read [reporting database guidance](docs/REPORTING_DATABASE.md) before configuring any target. The repository supports schema/permission checks, bounded run reads, run diagnostics, Pacific-calendar channel/replacement/Q02 aggregates, and the D16 current-unit projection. Reporting is lazy and disabled by default; synthetic fixtures remain independently runnable. The runtime dependency `tzdata` supplies the IANA Pacific rules on Windows and is constrained in `backend/requirements-dev.lock`.
 
 From `backend/`, installing the optional 64-bit adapter and checking the default disabled state is safe without SQL Server:
 

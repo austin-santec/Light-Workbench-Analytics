@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Annotated, Literal
 
@@ -15,7 +15,12 @@ from app.reporting.channel_activity import (
     compute_channel_activity_boundaries,
 )
 from app.reporting.config import ReportingSettings
-from app.reporting.models import ChannelActivityQuery, ReplacementActivityQuery, RunQuery
+from app.reporting.models import (
+    ChannelActivityQuery,
+    ReplacementActivityQuery,
+    RunQuery,
+    UnitStatusQuery,
+)
 from app.reporting.repository import ReportingRepository, SqlServerReportingRepository
 from app.schemas import (
     AssignmentHardwareConnectedResponse,
@@ -51,6 +56,10 @@ from app.schemas import (
     UnitDetailConnectedResponse,
     UnitSearchConnectedResponse,
     UnitSearchQueryParams,
+    UnitStatusConnectedResponse,
+    UnitStatusFilters,
+    UnitStatusPeriodResponse,
+    UnitStatusQueryParams,
 )
 from app.services.demo import list_demo_runs
 
@@ -137,6 +146,19 @@ def validated_replacement_activity_query(
 ) -> ReplacementActivityQuery:
     try:
         return ReplacementActivityQuery(switch_model=params.switch_model)
+    except ValidationError as exc:
+        errors = [
+            item | {"loc": ("query", *item["loc"])}
+            for item in exc.errors(include_url=False, include_input=False, include_context=False)
+        ]
+        raise RequestValidationError(errors) from None
+
+
+def validated_unit_status_query(
+    params: Annotated[UnitStatusQueryParams, Query()],
+) -> UnitStatusQuery:
+    try:
+        return UnitStatusQuery(period=params.period, purposes=tuple(params.purpose))
     except ValidationError as exc:
         errors = [
             item | {"loc": ("query", *item["loc"])}
@@ -398,6 +420,43 @@ def replacement_activity(
         periods=periods,
         daily=daily,
         administrative_exclusions=metrics.administrative_exclusions,
+        incomplete=metrics.incomplete,
+    )
+
+
+@router.get(
+    "/reporting/unit-status",
+    response_model=UnitStatusConnectedResponse | RunActivityNotConnectedResponse,
+    responses={503: {"model": ReportingFailureResponse}},
+    tags=["reporting"],
+)
+def unit_status(
+    query: Annotated[UnitStatusQuery, Depends(validated_unit_status_query)],
+    access: Annotated[ReportingAccess | None, Depends(get_reporting_access)],
+    extracted_at: Annotated[datetime, Depends(get_extracted_at_utc)],
+) -> UnitStatusConnectedResponse | RunActivityNotConnectedResponse | JSONResponse:
+    """Current effective status for the bounded D08 assignment cohort."""
+    if access is None:
+        return RunActivityNotConnectedResponse()
+    boundaries = compute_channel_activity_boundaries(extracted_at)
+    try:
+        metrics = access.repository.get_unit_status(query, boundaries)
+    except ReportingError as exc:
+        return JSONResponse(status_code=503, content={"code": exc.code})
+    window = boundaries.periods[query.period]
+    return UnitStatusConnectedResponse(
+        tls=access.tls,
+        extracted_at_utc=boundaries.extracted_at_utc,
+        timezone=PACIFIC_TIMEZONE_NAME,
+        period=UnitStatusPeriodResponse(
+            key=query.period,
+            start_utc=window.start_utc,
+            end_utc=window.end_utc,
+            partial=window.partial,
+        ),
+        filters=UnitStatusFilters(purpose=list(query.purposes)),
+        counts=metrics.counts,
+        units=[asdict(unit) for unit in metrics.units],
         incomplete=metrics.incomplete,
     )
 

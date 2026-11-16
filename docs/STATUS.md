@@ -1,3 +1,27 @@
+# Live current unit status (D16)
+
+Updated November 13, 2026. Implemented the approved D16 slice without connecting to SQL Server. `GET /api/v1/reporting/unit-status` returns a capped active-assignment D08 cohort for a selected shared Pacific period/purpose set and evaluates each unit now. Typed Python mirrors the reviewed source effective-projection ordering, compatibility, wavelength/port checks and strict saved-limit classification. It separates review, missing coverage, passing, recovery available, needs analysis and no measured recovery. Analysis freshness is the approved timestamp approximation against newest effective readings and assignment replacements, not source-fingerprint equivalence or manufacturing disposition.
+
+One TOP 501 cohort read and five bounded supporting reads execute after existing preflight on the same short-lived connection; a sixth recommendation read occurs only for bounded latest analysis IDs. Generated placeholders come only from at most 500 IDs just read. All statements are explicit, parameterized and read-only; no object, column gate, grant or dependency was added. Supporting caps are 100000 rows for runs/attempts/map/replacements and 5000 recommendations; any overflow marks the response incomplete. Tests and docs contain only DEMO identifiers.
+
+The Overview Unrecoverable tile switches to **currently failing, no measured recovery** when connected, follows range/purposes, removes comparison/history, and shows needs-analysis/recovery-available counts. The Unit outcomes panel remains demo. On Failures, the existing replacement range is lifted into the screen and also controls a production current-status request; the table becomes the three failing statuses sorted no-measured-recovery first, with unit links, switch identity, effective failing channels, latest analysis freshness and separate review/not-evaluated counts. Unavailable responses retain the existing demo table. Both screens use one strict abortable client and manual refresh.
+
+Offline verification:
+
+- Backend `.venv\Scripts\python.exe -m pytest -q` passed all 270 tests; `.venv\Scripts\python.exe -m ruff check .`, `.venv\Scripts\python.exe -m ruff format --check .`, and `.venv\Scripts\python.exe -m pip check` passed.
+- Frontend `npm.cmd run typecheck` and `npm.cmd run lint` passed. Exact `npm.cmd run build` reached Vite after TypeScript and hit the known managed-filesystem config-loader restriction; `npm.cmd run build -- --configLoader runner` passed with Vite 7.3.7 and 462 modules transformed.
+- `npm.cmd run test:browser` passed all 22 checks against a task-started/stopped loopback Vite server on port 5177. Synthetic interception covered demo/not-connected, backend-down, sanitized replacement 503, connected Overview counts, all three failing rows, shared range, refresh/abort behavior, review/not-evaluated notes, both themes and 1440/768/390px layouts. Light 1440px and dark 390px Overview/Failures captures were visually inspected; there was no page overflow or normal-flow browser error.
+- `git diff --check` and the UTF-8 mojibake scan passed.
+
+No database connection, reporting-enabled backend, real record, credential, target detail, source execution/import, dependency change, commit or push occurred. Live value reconciliation, live query execution/plan/cost, and live incomplete/503 rendering remain unverified for owner/reviewer acceptance.
+
+Reviewer live check, November 16, 2026, against the authorized test database:
+
+- Last 30 days, production: 8 cohort units, 4 passing, 1 review required (too-good readings), 1 not evaluated, 1 recovery available, 1 needs analysis, 0 no measured recovery; not incomplete. This week: 1 cohort unit, not evaluated.
+- The needs-analysis unit's 7 failing channels match Unit lookup's current classified failures for its context run exactly, with no saved analysis. The recovery-available unit's single failing channel matches Unit lookup, and its latest saved analysis is current with 2 unused recommendations.
+- The Overview tile showed 0 with "+ 1 need analysis · 1 recovery available" for Last 30 days, and 0/0/0 for Today. The Failures table listed both failing units with unit links, failing channels and analysis freshness, plus the review/not-evaluated note.
+- The 0 no-measured-recovery count is expected: the test database has no current analysis without an unused recommendation. Live incomplete/503 rendering and query plans remain unverified.
+
 # Live Q02 channel failure rate
 
 Updated November 13, 2026. Implemented the approved Q02 slice without connecting to SQL Server. `GET /api/v1/reporting/failure-rate` returns first-observation run-channel N, D, nullable N/D and unknown criteria for the shared Pacific periods and 31-day series. It applies population A, ranks the first accepted attempt across each run-channel's full history before filtering its write time into P, treats a retest run as a new run-channel sequence, and uses the owner-approved strict `>` rule against each run's saved limit snapshot. This is not first-pass unit yield, unit failure or final disposition.

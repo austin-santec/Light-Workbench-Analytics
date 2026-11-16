@@ -123,6 +123,13 @@ class ReplacementActivityQueryParams(BaseModel):
     switch_model: str | None = None
 
 
+class UnitStatusQueryParams(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    period: Literal["today", "yesterday", "this_week", "last_30_days"] = "last_30_days"
+    purpose: list[RunPurpose] = Field(default_factory=lambda: [RunPurpose.PRODUCTION])
+
+
 class RunActivityWindow(BaseModel):
     started_from: AwareDatetime
     started_before: AwareDatetime
@@ -325,6 +332,75 @@ class ReplacementActivityConnectedResponse(BaseModel):
     ]
     daily: list[ReplacementActivityDayResponse]
     administrative_exclusions: int = Field(ge=0)
+    incomplete: bool
+
+
+class UnitStatusPeriodResponse(BaseModel):
+    key: Literal["today", "yesterday", "this_week", "last_30_days"]
+    start_utc: AwareDatetime
+    end_utc: AwareDatetime
+    partial: bool
+
+
+class UnitStatusFilters(BaseModel):
+    purpose: list[RunPurpose]
+
+
+class UnitStatusCounts(BaseModel):
+    cohort_units: int = Field(ge=0)
+    review_required: int = Field(ge=0)
+    not_evaluated: int = Field(ge=0)
+    passing: int = Field(ge=0)
+    failing_recovery_available: int = Field(ge=0)
+    failing_needs_analysis: int = Field(ge=0)
+    failing_no_measured_recovery: int = Field(ge=0)
+
+
+class UnitStatusFailingChannel(BaseModel):
+    logical_channel: int = Field(gt=0)
+    effective_port: int = Field(gt=0)
+    wavelength_1_il_db: JsonDecimal
+    wavelength_2_il_db: JsonDecimal
+
+
+class UnitStatusLatestAnalysis(BaseModel):
+    analysis_id: int = Field(gt=0)
+    result_status: str
+    analyzed_at_utc: AwareDatetime
+    current: bool
+    unused_recommendations: int = Field(ge=0)
+
+
+class UnitStatusItem(BaseModel):
+    unit_id: int = Field(gt=0)
+    main_board_serial: str
+    assignment_id: int = Field(gt=0)
+    switch_serial: str
+    switch_model: str
+    context_run_id: int | None = Field(default=None, gt=0)
+    status: Literal[
+        "review_required",
+        "not_evaluated",
+        "passing",
+        "failing_recovery_available",
+        "failing_needs_analysis",
+        "failing_no_measured_recovery",
+    ]
+    failing_channels: list[UnitStatusFailingChannel]
+    latest_analysis: UnitStatusLatestAnalysis | None
+    review_reasons: list[str]
+
+
+class UnitStatusConnectedResponse(BaseModel):
+    data_source: Literal["test_database"] = "test_database"
+    tls: Literal["verified", "encrypted_unverified"]
+    extracted_at_utc: AwareDatetime
+    timezone: Literal["America/Los_Angeles"] = "America/Los_Angeles"
+    period: UnitStatusPeriodResponse
+    filters: UnitStatusFilters
+    classification_rule: Literal["strict >, run limit snapshot"] = "strict >, run limit snapshot"
+    counts: UnitStatusCounts
+    units: list[UnitStatusItem]
     incomplete: bool
 
 

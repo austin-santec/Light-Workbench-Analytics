@@ -468,6 +468,7 @@ def test_openapi_matches_error_and_query_contracts(client):
         "/api/v1/reporting/failure-rate",
         "/api/v1/reporting/replacement-activity",
         "/api/v1/reporting/test-time-by-configuration",
+        "/api/v1/reporting/unit-status",
         "/api/v1/runs/{run_id}/channels",
         "/api/v1/units/search",
         "/api/v1/units/{unit_id}",
@@ -513,6 +514,14 @@ def test_openapi_matches_error_and_query_contracts(client):
         "switch_model"
     }
     assert replacement_activity["responses"]["503"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/ReportingFailureResponse"
+    }
+    unit_status = spec["paths"]["/api/v1/reporting/unit-status"]["get"]
+    assert {parameter["name"] for parameter in unit_status["parameters"]} == {
+        "period",
+        "purpose",
+    }
+    assert unit_status["responses"]["503"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/ReportingFailureResponse"
     }
     configuration = spec["paths"]["/api/v1/reporting/test-time-by-configuration"]["get"]

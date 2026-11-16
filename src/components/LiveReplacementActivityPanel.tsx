@@ -8,12 +8,12 @@ import {
   type ReplacementPeriodKey,
 } from '../lib/api/replacementActivity';
 
-type Range = 'today' | 'yesterday' | 'week' | 'month';
+export type LiveReplacementRange = 'today' | 'yesterday' | 'week' | 'month';
 const RANGE_OPTIONS = [
   { value: 'today', label: 'Today' }, { value: 'yesterday', label: 'Yesterday' },
   { value: 'week', label: 'This week' }, { value: 'month', label: 'Last 30 days' },
 ] as const;
-const PERIOD: Record<Range, ReplacementPeriodKey> = { today: 'today', yesterday: 'yesterday', week: 'this_week', month: 'last_30_days' };
+const PERIOD: Record<LiveReplacementRange, ReplacementPeriodKey> = { today: 'today', yesterday: 'yesterday', week: 'this_week', month: 'last_30_days' };
 const BUCKETS = [
   ['production', 'Production'], ['engineering', 'Engineering'], ['training', 'Training'],
   ['calibration', 'Calibration'], ['unattributed', 'Unattributed'],
@@ -46,7 +46,7 @@ function Metric({ label, value, detail }: { label: string; value: string; detail
   </div>;
 }
 
-function Connected({ data, range }: { data: ReplacementActivityConnectedResponse; range: Range }) {
+function Connected({ data, range }: { data: ReplacementActivityConnectedResponse; range: LiveReplacementRange }) {
   const period = data.periods[PERIOD[range]];
   const all = period.by_attribution.all;
   const production = period.by_attribution.production;
@@ -77,8 +77,7 @@ function Connected({ data, range }: { data: ReplacementActivityConnectedResponse
   </div>;
 }
 
-export function LiveReplacementActivityPanel() {
-  const [range, setRange] = useState<Range>('month');
+export function LiveReplacementActivityPanel({ range, onRangeChange }: { range: LiveReplacementRange; onRangeChange: (range: LiveReplacementRange) => void }) {
   const [refresh, setRefresh] = useState(0);
   const [state, setState] = useState<State>({ kind: 'loading' });
   useEffect(() => {
@@ -100,7 +99,7 @@ export function LiveReplacementActivityPanel() {
         <span style={css('font-size:12.5px;color:var(--muted)')}>Recorded replacement events and exact distinct assignment/channel counts across all attributions.</span>
       </div>
       <div style={css('display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:8px')}>
-        <SegmentedControl label="Live replacement range" options={RANGE_OPTIONS} value={range} onChange={setRange} />
+        <SegmentedControl label="Live replacement range" options={RANGE_OPTIONS} value={range} onChange={onRangeChange} />
         <button type="button" onClick={refreshPanel} style={css('min-height:32px;padding:0 9px;border-radius:7px;border:1px solid var(--line);background:var(--panel);color:var(--ink2);font-size:11.5px;font-weight:600')}>Refresh replacement activity</button>
       </div>
     </div>

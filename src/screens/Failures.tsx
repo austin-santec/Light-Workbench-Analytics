@@ -1,16 +1,55 @@
 import { CHANNEL_OPTIONS } from '../mock/presentation';
 import { PreviewButton, PreviewSelect } from '../components/PreviewControl';
 import { SegmentedControl } from '../components/SegmentedControl';
-import { Fragment, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { css } from '../lib/css';
 import { getFailuresValues } from '../mock/failures';
 import type { FailuresState } from '../types';
-import { LiveReplacementActivityPanel } from '../components/LiveReplacementActivityPanel';
+import { LiveReplacementActivityPanel, type LiveReplacementRange } from '../components/LiveReplacementActivityPanel';
+import { loadUnitStatus, type UnitStatus, type UnitStatusConnectedResponse } from '../lib/api/unitStatus';
+
+const STATUS_PERIOD: Record<LiveReplacementRange, 'today' | 'yesterday' | 'this_week' | 'last_30_days'> = {
+  today: 'today', yesterday: 'yesterday', week: 'this_week', month: 'last_30_days',
+};
+const STATUS_LABEL: Record<UnitStatus, string> = {
+  review_required: 'Review required',
+  not_evaluated: 'Not evaluated',
+  passing: 'Passing',
+  failing_recovery_available: 'Recovery available',
+  failing_needs_analysis: 'Needs analysis',
+  failing_no_measured_recovery: 'No measured recovery',
+};
+const FAILING_STATUS: UnitStatus[] = ['failing_no_measured_recovery', 'failing_needs_analysis', 'failing_recovery_available'];
+const STATUS_TONE: Record<UnitStatus, { bg: string; fg: string }> = {
+  review_required: { bg: 'var(--warn-bg)', fg: 'var(--warn-fg)' },
+  not_evaluated: { bg: 'var(--panel2)', fg: 'var(--muted)' },
+  passing: { bg: 'var(--ok-bg)', fg: 'var(--ok-fg)' },
+  failing_recovery_available: { bg: 'var(--info-bg)', fg: 'var(--info-fg)' },
+  failing_needs_analysis: { bg: 'var(--warn-bg)', fg: 'var(--warn-fg)' },
+  failing_no_measured_recovery: { bg: 'var(--bad-bg)', fg: 'var(--bad-fg)' },
+};
 
 export default function Failures() {
  const [state, setState] = useState<FailuresState>({ ch: 48 });
+ const [liveRange, setLiveRange] = useState<LiveReplacementRange>('month');
+ const [unitStatus, setUnitStatus] = useState<UnitStatusConnectedResponse | null>(null);
+ const [unitStatusRefresh, setUnitStatusRefresh] = useState(0);
  const values = getFailuresValues(state);
  const { accent, kpis, weeks, wGrid, reasons, fbars, fp, topCh, topPort, units } = values;
+ useEffect(() => {
+   const controller = new AbortController();
+   loadUnitStatus(STATUS_PERIOD[liveRange], ['production'], controller.signal)
+     .then(result => setUnitStatus(result.data_source === 'test_database' ? result : null))
+     .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setUnitStatus(null); });
+   return () => controller.abort();
+ }, [liveRange, unitStatusRefresh]);
+ const liveFailingUnits = useMemo(() => {
+   if (!unitStatus) return [];
+   const priority = new Map(FAILING_STATUS.map((status, index) => [status, index]));
+   return unitStatus.units
+     .filter(unit => FAILING_STATUS.includes(unit.status))
+     .sort((left, right) => (priority.get(left.status) ?? 9) - (priority.get(right.status) ?? 9) || left.unit_id - right.unit_id);
+ }, [unitStatus]);
  return (<>
 
     <header style={css("display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:14px")}>
@@ -36,7 +75,7 @@ export default function Failures() {
       </div>
     </header>
 
-    <LiveReplacementActivityPanel />
+    <LiveReplacementActivityPanel range={liveRange} onRangeChange={setLiveRange} />
 
     <p className="preview-note">Fixed synthetic periods: the header filters and export are disabled previews.</p>
     <section aria-label="Key metrics" style={css("display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px")}>
@@ -176,24 +215,34 @@ export default function Failures() {
     <section style={css("background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 18px 8px;display:flex;flex-direction:column;gap:10px")}>
       <div style={css("display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;gap:10px")}>
         <div style={css("display:flex;flex-direction:column;gap:3px")}>
-          <h2 style={css("margin:0;font-size:16px;font-weight:600")}>Unrecoverable units</h2>
-          <span style={css("font-size:12.5px;color:var(--muted)")}>Showing 7 of 27, newest first. Usable extras pass at both wavelengths and are not already in use.</span>
+          <h2 style={css("margin:0;font-size:16px;font-weight:600")} title={unitStatus ? 'Current measured status; this is not a scrap or reject record.' : undefined}>Unrecoverable units</h2>
+          <span style={css("font-size:12.5px;color:var(--muted)")}>{unitStatus ? `Currently failing units · ${liveFailingUnits.length.toLocaleString('en-US')} in the bounded production cohort.` : 'Showing 7 of 27, newest first. Usable extras pass at both wavelengths and are not already in use.'}</span>
+          {unitStatus && <span style={css("align-self:flex-start;font-size:10px;font-weight:650;letter-spacing:.05em;text-transform:uppercase;padding:3px 8px;border-radius:999px;background:color-mix(in srgb,var(--accent) 10%,var(--panel));color:var(--accent-ink)")}>Live · test database</span>}
+          {unitStatus && <span style={css("font-size:11.5px;color:var(--muted)")}>{unitStatus.counts.review_required.toLocaleString('en-US')} review required · {unitStatus.counts.not_evaluated.toLocaleString('en-US')} not evaluated{unitStatus.incomplete ? ' · bounded result incomplete' : ''}</span>}
         </div>
-        <PreviewButton className="lnk" style={css("font-size:13px;display:inline-flex;align-items:center;min-height:32px;border:0;background:transparent;padding:0")}>Open all in console</PreviewButton>
+        {unitStatus ? <button type="button" onClick={() => setUnitStatusRefresh(value => value + 1)} className="lnk" style={css("font-size:13px;display:inline-flex;align-items:center;min-height:32px;border:0;background:transparent;padding:0")}>Refresh unit status</button> : <PreviewButton className="lnk" style={css("font-size:13px;display:inline-flex;align-items:center;min-height:32px;border:0;background:transparent;padding:0")}>Open all in console</PreviewButton>}
       </div>
       <div className="table-scroll" role="region" tabIndex={0} aria-label="Unrecoverable units table, scroll horizontally on narrow screens">
         <div role="table" aria-label="Unrecoverable units" style={css("min-width:900px")}>
-          <div role="row" style={css("display:grid;grid-template-columns:0.95fr 1.25fr 0.6fr 0.8fr 1.8fr 0.75fr 1.1fr 1.6fr;gap:10px;padding:0 6px 9px;border-bottom:1px solid var(--line);font-size:12px;color:var(--muted);font-weight:500")}>
-            <span role="columnheader">Unit</span>
-            <span role="columnheader">Configuration</span>
-            <span role="columnheader">Station</span>
-            <span role="columnheader">Finished</span>
-            <span role="columnheader">Failed logical channels</span>
-            <span role="columnheader" style={css("text-align:right")}>Usable extras</span>
-            <span role="columnheader" style={css("text-align:right")}>Worst after swap</span>
-            <span role="columnheader">Reason</span>
+          <div role="row" style={css(`display:grid;grid-template-columns:${unitStatus ? '1.05fr 1.25fr 1.2fr 2.2fr 1.6fr' : '0.95fr 1.25fr 0.6fr 0.8fr 1.8fr 0.75fr 1.1fr 1.6fr'};gap:10px;padding:0 6px 9px;border-bottom:1px solid var(--line);font-size:12px;color:var(--muted);font-weight:500`)}>
+            {unitStatus ? <>
+              <span role="columnheader">Serial</span><span role="columnheader">Switch</span><span role="columnheader">Status</span><span role="columnheader">Failing channels</span><span role="columnheader">Latest analysis</span>
+            </> : <>
+              <span role="columnheader">Unit</span><span role="columnheader">Configuration</span><span role="columnheader">Station</span><span role="columnheader">Finished</span><span role="columnheader">Failed logical channels</span><span role="columnheader" style={css("text-align:right")}>Usable extras</span><span role="columnheader" style={css("text-align:right")}>Worst after swap</span><span role="columnheader">Reason</span>
+            </>}
           </div>
-          {units.map((u, index8) => <Fragment key={index8}>
+          {unitStatus && liveFailingUnits.length === 0 && <div role="row"><span role="cell" style={css("display:block;padding:18px 6px;color:var(--muted)")}>No currently failing units in this bounded cohort.</span></div>}
+          {unitStatus && liveFailingUnits.map(unit => {
+            const tone = STATUS_TONE[unit.status];
+            return <div role="row" key={unit.assignment_id} style={css("display:grid;grid-template-columns:1.05fr 1.25fr 1.2fr 2.2fr 1.6fr;gap:10px;align-items:center;padding:10px 6px;border-bottom:1px solid var(--line2);font-variant-numeric:tabular-nums") }>
+              <span role="cell"><a href={`#/unit?unit=${unit.unit_id}`} className="lnk" style={css("font-family:'Geist Mono',monospace;font-weight:600")}>{unit.main_board_serial}</a></span>
+              <span role="cell" style={css("display:flex;flex-direction:column;color:var(--ink2)")}><span>{unit.switch_serial}</span><span style={css("font-size:11px;color:var(--muted)")}>{unit.switch_model}</span></span>
+              <span role="cell"><span style={css(`display:inline-flex;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600;background:${tone.bg};color:${tone.fg}`)}>{STATUS_LABEL[unit.status]}</span></span>
+              <span role="cell" style={css("display:flex;flex-wrap:wrap;gap:4px")}>{unit.failing_channels.map(channel => <span key={channel.logical_channel} title={`Effective port ${channel.effective_port}; losses ${channel.wavelength_1_il_db.toFixed(4)} / ${channel.wavelength_2_il_db.toFixed(4)} dB`} style={css("font-family:'Geist Mono',monospace;font-size:11.5px;font-weight:600;padding:2px 6px;border-radius:5px;background:var(--bad-bg);color:var(--bad-fg)")}>Ch {channel.logical_channel} · P{channel.effective_port} · {channel.wavelength_1_il_db.toFixed(2)} / {channel.wavelength_2_il_db.toFixed(2)} dB</span>)}</span>
+              <span role="cell" style={css("display:flex;flex-direction:column;color:var(--ink2)")}>{unit.latest_analysis ? <><span>{unit.latest_analysis.result_status}</span><span style={css(`font-size:11px;color:${unit.latest_analysis.current ? 'var(--ok-fg)' : 'var(--warn-fg)'}`)}>{unit.latest_analysis.current ? 'Current' : 'Stale'} · {unit.latest_analysis.unused_recommendations} unused</span></> : <span>No saved analysis</span>}</span>
+            </div>;
+          })}
+          {!unitStatus && units.map((u, index8) => <Fragment key={index8}>
             <div role="row" style={css("display:grid;grid-template-columns:0.95fr 1.25fr 0.6fr 0.8fr 1.8fr 0.75fr 1.1fr 1.6fr;gap:10px;align-items:center;padding:10px 6px;border-bottom:1px solid var(--line2);font-variant-numeric:tabular-nums")}>
               <span role="cell"><a href={`#/unit?serial=${encodeURIComponent(String(u.unit))}`}  className="lnk" style={css("font-family:'Geist Mono',monospace;font-weight:600")}>{u.unit}</a></span>
               <span role="cell" style={css("color:var(--ink2)")}>{u.cfg}</span>

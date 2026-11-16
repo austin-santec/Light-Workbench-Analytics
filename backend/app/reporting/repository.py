@@ -25,6 +25,7 @@ from app.reporting.models import (
     StoppedStatistics,
     TestTimeByConfigurationMetrics,
     TimingQuality,
+    UnitStatusQuery,
 )
 from app.reporting.schema import (
     CATALOG_ROW_CAP,
@@ -43,6 +44,7 @@ from app.reporting.unit_lookup import (
     parse_limit_snapshot,
     search_units,
 )
+from app.reporting.unit_status import UnitStatusMetrics, read_unit_status
 from app.schemas import RunPurpose
 
 RUN_ACTIVITY_ROW_CAP = 5000
@@ -957,6 +959,9 @@ class ReportingRepository(Protocol):
     def get_replacement_activity(
         self, query: ReplacementActivityQuery, boundaries: ChannelActivityBoundaries
     ) -> ReplacementActivityMetrics: ...
+    def get_unit_status(
+        self, query: UnitStatusQuery, boundaries: ChannelActivityBoundaries
+    ) -> UnitStatusMetrics: ...
     def search_units(self, text: str) -> dict: ...
     def get_unit_detail(self, unit_id: int) -> dict | None: ...
     def get_run_channels(self, run_id: int) -> dict | None: ...
@@ -1098,6 +1103,14 @@ class SqlServerReportingRepository:
             )
             daily_rows = cursor.execute(*daily_query).fetchmany(31 * len(ATTRIBUTION_KEYS) + 1)
             return summarize_replacement_activity(period_rows, daily_rows)
+
+    def get_unit_status(
+        self, query: UnitStatusQuery, boundaries: ChannelActivityBoundaries
+    ) -> UnitStatusMetrics:
+        query = UnitStatusQuery.model_validate(query.model_dump())
+        with self._adapter.cursor() as cursor:
+            self._preflight(cursor)
+            return read_unit_status(cursor, query, boundaries.periods[query.period])
 
     def search_units(self, text: str) -> dict:
         with self._adapter.cursor() as cursor:

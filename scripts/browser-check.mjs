@@ -15,6 +15,7 @@ const configurationTimingRequests = [];
 const channelActivityRequests = [];
 const failureRateRequests = [];
 const replacementActivityRequests = [];
+const unitStatusRequests = [];
 const unitSearchRequests = [];
 const purposeTotals = { production: 2, engineering: 3, training: 1, calibration: 4 };
 const purposeOpenRuns = { production: 0, engineering: 1, training: 0, calibration: 0 };
@@ -210,6 +211,42 @@ const replacementActivityFixture = url => {
     daily, administrative_exclusions: 0, incomplete: false,
   };
 };
+const unitStatusFixture = url => {
+  const period = url.searchParams.get('period') || 'last_30_days';
+  const purposes = url.searchParams.getAll('purpose').length ? url.searchParams.getAll('purpose') : ['production'];
+  const windows = {
+    today: ['2026-11-13T08:00:00Z', '2026-11-13T20:00:00Z', true],
+    yesterday: ['2026-11-12T08:00:00Z', '2026-11-13T08:00:00Z', false],
+    this_week: ['2026-11-09T08:00:00Z', '2026-11-13T20:00:00Z', true],
+    last_30_days: ['2026-10-14T07:00:00Z', '2026-11-13T08:00:00Z', false],
+  };
+  const [start_utc, end_utc, partial] = windows[period];
+  const analysis = (id, current, unused, result_status = 'fail_no_viable_recovery') => ({ analysis_id: id, result_status, analyzed_at_utc: '2026-11-13T18:00:00Z', current, unused_recommendations: unused });
+  const base = (id, status) => ({
+    unit_id: id, main_board_serial: `DEMO-STATUS-${id}`, assignment_id: id + 100,
+    switch_serial: `DEMO-SW-${id}`, switch_model: 'OSX-150', context_run_id: id + 200,
+    status, failing_channels: [], latest_analysis: null, review_reasons: [],
+  });
+  const failing = (id, status, latest) => ({
+    ...base(id, status), latest_analysis: latest,
+    failing_channels: [{ logical_channel: id, effective_port: id + 48, wavelength_1_il_db: 2.6001, wavelength_2_il_db: 1.1 }],
+  });
+  return {
+    data_source: 'test_database', tls: 'encrypted_unverified', extracted_at_utc: '2026-11-13T20:00:00Z', timezone: 'America/Los_Angeles',
+    period: { key: period, start_utc, end_utc, partial }, filters: { purpose: purposes },
+    classification_rule: 'strict >, run limit snapshot',
+    counts: { cohort_units: 6, review_required: 1, not_evaluated: 1, passing: 1, failing_recovery_available: 1, failing_needs_analysis: 1, failing_no_measured_recovery: 1 },
+    units: [
+      failing(1, 'failing_no_measured_recovery', analysis(301, true, 0)),
+      failing(2, 'failing_needs_analysis', analysis(302, false, 0)),
+      failing(3, 'failing_recovery_available', analysis(303, true, 2, 'recommendations_available')),
+      { ...base(4, 'review_required'), review_reasons: ['DEMO incompatible wavelength evidence.'] },
+      base(5, 'not_evaluated'),
+      base(6, 'passing'),
+    ],
+    incomplete: false,
+  };
+};
 await page.route('**/api/v1/reporting/run-activity?*', async route => {
   const url = new URL(route.request().url());
   runActivityRequests.push(url);
@@ -255,6 +292,15 @@ await page.route('**/api/v1/reporting/replacement-activity*', async route => {
     body: JSON.stringify(runActivityMode === 'not_connected' ? { data_source: 'not_connected' } : replacementActivityFixture(url)),
   });
 });
+await page.route('**/api/v1/reporting/unit-status?*', async route => {
+  const url = new URL(route.request().url());
+  unitStatusRequests.push(url);
+  await route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify(runActivityMode === 'not_connected' ? { data_source: 'not_connected' } : unitStatusFixture(url)),
+  });
+});
 await page.route('**/api/v1/units/search?*', async route => {
   unitSearchRequests.push(new URL(route.request().url()));
   await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data_source: 'not_connected' }) });
@@ -264,7 +310,7 @@ page.on('console', message => { if (message.type() === 'error') errors.push(mess
 page.on('response', response => { if (response.status() >= 400) errors.push(`HTTP ${response.status()}: ${response.url()}`); });
 page.on('requestfailed', request => {
   const pathname = new URL(request.url()).pathname;
-  const expectedUnmountCancellation = ['/api/v1/reporting/run-activity', '/api/v1/reporting/test-time-by-configuration', '/api/v1/reporting/channel-activity', '/api/v1/reporting/failure-rate', '/api/v1/reporting/replacement-activity', '/api/v1/units/search'].includes(pathname) && request.failure()?.errorText === 'net::ERR_ABORTED';
+  const expectedUnmountCancellation = ['/api/v1/reporting/run-activity', '/api/v1/reporting/test-time-by-configuration', '/api/v1/reporting/channel-activity', '/api/v1/reporting/failure-rate', '/api/v1/reporting/replacement-activity', '/api/v1/reporting/unit-status', '/api/v1/units/search'].includes(pathname) && request.failure()?.errorText === 'net::ERR_ABORTED';
   if (!expectedUnmountCancellation) errors.push(`Request failed: ${request.url()} ${request.failure()?.errorText}`);
 });
 const check = label => { checks.push(label); console.log(`PASS ${label}`); };
@@ -291,6 +337,8 @@ try {
   await visit('/');
   await assertText(page.getByRole('heading', { level: 1 }), 'Production overview');
   await assertText(page.getByRole('region', { name: 'Key metrics' }), '1,008');
+  assert.ok((await page.locator('body').innerText()).includes('Development · Demo data + live test-database panels'));
+  assert.equal(await page.getByRole('button', { name: 'Refresh', exact: true }).getAttribute('title'), 'Preview — unavailable in this frontend milestone');
   check('Overview renders synthetic summary');
 
   const liveCard = page.getByRole('region', { name: 'Run activity' });
@@ -305,8 +353,9 @@ try {
   assert.equal(firstLiveRequest.searchParams.get('purpose'), 'production');
   assert.equal(channelActivityRequests.at(-1).searchParams.getAll('purpose').join(','), 'production');
   assert.equal(failureRateRequests.at(-1).searchParams.getAll('purpose').join(','), 'production');
+  assert.equal(unitStatusRequests.at(-1).searchParams.get('period'), 'today');
   await page.getByRole('region', { name: 'Key metrics' }).getByText('Demo', { exact: true }).first().waitFor();
-  assert.equal(await page.getByRole('region', { name: 'Key metrics' }).getByText('Demo', { exact: true }).count(), 2);
+  assert.equal(await page.getByRole('region', { name: 'Key metrics' }).getByText('Demo', { exact: true }).count(), 3);
   await page.getByText('First-pass channels over the fail limit at either wavelength, last 20 workdays.').waitFor();
   check('Live card, channel activity, and failure rate keep the demo path when not connected');
 
@@ -324,6 +373,7 @@ try {
   await downPage.route('**/api/v1/reporting/channel-activity?*', route => route.abort('connectionrefused'));
   await downPage.route('**/api/v1/reporting/failure-rate?*', route => route.abort('connectionrefused'));
   await downPage.route('**/api/v1/reporting/replacement-activity*', route => route.abort('connectionrefused'));
+  await downPage.route('**/api/v1/reporting/unit-status?*', route => route.abort('connectionrefused'));
   try {
     await downPage.goto(`${base}/#/`, { waitUntil: 'domcontentloaded' });
     await downPage.getByRole('region', { name: 'Run activity' }).getByText('Backend not reachable on 127.0.0.1:8000').first().waitFor();
@@ -345,9 +395,13 @@ try {
   } finally { await databaseFailurePage.close(); }
 
   runActivityMode = 'connected';
+  await page.reload();
+  await page.locator('h1').waitFor();
   await liveCard.getByRole('button', { name: 'Refresh live data' }).click();
   await page.getByRole('button', { name: 'Refresh channel activity' }).click();
   await page.getByRole('button', { name: 'Refresh failure rate' }).click();
+  await page.getByRole('button', { name: 'Refresh unit status' }).waitFor();
+  await page.getByRole('button', { name: 'Refresh unit status' }).click();
   await liveCard.getByText('Raw run activity, not units').waitFor();
   await assertText(liveCard, 'Encrypted, certificate not verified');
   await liveCard.getByText('Runs started').locator('..').getByText('2', { exact: true }).waitFor();
@@ -363,7 +417,9 @@ try {
   await assertText(page.getByRole('region', { name: 'Key metrics' }), '1,018 attempts · 21 units');
   await assertText(page.getByRole('region', { name: 'Key metrics' }), '5 of 100 first channel observations · strict > run limits');
   await assertText(page.getByRole('region', { name: 'Key metrics' }), '2 first observations excluded: unknown criteria');
-  assert.equal(await page.getByRole('region', { name: 'Key metrics' }).getByText('Live · test database', { exact: true }).count(), 2);
+  assert.equal(await page.getByRole('region', { name: 'Key metrics' }).getByText('Live · test database', { exact: true }).count(), 3);
+  await assertText(page.getByRole('region', { name: 'Key metrics' }), 'currently failing, no measured recovery');
+  await assertText(page.getByRole('region', { name: 'Key metrics' }), '+ 1 need analysis · 1 recovery available');
   assert.equal(await page.getByRole('img', { name: /^Live bar chart of channels/ }).locator('rect').count(), 31);
   const liveFailureChart = page.getByRole('img', { name: /^Live daily first-observation run-channel failure rate/ });
   await liveFailureChart.waitFor();
@@ -383,9 +439,18 @@ try {
   assert.equal(await replacementPanel.getByRole('img', { name: /Daily replacement events/ }).locator('span').count(), 31);
   await replacementPanel.getByRole('button', { name: 'Today', exact: true }).click();
   await assertText(replacementPanel, '12 events / 6 units');
+  const liveUnitTable = page.getByRole('table', { name: 'Unrecoverable units' });
+  await liveUnitTable.getByText('DEMO-STATUS-1').waitFor();
+  await assertText(liveUnitTable, 'No measured recovery');
+  await assertText(liveUnitTable, 'Needs analysis');
+  await assertText(liveUnitTable, 'Recovery available');
+  assert.equal(unitStatusRequests.at(-1).searchParams.get('period'), 'today');
+  assert.equal(unitStatusRequests.at(-1).searchParams.getAll('purpose').join(','), 'production');
+  await assertText(page.getByText(/review required ·/), '1 review required · 1 not evaluated');
+  await page.getByRole('button', { name: 'Refresh unit status' }).click();
   await replacementPanel.getByRole('button', { name: 'Refresh replacement activity' }).click();
   assert.ok(replacementActivityRequests.length >= 3);
-  check('Replacement activity synthetic connected path, exact range values, attribution, notes, daily series, and refresh');
+  check('Replacement activity and current unit status synthetic connected paths, shared range, live table, notes, and refresh');
   await visit('/');
 
   await page.reload();
@@ -472,7 +537,7 @@ try {
   assert.equal(await page.getByRole('button', { name: '24 ch', exact: true }).getAttribute('aria-pressed'), 'true');
   assert.ok((await page.getByRole('img', { name: /^Histogram of failed/ }).getAttribute('aria-label')).includes('24-channel'));
   check('Failures navigation and channel-count histogram');
-  assert.ok(await page.getByRole('button', { name: 'Open all in console', exact: true }).isDisabled());
+  await page.getByRole('button', { name: 'Refresh unit status', exact: true }).waitFor();
 
   const unitLink = page.getByRole('navigation', { name: 'Main', exact: true }).getByRole('link', { name: 'Unit lookup' });
   await unitLink.focus();

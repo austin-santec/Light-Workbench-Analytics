@@ -10,6 +10,7 @@ import type { OverviewState, Purpose, TimeRange } from '../types';
 import { LiveRunActivityCard } from '../components/LiveRunActivityCard';
 import { loadChannelActivity, type ChannelActivityConnectedResponse, type ChannelActivityPeriodKey } from '../lib/api/channelActivity';
 import { loadFailureRate, type FailureRateConnectedResponse } from '../lib/api/failureRate';
+import { loadUnitStatus, type UnitStatusConnectedResponse } from '../lib/api/unitStatus';
 
 type ChannelActivityState =
   | { kind: 'loading' | 'demo' | 'error' }
@@ -18,6 +19,10 @@ type ChannelActivityState =
 type FailureRateState =
   | { kind: 'loading' | 'demo' | 'error' }
   | { kind: 'connected'; data: FailureRateConnectedResponse };
+
+type UnitStatusState =
+  | { kind: 'loading' | 'demo' | 'error' }
+  | { kind: 'connected'; data: UnitStatusConnectedResponse };
 
 const PERIOD_FOR_RANGE: Record<TimeRange, ChannelActivityPeriodKey> = {
   today: 'today', yesterday: 'yesterday', week: 'this_week', month: 'last_30_days',
@@ -107,6 +112,8 @@ export default function Overview() {
  const [channelRefresh, setChannelRefresh] = useState(0);
  const [failureRate, setFailureRate] = useState<FailureRateState>({ kind: 'loading' });
  const [failureRefresh, setFailureRefresh] = useState(0);
+ const [unitStatus, setUnitStatus] = useState<UnitStatusState>({ kind: 'loading' });
+ const [unitStatusRefresh, setUnitStatusRefresh] = useState(0);
  const updateLivePurposeCounts = useCallback((counts: Record<Purpose, number> | null) => setLivePurposeCounts(counts), []);
  const resetPurpose = () => setState(current => ({ ...current, purp: { ...PRODUCTION_ONLY } }));
  const values = getOverviewValues(state);
@@ -127,6 +134,13 @@ export default function Overview() {
      .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setFailureRate({ kind: 'error' }); });
    return () => controller.abort();
  }, [failureRefresh, purposeKey, selectedPurposes]);
+ useEffect(() => {
+   const controller = new AbortController();
+   loadUnitStatus(PERIOD_FOR_RANGE[state.range], selectedPurposes, controller.signal)
+     .then(result => setUnitStatus(result.data_source === 'test_database' ? { kind: 'connected', data: result } : { kind: 'demo' }))
+     .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setUnitStatus({ kind: 'error' }); });
+   return () => controller.abort();
+ }, [purposeKey, selectedPurposes, state.range, unitStatusRefresh]);
  const liveChannelData = channelActivity.kind === 'connected' ? channelActivity.data : null;
  const livePeriod = liveChannelData?.periods[PERIOD_FOR_RANGE[state.range]];
  const liveSpark = liveChannelData ? sparkline(liveChannelData.daily.map(day => day.channels_tested), 160, 34) : null;
@@ -135,6 +149,7 @@ export default function Overview() {
  const liveFailurePeriod = liveFailureData?.periods[PERIOD_FOR_RANGE[state.range]];
  const liveFailureSpark = liveFailureData ? liveFailureSparkline(liveFailureData) : null;
  const liveFailureChart = liveFailureData ? liveFailureRateChart(liveFailureData) : null;
+ const liveUnitData = unitStatus.kind === 'connected' ? unitStatus.data : null;
  const includedPurposes = selectedPurposes.map(purpose => PURPOSE_LABELS[purpose]).join(' + ');
  return (<>
 
@@ -214,6 +229,7 @@ export default function Overview() {
       {kpis.map((demoKpi, index2) => {
         const isLiveChannel = index2 === 0 && livePeriod && liveSpark;
         const isLiveFailure = index2 === 3 && liveFailurePeriod && liveFailureSpark;
+        const isLiveUnit = index2 === 5 && liveUnitData;
         const k = isLiveChannel ? {
           ...demoKpi,
           value: livePeriod.channels_tested.toLocaleString('en-US'),
@@ -228,31 +244,41 @@ export default function Overview() {
           sub: `${liveFailurePeriod.failed.toLocaleString('en-US')} of ${liveFailurePeriod.observed.toLocaleString('en-US')} first channel observations · strict > run limits`,
           line: '',
           area: '',
+        } : isLiveUnit ? {
+          ...demoKpi,
+          value: liveUnitData.counts.failing_no_measured_recovery.toLocaleString('en-US'),
+          delta: '',
+          sub: 'currently failing, no measured recovery',
+          line: '',
+          area: '',
         } : demoKpi;
         const lastPoint = isLiveChannel ? k.line.split(' ').at(-1)?.split(',') : null;
         return <Fragment key={index2}>
         <div style={css("background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 16px 12px;display:flex;flex-direction:column;gap:6px;min-width:0")}>
           <span style={css("display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12.5px;color:var(--muted);font-weight:500")}>
-            <span>{k.label}</span>
-            {(index2 === 0 || index2 === 3) && <span style={css((isLiveChannel || isLiveFailure)
+            <span title={isLiveUnit ? 'Current measured status; this is not a scrap or reject record.' : undefined}>{k.label}</span>
+            {(index2 === 0 || index2 === 3 || index2 === 5) && <span title={isLiveUnit ? 'Current measured status; this is not a scrap or reject record.' : undefined} style={css((isLiveChannel || isLiveFailure || isLiveUnit)
               ? "font-size:10px;font-weight:650;letter-spacing:.04em;text-transform:uppercase;padding:3px 7px;border-radius:999px;background:color-mix(in srgb,var(--accent) 10%,var(--panel));color:var(--accent-ink)"
-              : "font-size:10px;font-weight:650;letter-spacing:.04em;text-transform:uppercase;padding:3px 7px;border-radius:999px;background:var(--panel2);color:var(--muted)")}>{isLiveChannel || isLiveFailure ? 'Live · test database' : 'Demo'}</span>}
+              : "font-size:10px;font-weight:650;letter-spacing:.04em;text-transform:uppercase;padding:3px 7px;border-radius:999px;background:var(--panel2);color:var(--muted)")}>{isLiveChannel || isLiveFailure || isLiveUnit ? 'Live · test database' : 'Demo'}</span>}
           </span>
           {isLiveChannel && <span style={css("font-size:10.5px;color:var(--muted)")}>Channels with test activity · {includedPurposes}</span>}
           {isLiveFailure && <span style={css("font-size:10.5px;color:var(--muted)")}>First observation per run-channel · {includedPurposes}</span>}
           <div style={css("display:flex;align-items:baseline;gap:8px;flex-wrap:wrap")}>
             <span style={css("font-size:30px;line-height:1.05;font-weight:650;letter-spacing:-0.025em;font-variant-numeric:tabular-nums;color:" + String(k.valueColor))}>{k.value}</span>
-            {!isLiveChannel && !isLiveFailure && <span style={css("font-size:12px;font-weight:600;padding:2px 7px;border-radius:6px;background:" + String(k.dBg) + ";color:" + String(k.dFg) + ";white-space:nowrap")}>{k.delta}</span>}
+            {!isLiveChannel && !isLiveFailure && !isLiveUnit && <span style={css("font-size:12px;font-weight:600;padding:2px 7px;border-radius:6px;background:" + String(k.dBg) + ";color:" + String(k.dFg) + ";white-space:nowrap")}>{k.delta}</span>}
           </div>
           <span style={css("font-size:12px;color:var(--muted);min-height:17px")}>{k.sub}</span>
           {isLiveFailure && liveFailurePeriod.unknown_criteria > 0 && <span style={css("font-size:11px;color:var(--warn-fg)")}>{liveFailurePeriod.unknown_criteria.toLocaleString('en-US')} first observations excluded: unknown criteria</span>}
-          <svg viewBox="0 0 160 34" preserveAspectRatio="none" aria-hidden="true" style={css("width:100%;height:30px;display:block;margin-top:2px")}>
+          {isLiveUnit && <span style={css("font-size:11px;color:var(--ink2)")}>+ {liveUnitData.counts.failing_needs_analysis.toLocaleString('en-US')} need analysis · {liveUnitData.counts.failing_recovery_available.toLocaleString('en-US')} recovery available</span>}
+          {isLiveUnit && liveUnitData.incomplete && <span style={css("font-size:11px;color:var(--warn-fg)")}>Bounded cohort is incomplete.</span>}
+          {isLiveUnit && <button type="button" onClick={() => setUnitStatusRefresh(value => value + 1)} style={css("align-self:flex-start;min-height:28px;padding:0 8px;border-radius:6px;border:1px solid var(--line);background:var(--panel);color:var(--ink2);font-size:10.5px;font-weight:600")}>Refresh unit status</button>}
+          {!isLiveUnit && <svg viewBox="0 0 160 34" preserveAspectRatio="none" aria-hidden="true" style={css("width:100%;height:30px;display:block;margin-top:2px")}>
             {!isLiveFailure && <path d={k.area} style={css("fill:" + String(accent) + ";fill-opacity:0.08;stroke:none")}></path>}
             {!isLiveFailure && <polyline points={k.line} vectorEffect="non-scaling-stroke" style={css("fill:none;stroke:" + String(accent) + ";stroke-width:1.6;stroke-linejoin:round;stroke-linecap:round")}></polyline>}
             {isLiveFailure && liveFailureSpark.segments.map((path, index) => <path key={index} d={path} vectorEffect="non-scaling-stroke" style={css("fill:none;stroke:" + String(accent) + ";stroke-width:1.6;stroke-linejoin:round;stroke-linecap:round")} />)}
             {isLiveFailure && liveFailureSpark.points.map(point => <circle key={point.index} cx={point.x} cy={point.y} r="1.4" vectorEffect="non-scaling-stroke" style={css("fill:var(--panel);stroke:" + String(accent) + ";stroke-width:1.2")} />)}
             {isLiveChannel && lastPoint && <circle cx={lastPoint[0]} cy={lastPoint[1]} r="3" vectorEffect="non-scaling-stroke" style={css("fill:var(--panel);stroke:" + String(accent) + ";stroke-width:1.5;stroke-dasharray:2 1")} />}
-          </svg>
+          </svg>}
         </div>
       </Fragment>})}
     </section>
