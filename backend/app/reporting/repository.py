@@ -1,10 +1,17 @@
+import logging
 import math
-from datetime import UTC, datetime
+import re
+from dataclasses import dataclass
+from datetime import UTC, date, datetime
+from datetime import time as datetime_time
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from time import perf_counter
 from typing import Protocol
+from uuid import UUID
 
-from app.reporting.adapter import ReportingError, SqlServerAdapter
+from app.reporting.adapter import ReportingError, SqlServerAdapter, _diagnostic, _error_code
 from app.reporting.channel_activity import PERIOD_KEYS, ChannelActivityBoundaries
+from app.reporting.console_guard import StatementRejected, validate_console_statement
 from app.reporting.models import (
     ChannelActivityCounts,
     ChannelActivityMetrics,
@@ -50,6 +57,117 @@ from app.schemas import RunPurpose
 RUN_ACTIVITY_ROW_CAP = 5000
 TEST_TIME_BY_CONFIGURATION_ROW_CAP = 5000
 FAILURE_RATE_RUN_CAP = 5000
+logger = logging.getLogger("lwa.reporting")
+
+
+@dataclass(frozen=True)
+class ConsoleColumn:
+    name: str
+    type: str
+
+
+@dataclass(frozen=True)
+class ConsoleResult:
+    executed_at_utc: datetime
+    elapsed_ms: int
+    columns: tuple[ConsoleColumn, ...]
+    rows: tuple[tuple[object, ...], ...]
+    truncated: bool
+    multiple_result_sets: bool
+
+    @property
+    def row_count(self) -> int:
+        return len(self.rows)
+
+
+class ConsoleQueryError(ReportingError):
+    def __init__(self, sql_error_number: int | None, message: str):
+        self.sql_error_number = sql_error_number
+        self.message = message
+        super().__init__("query_failed")
+
+
+def _sql_error_number(exc: Exception) -> int | None:
+    matches = re.findall(r"\((\d{1,6})\)", " ".join(str(arg) for arg in exc.args))
+    return int(matches[-1]) if matches else None
+
+
+def _redacted_sql_message(exc: Exception, settings) -> str:
+    arguments = [str(argument) for argument in exc.args]
+    message = arguments[1] if len(arguments) > 1 else arguments[0] if arguments else "Query failed."
+    message = re.sub(
+        r"(?:\[Microsoft\]\[ODBC Driver 18 for SQL Server\]\[SQL Server\]"
+        r"|\[ODBC Driver 18 for SQL Server\]\[SQL Server\]|\[SQL Server\])",
+        "",
+        message,
+        flags=re.IGNORECASE,
+    ).strip()
+    # Drop the leading SQLSTATE and trailing "(native) (SQLExecDirectW)" markers.
+    message = re.sub(r"^\[[0-9A-Z]{5}\]\s*", "", message)
+    message = re.sub(r"(?:\s*\(\d{1,6}\))?(?:\s*\(SQL\w+\))+\s*$", "", message).strip()
+    replacements = (
+        (settings.server, "<server>"),
+        (settings.approved_server, "<server>"),
+        (settings.database, "<database>"),
+        (settings.approved_database, "<database>"),
+        (
+            settings.username.get_secret_value() if settings.username is not None else None,
+            "<login>",
+        ),
+    )
+    for value, replacement in sorted(
+        ((value, replacement) for value, replacement in replacements if value),
+        key=lambda item: len(item[0]),
+        reverse=True,
+    ):
+        message = re.sub(re.escape(value), replacement, message, flags=re.IGNORECASE)
+    return message[:500]
+
+
+def _console_type(type_code: object) -> str:
+    if not isinstance(type_code, type):
+        return "other"
+    if issubclass(type_code, bool):
+        return "boolean"
+    if issubclass(type_code, int):
+        return "integer"
+    if issubclass(type_code, Decimal):
+        return "decimal"
+    if issubclass(type_code, float):
+        return "float"
+    if issubclass(type_code, str):
+        return "string"
+    if issubclass(type_code, datetime):
+        return "datetime"
+    if issubclass(type_code, date):
+        return "date"
+    if issubclass(type_code, datetime_time):
+        return "time"
+    if issubclass(type_code, (bytes, bytearray, memoryview)):
+        return "binary"
+    return "other"
+
+
+def _console_value(value: object) -> object:
+    if value is None or isinstance(value, (str, bool, int)):
+        return value[:4000] if isinstance(value, str) else value
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.isoformat(timespec="milliseconds") + "Z"
+        normalized = value.astimezone(UTC).isoformat(timespec="milliseconds")
+        return normalized.replace("+00:00", "Z")
+    if isinstance(value, (date, datetime_time)):
+        return value.isoformat()
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        raw = bytes(value)
+        return "0x" + raw[:64].hex() + ("…" if len(raw) > 64 else "")
+    if isinstance(value, UUID):
+        return str(value)
+    return str(value)[:4000]
 
 
 def _channel_activity_sql(window_count: int) -> str:
@@ -966,6 +1084,7 @@ class ReportingRepository(Protocol):
     def get_unit_detail(self, unit_id: int) -> dict | None: ...
     def get_run_channels(self, run_id: int) -> dict | None: ...
     def get_assignment_hardware(self, assignment_id: int) -> dict | None: ...
+    def execute_console_query(self, sql: str) -> ConsoleResult: ...
 
 
 class SqlServerReportingRepository:
@@ -1131,3 +1250,73 @@ class SqlServerReportingRepository:
         with self._adapter.cursor() as cursor:
             self._preflight(cursor)
             return get_assignment_hardware(cursor, assignment_id)
+
+    def execute_console_query(self, sql: str) -> ConsoleResult:
+        statement = validate_console_statement(sql)
+        settings = self._adapter.settings
+        no_result_set = False
+        result: ConsoleResult | None = None
+        with self._adapter.cursor(query_timeout_seconds=settings.console_timeout_seconds) as cursor:
+            self._preflight(cursor)
+            cursor.execute("SET LOCK_TIMEOUT 5000;")
+            cursor.execute("SET TRANSACTION ISOLATION LEVEL READ COMMITTED;")
+            started = perf_counter()
+            try:
+                cursor.execute(statement)
+                description = cursor.description
+                if description is None:
+                    no_result_set = True
+                else:
+                    rows = cursor.fetchmany(settings.console_row_cap + 1)
+                    truncated = len(rows) > settings.console_row_cap
+                    returned_rows = rows[: settings.console_row_cap]
+                    if truncated:
+                        # Draining the rest of a capped result can take as long as the
+                        # whole query; cancel it instead and skip nextset().
+                        multiple_result_sets = False
+                        try:
+                            cursor.cancel()
+                        except Exception:
+                            logger.warning("Reporting failure code=console_cancel_failed")
+                    else:
+                        multiple_result_sets = bool(cursor.nextset())
+                    elapsed_ms = round((perf_counter() - started) * 1000)
+                    columns = tuple(
+                        ConsoleColumn(name=str(column[0]), type=_console_type(column[1]))
+                        for column in description
+                    )
+                    result = ConsoleResult(
+                        executed_at_utc=datetime.now(UTC),
+                        elapsed_ms=elapsed_ms,
+                        columns=columns,
+                        rows=tuple(
+                            tuple(_console_value(value) for value in row) for row in returned_rows
+                        ),
+                        truncated=truncated,
+                        multiple_result_sets=multiple_result_sets,
+                    )
+            except ReportingError:
+                raise
+            except Exception as exc:
+                elapsed_ms = round((perf_counter() - started) * 1000)
+                code = _error_code(exc, "query")
+                if code == "query_timeout":
+                    logger.warning(
+                        "Reporting failure code=query_timeout elapsed_ms=%s %s",
+                        elapsed_ms,
+                        _diagnostic(exc),
+                    )
+                    raise ReportingError("query_timeout") from None
+                number = _sql_error_number(exc)
+                logger.warning(
+                    "Reporting failure code=query_failed native=%s elapsed_ms=%s %s",
+                    number if number is not None else "-",
+                    elapsed_ms,
+                    _diagnostic(exc),
+                )
+                raise ConsoleQueryError(number, _redacted_sql_message(exc, settings)) from None
+        if no_result_set:
+            raise StatementRejected("not_select")
+        if result is None:
+            raise ReportingError("read_failed")
+        return result

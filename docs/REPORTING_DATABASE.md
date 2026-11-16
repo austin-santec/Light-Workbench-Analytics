@@ -108,7 +108,7 @@ Configuration declarations cannot prove that a target is non-production, that DN
 
 ## Implemented operations and cost bounds
 
-`ReportingRepository` exposes the existing schema/run/aggregate operations plus current unit status, `search_units`, `get_unit_detail`, `get_run_channels` and `get_assignment_hardware`. `SqlServerReportingRepository` implements them through `SqlServerAdapter`. No raw SQL or caller-provided object identifiers are accepted by the repository. Every unit lookup uses fixed projections and bound values. Unit lookup and current status generate only `IN` placeholder lists from bounded IDs just read on the same connection.
+`ReportingRepository` exposes the existing schema/run/aggregate operations plus current unit status, `search_units`, `get_unit_detail`, `get_run_channels`, `get_assignment_hardware`, and the separately authorized read-only console execution. `SqlServerReportingRepository` implements them through `SqlServerAdapter`. Outside the console, no raw SQL or caller-provided object identifiers are accepted by the repository. Every unit lookup uses fixed projections and bound values. Unit lookup and current status generate only `IN` placeholder lists from bounded IDs just read on the same connection.
 
 | Operation | Read boundary |
 | --- | --- |
@@ -125,6 +125,15 @@ Configuration declarations cannot prove that a target is non-production, that DN
 | Unit detail | TOP 1 unit, TOP 501 assignment history and TOP 201 run history. Run rows use bounded correlated current-measurement aggregates and the timing view. Python strictly parses limit/void JSON; malformed limits become null. |
 | Run channels | TOP 1 run criteria read and TOP 5001 attempt read, capped to 5000 with `incomplete`. Raw and current-measurement views determine every attempt and `is_current`; Python applies the source strict classifier. |
 | Assignment hardware | TOP 1 existence; TOP 501 each for current map, replacements, confirmed extras and latest-per-port spares; TOP 201 analyses and TOP 2001 recommendations. Any overflow sets one `incomplete` flag. |
+| Read-only query console | One caller-supplied, guard-approved `SELECT`/`WITH` statement after the full same-connection preflight and fixed `LOCK_TIMEOUT 5000`/read-committed session settings. Timeout defaults to 30 seconds (1–60); row cap defaults to 5000 (1–20,000), fetched as cap + 1. The cursor and connection always close, cancelling unread rows. |
+
+## Read-only query console boundary
+
+The query console is available whenever reporting is enabled; it has no second feature flag or login. SQL permissions remain the authoritative control. The secondary pure guard ignores nested block/line comments, string literals and quoted identifiers, permits one trailing semicolon, and requires the first visible keyword to be `SELECT` or `WITH`. It rejects additional statements/`GO`, parameter markers, writes, DDL, execution/permission/server/session/transaction commands, `SELECT INTO`, remote-source functions, `xp_`/`sp_` identifiers and four-part names. `FOR XML`, `FOR JSON`, and `OPTION(...)` remain allowed.
+
+Execution uses no bound parameters because console parameters are out of scope. Only the first result set is returned; a missing result set is rejected and an unexpected second result set is flagged. Serialization preserves decimal precision as text, emits ISO dates/times, treats naive SQL datetimes as stored UTC wall-clock values, bounds strings/binary values, and converts unknown values to bounded strings. The React client provides TSV copy and RFC 4180 CSV download from only the returned bounded rows.
+
+Console SQL, values and results are never logged. SQL Server messages are never logged either; only the sanitized code, native number when available, elapsed time and source location are recorded. The local HTTP response may show a message only after driver prefixes and configured/approved server, database and login names are redacted case-insensitively and the result is capped at 500 characters. Syntax/object/permission/conversion failures use HTTP 422 `query_failed`; timeouts and preflight/connection failures retain sanitized 503 codes.
 
 The newly consumed view columns are validated fail-closed offline. On 2026-11-12 the owner's catalog check of the Stage B test database confirmed every gated column of `vw_RunTimingSummary`, `vw_CurrentILMeasurements`, `vw_CurrentChannelMap` and `vw_ConfirmedExtraPorts`. That includes `timing_session_count` as nullable despite its `COALESCE`, and every `vw_CurrentChannelMap` column except `assignment_id` as nullable. The same check confirmed SELECT on all nine new objects and no INSERT/UPDATE/DELETE for the read-only login.
 

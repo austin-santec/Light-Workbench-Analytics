@@ -10,6 +10,7 @@ const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
 const errors = [];
 const checks = [];
 let runActivityMode = 'not_connected';
+let queryResponseMode = 'success';
 const runActivityRequests = [];
 const configurationTimingRequests = [];
 const channelActivityRequests = [];
@@ -247,6 +248,30 @@ const unitStatusFixture = url => {
     incomplete: false,
   };
 };
+const querySchemaFixture = {
+  data_source: 'test_database', tls: 'encrypted_unverified', source: 'reviewed_grant_contract',
+  objects: [
+    ['SCHEMA_MIGRATIONS', 'table', ['migration_id', 'migration_name', 'script_checksum']],
+    ['IL_RUNS', 'table', ['run_id', 'assignment_id', 'run_number', 'run_started_at_utc', 'run_ended_at_utc', 'wavelength_mode', 'completion_status', 'run_purpose', 'analysis_status', 'front_panel_channel_count']],
+    ['UNIT_SWITCH_ASSIGNMENTS', 'table', ['assignment_id', 'unit_id', 'switch_id', 'installed_at_utc']],
+    ['UNITS', 'table', ['unit_id', 'main_board_serial', 'part_number', 'front_panel_channel_count', 'unit_model']],
+    ['SWITCHES', 'table', ['switch_id', 'switch_serial', 'switch_model', 'firmware_version']],
+    ['vw_RunTimingSummary', 'view', ['run_id', 'active_test_ms', 'elapsed_ms', 'stopped_ms', 'timing_quality']],
+    ['IL_MEASUREMENTS', 'table', ['measurement_id', 'run_id', 'logical_channel', 'measurement_role', 'written_at_utc']],
+    ['vw_CurrentILMeasurements', 'view', ['measurement_id', 'run_id', 'logical_channel', 'physical_port']],
+    ['CHANNEL_REPLACEMENTS', 'table', ['replacement_id', 'assignment_id', 'logical_channel', 'replaced_at_utc']],
+    ['vw_CurrentChannelMap', 'view', ['assignment_id', 'logical_channel', 'effective_physical_port']],
+    ['vw_ConfirmedExtraPorts', 'view', ['assignment_id', 'run_id', 'physical_port']],
+    ['DESIGNATED_SPARES', 'table', ['spare_event_id', 'assignment_id', 'physical_port']],
+    ['REPLACEMENT_ANALYSES', 'table', ['analysis_id', 'run_id', 'analyzed_at_utc', 'result_status']],
+    ['REPLACEMENT_ANALYSIS_RECOMMENDATIONS', 'table', ['recommendation_id', 'analysis_id', 'logical_channel', 'improvement_db']],
+  ].map(([name, kind, columns]) => ({ name, kind, columns })),
+};
+const querySuccessFixture = (truncated = false) => ({
+  data_source: 'test_database', tls: 'encrypted_unverified', executed_at_utc: '2026-11-16T20:00:00Z', elapsed_ms: 42,
+  columns: [{ name: 'switch_model', type: 'string' }, { name: 'runs', type: 'integer' }, { name: 'avg_seconds', type: 'decimal' }],
+  rows: [['DEMO-MODEL-A', 12, '45.25'], ['DEMO-MODEL-B', 8, '51.50']], row_count: 2, truncated, multiple_result_sets: false,
+});
 await page.route('**/api/v1/reporting/run-activity?*', async route => {
   const url = new URL(route.request().url());
   runActivityRequests.push(url);
@@ -305,16 +330,45 @@ await page.route('**/api/v1/units/search?*', async route => {
   unitSearchRequests.push(new URL(route.request().url()));
   await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data_source: 'not_connected' }) });
 });
+await page.route('**/api/v1/query/schema', route => route.fulfill({
+  status: 200,
+  contentType: 'application/json',
+  body: JSON.stringify(runActivityMode === 'connected' ? querySchemaFixture : { data_source: 'not_connected' }),
+}));
+await page.route('**/api/v1/query/execute', async route => {
+  const body = route.request().postDataJSON();
+  assert.equal(typeof body.sql, 'string');
+  if (queryResponseMode === 'cancel') await new Promise(resolve => setTimeout(resolve, 300));
+  if (queryResponseMode === 'rejected') {
+    await route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ code: 'statement_rejected', reason: 'forbidden_keyword:UPDATE' }) });
+  } else if (queryResponseMode === 'sql_error') {
+    await route.fulfill({ status: 422, contentType: 'application/json', body: JSON.stringify({ code: 'query_failed', sql_error_number: 208, message: "Invalid object name '<database>.dbo.Missing'." }) });
+  } else {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(querySuccessFixture(queryResponseMode === 'truncated')) });
+  }
+});
 page.on('pageerror', error => errors.push(error.message));
-page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
-page.on('response', response => { if (response.status() >= 400) errors.push(`HTTP ${response.status()}: ${response.url()}`); });
+page.on('console', message => {
+  const expectedQueryHttpError = message.type() === 'error'
+    && message.text().startsWith('Failed to load resource: the server responded with a status of')
+    && ['rejected', 'sql_error'].includes(queryResponseMode);
+  if (message.type() === 'error' && !expectedQueryHttpError) errors.push(message.text());
+});
+page.on('response', response => {
+  const expectedQueryResponse = new URL(response.url()).pathname === '/api/v1/query/execute' && [400, 422].includes(response.status());
+  if (response.status() >= 400 && !expectedQueryResponse) errors.push(`HTTP ${response.status()}: ${response.url()}`);
+});
 page.on('requestfailed', request => {
   const pathname = new URL(request.url()).pathname;
-  const expectedUnmountCancellation = ['/api/v1/reporting/run-activity', '/api/v1/reporting/test-time-by-configuration', '/api/v1/reporting/channel-activity', '/api/v1/reporting/failure-rate', '/api/v1/reporting/replacement-activity', '/api/v1/reporting/unit-status', '/api/v1/units/search'].includes(pathname) && request.failure()?.errorText === 'net::ERR_ABORTED';
+  const expectedUnmountCancellation = ['/api/v1/reporting/run-activity', '/api/v1/reporting/test-time-by-configuration', '/api/v1/reporting/channel-activity', '/api/v1/reporting/failure-rate', '/api/v1/reporting/replacement-activity', '/api/v1/reporting/unit-status', '/api/v1/units/search', '/api/v1/query/schema', '/api/v1/query/execute'].includes(pathname) && request.failure()?.errorText === 'net::ERR_ABORTED';
   if (!expectedUnmountCancellation) errors.push(`Request failed: ${request.url()} ${request.failure()?.errorText}`);
 });
 const check = label => { checks.push(label); console.log(`PASS ${label}`); };
-const visit = async route => { await page.goto(`${base}/#${route}`); await page.locator('h1').waitFor(); };
+const visit = async route => {
+  await page.goto(`${base}/#${route}`);
+  await page.locator('h1').waitFor();
+  if (route === '/queries' && runActivityMode === 'connected') await page.getByText('Live · test database', { exact: true }).first().waitFor();
+};
 const assertText = async (locator, text) => assert.ok((await locator.innerText()).includes(text), `Expected ${text}`);
 const assertFocus = async locator => assert.ok(await locator.evaluate(element => element === document.activeElement), 'Expected keyboard focus');
 const assertFocusRing = async locator => {
@@ -365,6 +419,13 @@ try {
   await replacementPanel.getByText('Live · test database', { exact: true }).waitFor();
   assert.equal(replacementActivityRequests.at(-1).searchParams.has('switch_model'), false);
   check('Replacement activity demo path keeps the live panel honestly not connected');
+  await visit('/queries');
+  await page.getByText('Synthetic query design preview. Schema and SQL are illustrative. No SQL is executed or sent to a server.').waitFor();
+  await page.getByRole('button', { name: 'Chart', exact: true }).click();
+  await page.locator('.recharts-surface').waitFor();
+  assert.ok(await page.getByRole('button', { name: 'Run Ctrl ↵', exact: true }).isDisabled());
+  assert.ok((await page.locator('body').textContent()).includes('Illustrative schema · dbo'));
+  check('Query console keeps the existing demo when reporting is not connected');
   await visit('/');
 
   const downPage = await browser.newPage({ viewport: { width: 900, height: 800 } });
@@ -549,20 +610,62 @@ try {
   await assertFocus(page.locator('main'));
   check('Keyboard navigation and browser-back restore focus to the page frame');
 
-  await page.getByRole('navigation', { name: 'Main', exact: true }).getByRole('link', { name: 'Query console' }).click();
+  await visit('/queries');
+  assert.ok((await page.locator('body').textContent()).includes('Granted objects · dbo'));
+  assert.ok((await page.locator('body').textContent()).includes('Live · test database'));
+  assert.ok((await page.locator('body').textContent()).includes('Read-only · test database'));
+  await page.getByRole('button', { name: /TBL IL_RUNS/ }).click();
+  assert.equal(await page.getByRole('button', { name: /TBL IL_RUNS/ }).getAttribute('aria-expanded'), 'false');
+  await page.getByRole('button', { name: /^Run/ }).click();
+  await page.getByRole('table', { name: 'Live query results' }).waitFor();
+  await assertText(page.getByRole('table', { name: 'Live query results' }), 'DEMO-MODEL-A');
+  await assertText(page.getByText(/2 rows · 3 columns/), '42 ms');
+  check('Connected query schema and successful live table result');
+
+  queryResponseMode = 'truncated';
+  await page.getByRole('button', { name: /^Run/ }).click();
+  await page.getByText('First 2 rows; more exist.').waitFor();
+  check('Query result truncation state');
+
+  queryResponseMode = 'rejected';
+  await page.getByRole('button', { name: /^Run/ }).click();
+  await page.getByRole('alert').getByText('Statement rejected · forbidden_keyword:UPDATE').waitFor();
+  check('Rejected query renders the fixed guard reason');
+
+  queryResponseMode = 'sql_error';
+  await page.getByRole('button', { name: /^Run/ }).click();
+  await assertText(page.getByRole('alert'), 'SQL Server 208 · Invalid object name');
+  await assertText(page.getByRole('alert'), '<database>.dbo.Missing');
+  check('SQL error renders its number and redacted message');
+
+  queryResponseMode = 'cancel';
+  await page.getByRole('button', { name: /^Run/ }).click();
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await page.getByRole('alert').getByText('Request cancelled in this browser. Server-side cancellation is not available.').waitFor();
+  check('Query request Cancel aborts the browser fetch');
+
+  queryResponseMode = 'success';
+  await page.getByRole('button', { name: /^Run/ }).click();
+  await page.getByRole('table', { name: 'Live query results' }).waitFor();
+  const downloadEvent = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export CSV', exact: true }).click();
+  const download = await downloadEvent;
+  const downloadPath = await download.path();
+  assert.ok(downloadPath);
+  const csv = await fs.readFile(downloadPath, 'utf8');
+  assert.equal(csv, '"switch_model","runs","avg_seconds"\r\n"DEMO-MODEL-A","12","45.25"\r\n"DEMO-MODEL-B","8","51.50"');
   await page.getByRole('button', { name: 'Chart', exact: true }).click();
   await page.locator('.recharts-surface').waitFor();
   await page.getByRole('button', { name: 'Table', exact: true }).click();
-  await page.getByRole('button', { name: /TBL UNITS/ }).click();
-  assert.equal(await page.getByRole('button', { name: /TBL UNITS/ }).getAttribute('aria-expanded'), 'true');
-  await page.getByRole('searchbox', { name: 'Search queries' }).fill('  rEtEsT  ');
-  assert.equal(await page.locator('.q-btn').filter({ hasText: 'Channels tested by period' }).count(), 0);
-  assert.equal(await page.locator('.q-btn').filter({ hasText: 'Retests by operator' }).count(), 1);
+  check('CSV export bytes and compatible live chart');
+
+  await page.getByRole('searchbox', { name: 'Search queries' }).fill('  lAtEsT  ');
+  assert.equal(await page.locator('.q-btn').filter({ hasText: 'Latest analyses' }).count(), 1);
   await page.getByRole('searchbox', { name: 'Search queries' }).fill('NO-QUERY-FIXTURE');
   await assertText(page.getByRole('status'), 'No query titles match');
   await page.getByRole('searchbox', { name: 'Search queries' }).fill('');
-  assert.ok(await page.getByRole('button', { name: 'Run Ctrl ↵', exact: true }).isDisabled());
-  check('Query chart/table tabs, illustrative schema, library search, and disabled SQL execution');
+  assert.ok((await page.locator('body').innerText()).includes('queries run read-only against the authorized test database through the local backend, and are not logged'.replace('queries', 'Queries')));
+  check('Live query library search, labels, and no-logging footer');
 
   await page.getByRole('button', { name: 'Dark mode', exact: true }).click();
   await page.reload();
@@ -627,6 +730,8 @@ try {
   check('All four screens: direct routes, active navigation, keyboard focus, preview states, contrast, and responsive layout in both themes (24 screenshots)');
 
   await visit('/queries');
+  await page.getByRole('button', { name: /^Run/ }).click();
+  await page.getByRole('table', { name: 'Live query results' }).waitFor();
   await page.getByRole('button', { name: 'Chart', exact: true }).click();
   await page.locator('.recharts-surface').waitFor();
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));

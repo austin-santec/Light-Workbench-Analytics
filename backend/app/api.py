@@ -15,13 +15,19 @@ from app.reporting.channel_activity import (
     compute_channel_activity_boundaries,
 )
 from app.reporting.config import ReportingSettings
+from app.reporting.console_guard import StatementRejected
 from app.reporting.models import (
     ChannelActivityQuery,
     ReplacementActivityQuery,
     RunQuery,
     UnitStatusQuery,
 )
-from app.reporting.repository import ReportingRepository, SqlServerReportingRepository
+from app.reporting.repository import (
+    ConsoleQueryError,
+    ReportingRepository,
+    SqlServerReportingRepository,
+)
+from app.reporting.schema import COLUMNS, OBJECT_TYPES
 from app.schemas import (
     AssignmentHardwareConnectedResponse,
     ChannelActivityConnectedResponse,
@@ -31,10 +37,17 @@ from app.schemas import (
     ChannelActivityQueryParams,
     DemoRunQuery,
     DemoRunsResponse,
+    ErrorResponse,
     FailureRateConnectedResponse,
     FailureRateDayResponse,
     FailureRatePeriodResponse,
     HealthResponse,
+    QueryExecuteConnectedResponse,
+    QueryExecuteRequest,
+    QueryFailedResponse,
+    QueryResultColumnResponse,
+    QuerySchemaConnectedResponse,
+    QuerySchemaObjectResponse,
     ReplacementActivityConnectedResponse,
     ReplacementActivityDayResponse,
     ReplacementActivityFilters,
@@ -49,6 +62,7 @@ from app.schemas import (
     RunChannelsConnectedResponse,
     RunCountsResponse,
     RunTimingResponse,
+    StatementRejectedResponse,
     SystemInfo,
     TestTimeByConfigurationConnectedResponse,
     TestTimeByConfigurationFilters,
@@ -189,6 +203,79 @@ def system_info(request: Request) -> SystemInfo:
 def demo_runs(query: Annotated[DemoRunQuery, Query()]) -> DemoRunsResponse:
     """Fictional fixtures only. Filter before slicing a bounded page."""
     return list_demo_runs(query)
+
+
+@router.get(
+    "/query/schema",
+    response_model=QuerySchemaConnectedResponse | RunActivityNotConnectedResponse,
+    tags=["query"],
+)
+def query_schema(
+    access: Annotated[ReportingAccess | None, Depends(get_reporting_access)],
+) -> QuerySchemaConnectedResponse | RunActivityNotConnectedResponse:
+    """Reviewed grant contract only; this endpoint never reads the live catalog."""
+    if access is None:
+        return RunActivityNotConnectedResponse()
+    return QuerySchemaConnectedResponse(
+        tls=access.tls,
+        objects=[
+            QuerySchemaObjectResponse(
+                name=name,
+                kind="view" if OBJECT_TYPES[name] == "V" else "table",
+                columns=list(columns),
+            )
+            for name, columns in COLUMNS.items()
+        ],
+    )
+
+
+@router.post(
+    "/query/execute",
+    response_model=QueryExecuteConnectedResponse | RunActivityNotConnectedResponse,
+    responses={
+        400: {"model": StatementRejectedResponse},
+        422: {"model": QueryFailedResponse | ErrorResponse},
+        503: {"model": ReportingFailureResponse},
+    },
+    tags=["query"],
+)
+def query_execute(
+    request: QueryExecuteRequest,
+    access: Annotated[ReportingAccess | None, Depends(get_reporting_access)],
+) -> QueryExecuteConnectedResponse | RunActivityNotConnectedResponse | JSONResponse:
+    if access is None:
+        return RunActivityNotConnectedResponse()
+    try:
+        result = access.repository.execute_console_query(request.sql)
+    except StatementRejected as exc:
+        return JSONResponse(
+            status_code=400,
+            content={"code": "statement_rejected", "reason": exc.reason},
+        )
+    except ConsoleQueryError as exc:
+        return JSONResponse(
+            status_code=422,
+            content={
+                "code": "query_failed",
+                "sql_error_number": exc.sql_error_number,
+                "message": exc.message,
+            },
+        )
+    except ReportingError as exc:
+        return JSONResponse(status_code=503, content={"code": exc.code})
+    return QueryExecuteConnectedResponse(
+        tls=access.tls,
+        executed_at_utc=result.executed_at_utc,
+        elapsed_ms=result.elapsed_ms,
+        columns=[
+            QueryResultColumnResponse(name=column.name, type=column.type)
+            for column in result.columns
+        ],
+        rows=[list(row) for row in result.rows],
+        row_count=result.row_count,
+        truncated=result.truncated,
+        multiple_result_sets=result.multiple_result_sets,
+    )
 
 
 @router.get(

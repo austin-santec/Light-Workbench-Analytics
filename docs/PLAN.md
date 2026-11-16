@@ -12,7 +12,7 @@ Milestones 0–2 and Milestone 3 Stage A are complete. The initial 4A draft is a
 | 4B. Core production metric implementation — not started | Requires explicit authorization, necessary remaining contract/detail decisions and Stage B evidence. Bounded queries and protected evidence access; semantic approval does not authorize implementation or production exposure. |
 | 5. Quality and replacement analytics | Implement verified current K/composite/recovery and replacement semantics after threshold/provenance/candidate/freshness acceptance. Strict first-pass manufacturing yield and historical as-of quality remain Deferred; no-recovery is not disposition. |
 | 6. Unit and run explorer | Reviewed read-only search/paging, timelines, maps, attempts and provenance; historical identity and authorized data disclosure. |
-| 7. Custom reports and exports | Bounded reports/exports and disclosure controls; user-initiated extended-report path with long-running warning, visible status and safe resource limits. Initial calendar scope ≤366 dates; longer ranges future. No arbitrary SQL. |
+| 7. Custom reports and exports | Bounded reports/exports and disclosure controls; user-initiated extended-report path with long-running warning, visible status and safe resource limits. Initial calendar scope ≤366 dates; longer ranges future. Free-form SQL is limited to the read-only Query console authorized 2026-11-16 (see AGENTS.md). |
 | 8. Security, testing, and deployment | Threat/access review, integration/e2e/performance evidence, operational settings and deployment/rollback plan. Hosting/authentication require review. |
 | 9. Pilot and production release | Reconcile definitions with users, pilot acceptance, training, readiness and support ownership. |
 

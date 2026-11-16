@@ -29,6 +29,8 @@ class ReportingSettings(BaseSettings):
     trust_server_certificate: bool = False
     connection_timeout_seconds: int = Field(default=5, ge=1, le=15)
     query_timeout_seconds: int = Field(default=10, ge=1, le=30)
+    console_timeout_seconds: int = Field(default=30, ge=1, le=60)
+    console_row_cap: int = Field(default=5000, ge=1, le=20_000)
 
     @model_validator(mode="after")
     def require_explicit_approval(self) -> Self:

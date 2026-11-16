@@ -1,13 +1,16 @@
 import { RESULT_VIEWS } from '../mock/presentation';
 import { PreviewButton, PreviewInput, PreviewSelect } from '../components/PreviewControl';
 import { SegmentedControl } from '../components/SegmentedControl';
-import { Fragment, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { QueryChart } from '../components/QueryChart';
 import { css } from '../lib/css';
+import { loadQuerySchema } from '../lib/api/queryConsole';
+import type { QuerySchemaConnected } from '../lib/api/queryConsole';
 import { getQueriesValues } from '../mock/queries';
 import type { QueriesState } from '../types';
+import { LiveQueries } from './LiveQueries';
 
-export default function Queries() {
+function DemoQueries() {
  const [search, setSearch] = useState('');
  const [state, setState] = useState<QueriesState>({ view: 'table', open: 'IL_RUNS' });
  const values = getQueriesValues(state);
@@ -203,4 +206,20 @@ export default function Queries() {
     <footer style={css("font-size:12px;color:var(--muted);line-height:1.55;max-width:900px")}>Synthetic query design preview. Schema and SQL are illustrative. No SQL is executed or sent to a server.</footer>
 
 </>);
+}
+
+export default function Queries() {
+  const [schema, setSchema] = useState<QuerySchemaConnected | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void loadQuerySchema(controller.signal).then(response => {
+      if (response.data_source === 'test_database') setSchema(response);
+    }).catch(() => {
+      // Unreachable and invalid responses deliberately retain the exact demo screen.
+    });
+    return () => controller.abort();
+  }, []);
+
+  return schema ? <LiveQueries schema={schema} /> : <DemoQueries />;
 }

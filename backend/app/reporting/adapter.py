@@ -91,7 +91,7 @@ class SqlServerAdapter:
         self._load_driver = load_driver
 
     @contextmanager
-    def cursor(self):
+    def cursor(self, *, query_timeout_seconds: int | None = None):
         if not self.settings.enabled:
             raise ReportingError("disabled")
         connection = cursor = None
@@ -106,7 +106,11 @@ class SqlServerAdapter:
                 autocommit=True,
             )
             phase = "query"
-            connection.timeout = self.settings.query_timeout_seconds
+            connection.timeout = (
+                self.settings.query_timeout_seconds
+                if query_timeout_seconds is None
+                else query_timeout_seconds
+            )
             cursor = connection.cursor()
             yield cursor
         except ReportingError as exc:

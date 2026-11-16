@@ -73,7 +73,7 @@ Invoke-RestMethod http://127.0.0.1:8000/api/v1/health/live
 backend/
   app/main.py            App factory, middleware, routes, optional explicit CORS
   app/__main__.py        Validated loopback-only local launcher
-  app/api.py             Four versioned GET routes
+  app/api.py             Versioned reporting, lookup, and query-console routes
   app/core/              Settings and sanitized error handling/logging
   app/schemas.py         Pydantic request/response transport contracts
   app/services/demo.py   Six deterministic fictional runs; filter/page only
@@ -83,11 +83,13 @@ backend/
   requirements-dev.lock Tested dependency constraints
 ```
 
-See [API contracts](docs/API_CONTRACTS.md) for query parameters, response examples, errors and proposed future API boundaries. There is no HTTP SQL execution interface, automatic database setup, or hardware dependency.
+See [API contracts](docs/API_CONTRACTS.md) for query parameters, response examples, errors and API boundaries. The local query console exposes one bounded read-only `SELECT`/`WITH` operation; there is no database setup, write SQL, or hardware dependency.
 
 ## Optional local reporting
 
-Read [reporting database guidance](docs/REPORTING_DATABASE.md) before configuring any target. The repository supports schema/permission checks, bounded run reads, run diagnostics, Pacific-calendar channel/replacement/Q02 aggregates, and the D16 current-unit projection. Reporting is lazy and disabled by default; synthetic fixtures remain independently runnable. The runtime dependency `tzdata` supplies the IANA Pacific rules on Windows and is constrained in `backend/requirements-dev.lock`.
+Read [reporting database guidance](docs/REPORTING_DATABASE.md) before configuring any target. The repository supports schema/permission checks, bounded run reads, run diagnostics, Pacific-calendar channel/replacement/Q02 aggregates, the D16 current-unit projection, and the owner-approved local read-only query console. Reporting is lazy and disabled by default; synthetic fixtures remain independently runnable. The runtime dependency `tzdata` supplies the IANA Pacific rules on Windows and is constrained in `backend/requirements-dev.lock`.
+
+The query console is on whenever reporting is enabled. `LWA_REPORTING_CONSOLE_TIMEOUT_SECONDS` defaults to `30` and accepts 1–60 seconds. `LWA_REPORTING_CONSOLE_ROW_CAP` defaults to `5000` and accepts 1–20,000 rows. These bounds do not replace the dedicated identity's SQL permissions. Query text, values, results, and returned SQL Server messages are not logged.
 
 From `backend/`, installing the optional 64-bit adapter and checking the default disabled state is safe without SQL Server:
 
@@ -123,8 +125,8 @@ docs/                    Design audit, proposed plan, status, notices
 - Overview range/purpose controls update synthetic counts, yields, outcomes and recent activity. Average time follows range/configuration only; configuration buttons select the histogram. The separate run diagnostics use the last 30 complete UTC days. When reporting is connected, the Channels tested and Channel failure rate tile/chart pairs use bounded Pacific-calendar APIs, label every included purpose, and otherwise retain their synthetic demo values.
 - Recent activity supports trimmed, case-insensitive serial search, model/station filters, sorting, reset, and empty states. It is a small fixture list, not the full aggregate dataset.
 - Unit lookup contains one detailed fixture, `DEMO-18793` / `DEMO-SW-001`. Other serials show an empty state; wavelength controls work.
-- Query table/chart buttons switch the same fixed results; library search filters titles only and has an empty state. Illustrative schema expansion works. SQL is displayed as text and never executed.
-- Unsupported filters/actions retain their design appearance as native disabled previews with visible explanation. Saved views are static examples; the Unit sidebar links example serials. Exports, sharing, query editing/execution, saved reports, and production metric semantics are deferred.
+- Query stays the original fixed synthetic design when reporting is unavailable. Connected mode shows the reviewed granted schema, editable read-only SQL, bounded table/chart results, TSV copy, CSV export, inline sanitized errors, and browser-local draft/history. Cancel aborts only the browser request.
+- Unsupported actions retain their design appearance as native disabled previews with visible explanation. Saved views/queries, sharing, parameters, Overview pinning, server-side query cancellation, and production metric semantics are deferred.
 
 Reporting architecture: **React → FastAPI → read-only SQL Server**. The browser must never access SQL Server. The separate Light Workbench repository and its database/hardware workflows are untouched.
 

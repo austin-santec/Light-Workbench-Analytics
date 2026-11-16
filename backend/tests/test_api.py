@@ -461,6 +461,8 @@ def test_openapi_matches_error_and_query_contracts(client):
     assert set(spec["paths"]) == {
         "/api/v1/assignments/{assignment_id}/hardware",
         "/api/v1/health/live",
+        "/api/v1/query/execute",
+        "/api/v1/query/schema",
         "/api/v1/system/info",
         "/api/v1/demo/runs",
         "/api/v1/reporting/run-activity",

@@ -1,6 +1,7 @@
 import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
 import type { QueryResult } from '../mock/contracts';
+import type { QueryCell } from '../lib/api/queryConsole';
 
 export function QueryChart({ rows }: { rows: readonly QueryResult[] }) {
   const data = rows.map(r => ({ ...r, label: `${r.model} · ${r.mode} · ${r.ch} ch`, seconds: r.avgSeconds }));
@@ -14,6 +15,29 @@ export function QueryChart({ rows }: { rows: readonly QueryResult[] }) {
         <Bar dataKey="seconds" barSize={23} radius={[0, 4, 4, 0]} isAnimationActive={false}>
           {data.map(r => <Cell key={r.label} fill={r.model === 'OSX-150' ? 'var(--o1)' : 'var(--o2)'} />)}
         </Bar>
+      </BarChart>
+    </ResponsiveContainer>
+  </div></div>;
+}
+
+export function LiveQueryChart({ rows, labelIndex, numericIndex, numericName }: {
+  rows: readonly QueryCell[][];
+  labelIndex: number;
+  numericIndex: number;
+  numericName: string;
+}) {
+  const data = rows.map((row, index) => ({
+    label: String(row[labelIndex] ?? `Row ${index + 1}`),
+    value: Number(row[numericIndex]),
+  })).filter(row => Number.isFinite(row.value));
+  return <div className="table-scroll" tabIndex={0} role="region" aria-label="Live query chart, scroll horizontally on narrow screens"><div role="img" aria-label={`Live bar chart of ${numericName} by the first label column`} style={{ width: '100%', minWidth: 500, height: Math.max(290, Math.min(1200, data.length * 30)) }}>
+    <ResponsiveContainer width="100%" height="100%" minWidth={0}>
+      <BarChart data={data} layout="vertical" margin={{ top: 4, bottom: 0, left: 0, right: 42 }} accessibilityLayer>
+        <CartesianGrid horizontal={false} stroke="var(--grid)" />
+        <XAxis type="number" tick={{ fill: 'var(--muted)', fontSize: 11 }} axisLine={false} tickLine={false} />
+        <YAxis type="category" dataKey="label" width={180} tick={{ fill: 'var(--ink2)', fontSize: 12 }} axisLine={false} tickLine={false} />
+        <Tooltip cursor={{ fill: 'var(--panel2)' }} contentStyle={{ background: 'var(--panel)', borderColor: 'var(--line)', color: 'var(--ink)' }} formatter={value => [String(value), numericName]} />
+        <Bar dataKey="value" fill="var(--accent)" barSize={22} radius={[0, 4, 4, 0]} isAnimationActive={false} />
       </BarChart>
     </ResponsiveContainer>
   </div></div>;

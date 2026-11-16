@@ -199,6 +199,70 @@ class RunActivityNotConnectedResponse(BaseModel):
     data_source: Literal["not_connected"] = "not_connected"
 
 
+class QuerySchemaObjectResponse(BaseModel):
+    name: str
+    kind: Literal["table", "view"]
+    columns: list[str]
+
+
+class QuerySchemaConnectedResponse(BaseModel):
+    data_source: Literal["test_database"] = "test_database"
+    tls: Literal["verified", "encrypted_unverified"]
+    source: Literal["reviewed_grant_contract"] = "reviewed_grant_contract"
+    objects: list[QuerySchemaObjectResponse]
+
+
+QuerySql = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=20_000),
+]
+
+
+class QueryExecuteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    sql: QuerySql
+
+
+class QueryResultColumnResponse(BaseModel):
+    name: str
+    type: Literal[
+        "integer",
+        "decimal",
+        "float",
+        "string",
+        "boolean",
+        "datetime",
+        "date",
+        "time",
+        "binary",
+        "other",
+    ]
+
+
+class QueryExecuteConnectedResponse(BaseModel):
+    data_source: Literal["test_database"] = "test_database"
+    tls: Literal["verified", "encrypted_unverified"]
+    executed_at_utc: AwareDatetime
+    elapsed_ms: int = Field(ge=0)
+    columns: list[QueryResultColumnResponse]
+    rows: list[list[object]]
+    row_count: int = Field(ge=0)
+    truncated: bool
+    multiple_result_sets: bool
+
+
+class StatementRejectedResponse(BaseModel):
+    code: Literal["statement_rejected"] = "statement_rejected"
+    reason: str
+
+
+class QueryFailedResponse(BaseModel):
+    code: Literal["query_failed"] = "query_failed"
+    sql_error_number: int | None
+    message: str
+
+
 class ConfigurationTestTimeResponse(BaseModel):
     switch_model: str = Field(min_length=1, max_length=30)
     wavelength_mode: Literal["SM", "MM"]

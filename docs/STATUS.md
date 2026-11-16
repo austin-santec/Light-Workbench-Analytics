@@ -1,3 +1,30 @@
+# Live read-only query console
+
+Updated November 16, 2026. Implemented the owner-approved local query console without connecting to SQL Server. `GET /api/v1/query/schema` exposes the 14 reviewed schema-gated objects from application constants without a catalog call. `POST /api/v1/query/execute` accepts one trimmed `SELECT`/`WITH` statement, runs the existing target/permission/migration/column preflight on the same short-lived read-only connection, applies fixed lock/isolation settings plus a 30-second default console timeout, and returns at most 5000 rows by default after one-row overflow detection. A pure secondary guard rejects multiple statements, parameter markers, write/DDL/execution/permission/session/server commands, `SELECT INTO`, remote access, procedure-style identifiers and four-part names. SQL permissions remain authoritative.
+
+Result serialization preserves decimal precision, bounds strings/binary values, normalizes supported temporal values and exposes coarse column types. SQL errors return only the native number and a bounded message after ODBC-prefix removal and case-insensitive configured/approved server, database and login redaction. SQL, values, results and returned server messages are never logged; diagnostics retain only the code, native number, elapsed time and application location. Tests use fake cursors and synthetic DEMO values only.
+
+The Query screen retains the existing synthetic design unchanged whenever schema discovery is disabled, unreachable or invalid. Connected mode keeps its library/editor/results/history hierarchy with five schema-gated examples, a real textarea and Ctrl/Cmd+Enter, browser-only Cancel, dynamic table, compatible bar chart, TSV copy, RFC 4180 CSV, truncation/error states, and guarded browser-local draft/history. Saved/team queries, parameters, formatting, Overview pinning, server-side cancellation and multiple-result-set display remain unavailable.
+
+Offline verification for this implementation:
+
+- From `backend/`, `.venv\Scripts\python.exe -m pytest -q` passed **300 tests**; `.venv\Scripts\python.exe -m ruff check .`, `.venv\Scripts\python.exe -m ruff format --check .`, and `.venv\Scripts\python.exe -m pip check` passed.
+- `npm.cmd run typecheck` and `npm.cmd run lint` passed. The exact `npm.cmd run build` command passed TypeScript and then hit the known managed-filesystem/esbuild config-loader access restriction. `npm.cmd run build -- --configLoader runner` passed with Vite 7.3.7 and 464 modules transformed.
+- `npm.cmd run test:browser` passed **29 checks** against an owned loopback Vite server started with the same runner-loader workaround. Synthetic interception covered the unchanged demo, connected schema, success/table/chart, truncation, guard rejection, redacted SQL error, browser cancellation and exact CSV bytes. The existing both-theme 1440/768/390px matrix also passed. Light 1440px, dark 390px, and light 390px chart captures were visually inspected.
+- `git diff --check`, strict UTF-8 decoding of all 21 changed text files, and the mojibake-marker scan passed.
+- No database connection, reporting-enabled backend, real record, credential, target detail, source-application operation, dependency change, `AGENTS.md`/`docs/PLAN.md` edit by Codex, commit or push occurred.
+
+Not verified here: any live console query, SQL Server/ODBC timeout cancellation, real permission denial/message shape, example-query compatibility/results against the authorized test database, the default 5000-row live truncation path, or live query plan/cost. Those remain owner/Claude acceptance work under the recorded authorization.
+
+Reviewer live check and fixes, November 16, 2026, against the authorized test database:
+
+- All five built-in examples ran (3, 12, 29, 4 and 13 rows). The chart view, inline error, Ctrl+Enter and browser history worked in a real browser.
+- The guard rejected `SELECT INTO` (`forbidden_keyword:INTO`), `UPDATE` and `EXEC` (`not_select`) before execution. A syntax error returned 422 with native 102, and an unknown object returned 208.
+- Fix: a capped result was drained through `nextset()`, so a cross join of about 460 million rows took 61.5 s to return 5000 rows. Truncated results now call `cursor.cancel()` and skip `nextset()`; the same query returns in 0.4 s. A fake-cursor test covers it.
+- Fix: console error messages now drop the leading SQLSTATE and trailing `(native) (SQLExecDirectW)` markers; the native number stays in `sql_error_number`.
+- A query running past 30 s returned 503 `query_timeout` at 30.2 s, and the backend answered the next request immediately.
+- The read-only login can read every user table, including `SCHEMA_MIGRATIONS`, not just the 14 gated objects, so a SQL permission denial on reads could not be shown. Preflight still confirms no INSERT/UPDATE/DELETE/ALTER/CONTROL on the gated objects. CSV export was covered only by the synthetic browser suite.
+
 # Live current unit status (D16)
 
 Updated November 13, 2026. Implemented the approved D16 slice without connecting to SQL Server. `GET /api/v1/reporting/unit-status` returns a capped active-assignment D08 cohort for a selected shared Pacific period/purpose set and evaluates each unit now. Typed Python mirrors the reviewed source effective-projection ordering, compatibility, wavelength/port checks and strict saved-limit classification. It separates review, missing coverage, passing, recovery available, needs analysis and no measured recovery. Analysis freshness is the approved timestamp approximation against newest effective readings and assignment replacements, not source-fingerprint equivalence or manufacturing disposition.
