@@ -258,7 +258,9 @@ export default function Failures() {
       </div>
     </section>
 
-    <footer style={css("font-size:12px;color:var(--muted);line-height:1.55;max-width:900px")}>Synthetic replacement examples. Recovery labels and calculations are illustrative and require review before production use.</footer>
+    <footer style={css("font-size:12px;color:var(--muted);line-height:1.55;max-width:900px")}>{unitStatus
+      ? 'Panels marked Live · test database show real test-database data. All other panels are synthetic examples; their recovery labels and calculations are illustrative and require review before production use.'
+      : 'Synthetic replacement examples. Recovery labels and calculations are illustrative and require review before production use.'}</footer>
 
 </>);
 }
