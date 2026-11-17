@@ -11,6 +11,7 @@ import { LiveRunActivityCard } from '../components/LiveRunActivityCard';
 import { loadChannelActivity, type ChannelActivityConnectedResponse, type ChannelActivityPeriodKey } from '../lib/api/channelActivity';
 import { loadFailureRate, type FailureRateConnectedResponse } from '../lib/api/failureRate';
 import { loadUnitStatus, type UnitStatusConnectedResponse } from '../lib/api/unitStatus';
+import { UNIT_STATUS_LABEL, UNIT_STATUS_OUTCOME_COLOR, UNIT_STATUS_OUTCOME_ORDER } from '../lib/unitStatusPresentation';
 
 type ChannelActivityState =
   | { kind: 'loading' | 'demo' | 'error' }
@@ -150,6 +151,25 @@ export default function Overview() {
  const liveFailureSpark = liveFailureData ? liveFailureSparkline(liveFailureData) : null;
  const liveFailureChart = liveFailureData ? liveFailureRateChart(liveFailureData) : null;
  const liveUnitData = unitStatus.kind === 'connected' ? unitStatus.data : null;
+ const liveUnitOutcomes = useMemo(() => {
+   if (!liveUnitData) return null;
+   const cohort = liveUnitData.counts.cohort_units;
+   const outcomes = UNIT_STATUS_OUTCOME_ORDER.map(status => {
+     const count = liveUnitData.counts[status];
+     return {
+       status,
+       label: UNIT_STATUS_LABEL[status],
+       count,
+       share: cohort === 0 ? '—' : `${(count / cohort * 100).toFixed(1)}%`,
+       width: cohort === 0 ? '0%' : `${count / cohort * 100}%`,
+       color: UNIT_STATUS_OUTCOME_COLOR[status],
+     };
+   });
+   return {
+     outcomes,
+     aria: `Current unit status: ${outcomes.map(outcome => `${outcome.count} ${outcome.label.toLowerCase()}`).join(', ')}`,
+   };
+ }, [liveUnitData]);
  const includedPurposes = selectedPurposes.map(purpose => PURPOSE_LABELS[purpose]).join(' + ');
  return (<>
 
@@ -408,26 +428,33 @@ export default function Overview() {
       <div style={css("flex:1 1 320px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:14px")}>
         <div style={css("display:flex;justify-content:space-between;align-items:flex-start;gap:10px")}>
           <div style={css("display:flex;flex-direction:column;gap:3px")}>
-            <h2 style={css("margin:0;font-size:16px;font-weight:600")}>Unit outcomes</h2>
-            <span style={css("font-size:12.5px;color:var(--muted)")}>{d.outCaption}</span>
+            <span style={css("display:flex;align-items:center;flex-wrap:wrap;gap:7px")}>
+              <h2 style={css("margin:0;font-size:16px;font-weight:600")}>Unit outcomes</h2>
+              {liveUnitData && <span className="live-unit-badge">Live · test database</span>}
+            </span>
+            {liveUnitData
+              ? <span style={css("font-size:12.5px;color:var(--muted)")}>Current status of {liveUnitData.counts.cohort_units.toLocaleString('en-US')} units tested {d.label}.{liveUnitData.incomplete && <span style={css("color:var(--warn-fg)")}> Bounded cohort is incomplete.</span>}</span>
+              : <span style={css("font-size:12.5px;color:var(--muted)")}>{d.outCaption}</span>}
           </div>
           <a href="#/failures" className="lnk" style={css("font-size:13px;display:inline-flex;align-items:center;min-height:32px")}>Failure examples</a>
         </div>
-        <div role="img" aria-label={d.outAria} style={css("display:flex;height:16px;border-radius:5px;overflow:hidden;gap:2px")}>
-          {outSegs.map((s, index9) => <Fragment key={index9}>
-            <div style={css("width:" + String(s.pct) + "%;background:" + String(s.color))}></div>
-          </Fragment>)}
+        <div role="img" aria-label={liveUnitOutcomes?.aria ?? d.outAria} style={css(`display:flex;height:16px;border-radius:5px;overflow:hidden;gap:${liveUnitOutcomes ? '0' : '2px'}${liveUnitOutcomes ? ';background:var(--line2)' : ''}`)}>
+          {liveUnitOutcomes
+            ? liveUnitOutcomes.outcomes.filter(outcome => outcome.count > 0).map(outcome => <div key={outcome.status} style={css(`width:${outcome.width};background:${outcome.color}`)} />)
+            : outSegs.map((s, index9) => <Fragment key={index9}><div style={css("width:" + String(s.pct) + "%;background:" + String(s.color))}></div></Fragment>)}
         </div>
         <div style={css("display:flex;flex-direction:column")}>
-          {outLegend.map((o, index10) => <Fragment key={index10}>
+          {(liveUnitOutcomes?.outcomes ?? outLegend).map((o, index10) => <Fragment key={'status' in o ? o.status : index10}>
             <div style={css("display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 0;border-top:1px solid var(--line2)")}>
               <span style={css("display:flex;align-items:center;gap:9px")}><span style={css("width:10px;height:10px;border-radius:3px;background:" + String(o.color))}></span>{o.label}</span>
-              <span style={css("display:flex;align-items:baseline;gap:10px;font-variant-numeric:tabular-nums")}><span style={css("font-size:15px;font-weight:650")}>{o.count}</span><span style={css("font-size:12px;color:var(--muted);min-width:44px;text-align:right")}>{o.share}</span></span>
+              <span style={css("display:flex;align-items:baseline;gap:10px;font-variant-numeric:tabular-nums")}><span style={css("font-size:15px;font-weight:650")}>{typeof o.count === 'number' ? o.count.toLocaleString('en-US') : o.count}</span><span style={css("font-size:12px;color:var(--muted);min-width:44px;text-align:right")}>{o.share}</span></span>
             </div>
           </Fragment>)}
         </div>
+        {liveUnitData && liveUnitData.counts.cohort_units === 0 && <span style={css("font-size:12.5px;color:var(--muted)")}>No units tested in this range.</span>}
+        {liveUnitData && <span style={css("font-size:11.5px;color:var(--muted)")}>Current measured status at extraction time. Not a first-pass yield or a final scrap decision.</span>}
         <div style={css("display:flex;flex-direction:column;gap:8px;padding-top:12px;border-top:1px solid var(--line)")}>
-          <span style={css("font-size:13px;font-weight:600")}>Which wavelength fails</span>
+          <span style={css("display:flex;align-items:center;gap:7px;font-size:13px;font-weight:600")}>Which wavelength fails{liveUnitData && <span title="Example only; not from the test database." style={css("font-size:10px;font-weight:650;letter-spacing:.04em;text-transform:uppercase;padding:3px 7px;border-radius:999px;background:var(--panel2);color:var(--muted)")}>Demo</span>}</span>
           <div role="img" aria-label="Failed channels by wavelength: 1550 nm only 58 percent, 1310 nm only 27 percent, both 15 percent" style={css("display:flex;height:10px;border-radius:4px;overflow:hidden;gap:2px")}>
             <div style={css("width:58%;background:var(--o1)")}></div><div style={css("width:27%;background:var(--o2)")}></div><div style={css("width:15%;background:var(--o3)")}></div>
           </div>

@@ -8,20 +8,13 @@ import type { FailuresState } from '../types';
 import { LiveReplacementActivityPanel, type LiveReplacementRange } from '../components/LiveReplacementActivityPanel';
 import { loadUnitStatus, type UnitStatus, type UnitStatusConnectedResponse } from '../lib/api/unitStatus';
 import { loadRecommendationUsage, type RecommendationUsageConnectedResponse } from '../lib/api/recommendationUsage';
+import { UNIT_STATUS_LABEL } from '../lib/unitStatusPresentation';
 
 const STATUS_PERIOD: Record<LiveReplacementRange, 'today' | 'yesterday' | 'this_week' | 'last_30_days'> = {
   today: 'today', yesterday: 'yesterday', week: 'this_week', month: 'last_30_days',
 };
 const RANGE_LABEL: Record<LiveReplacementRange, string> = {
   today: 'Today', yesterday: 'Yesterday', week: 'This week', month: 'Last 30 days',
-};
-const STATUS_LABEL: Record<UnitStatus, string> = {
-  review_required: 'Review required',
-  not_evaluated: 'Not evaluated',
-  passing: 'Passing',
-  failing_recovery_available: 'Recovery available',
-  failing_needs_analysis: 'Needs analysis',
-  failing_no_measured_recovery: 'No measured recovery',
 };
 const FAILING_STATUS: UnitStatus[] = ['failing_no_measured_recovery', 'failing_needs_analysis', 'failing_recovery_available'];
 const STATUS_TONE: Record<UnitStatus, { bg: string; fg: string }> = {
@@ -268,7 +261,7 @@ export default function Failures() {
             return <div role="row" key={unit.assignment_id} style={css("display:grid;grid-template-columns:1.05fr 1.25fr 1.2fr 2.2fr 1.6fr;gap:10px;align-items:center;padding:10px 6px;border-bottom:1px solid var(--line2);font-variant-numeric:tabular-nums") }>
               <span role="cell"><a href={`#/unit?unit=${unit.unit_id}`} className="lnk" style={css("font-family:'Geist Mono',monospace;font-weight:600")}>{unit.main_board_serial}</a></span>
               <span role="cell" style={css("display:flex;flex-direction:column;color:var(--ink2)")}><span>{unit.switch_serial}</span><span style={css("font-size:11px;color:var(--muted)")}>{unit.switch_model}</span></span>
-              <span role="cell"><span style={css(`display:inline-flex;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600;background:${tone.bg};color:${tone.fg}`)}>{STATUS_LABEL[unit.status]}</span></span>
+              <span role="cell"><span style={css(`display:inline-flex;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600;background:${tone.bg};color:${tone.fg}`)}>{UNIT_STATUS_LABEL[unit.status]}</span></span>
               <span role="cell" style={css("display:flex;flex-wrap:wrap;gap:4px")}>{unit.failing_channels.map(channel => <span key={channel.logical_channel} title={`Effective port ${channel.effective_port}; losses ${channel.wavelength_1_il_db.toFixed(4)} / ${channel.wavelength_2_il_db.toFixed(4)} dB`} style={css("font-family:'Geist Mono',monospace;font-size:11.5px;font-weight:600;padding:2px 6px;border-radius:5px;background:var(--bad-bg);color:var(--bad-fg)")}>Ch {channel.logical_channel} · P{channel.effective_port} · {channel.wavelength_1_il_db.toFixed(2)} / {channel.wavelength_2_il_db.toFixed(2)} dB</span>)}</span>
               <span role="cell" style={css("display:flex;flex-direction:column;color:var(--ink2)")}>{unit.latest_analysis ? <><span>{unit.latest_analysis.result_status}</span><span style={css(`font-size:11px;color:${unit.latest_analysis.current ? 'var(--ok-fg)' : 'var(--warn-fg)'}`)}>{unit.latest_analysis.current ? 'Current' : 'Stale'} · {unit.latest_analysis.unused_recommendations} unused</span></> : <span>No saved analysis</span>}</span>
             </div>;

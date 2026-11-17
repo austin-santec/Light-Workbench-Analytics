@@ -10,6 +10,7 @@ const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
 const errors = [];
 const checks = [];
 let runActivityMode = 'not_connected';
+let unitStatusMode = 'values';
 let queryResponseMode = 'success';
 let recommendationUsageMode = 'values';
 const runActivityRequests = [];
@@ -234,20 +235,32 @@ const unitStatusFixture = url => {
     ...base(id, status), latest_analysis: latest,
     failing_channels: [{ logical_channel: id, effective_port: id + 48, wavelength_1_il_db: 2.6001, wavelength_2_il_db: 1.1 }],
   });
+  const units = unitStatusMode === 'zero' ? [] : [
+    failing(1, 'failing_no_measured_recovery', analysis(301, true, 0)),
+    failing(2, 'failing_needs_analysis', analysis(302, false, 0)),
+    failing(3, 'failing_recovery_available', analysis(303, true, 2, 'recommendations_available')),
+    { ...base(4, 'review_required'), review_reasons: ['DEMO incompatible wavelength evidence.'] },
+    base(5, 'not_evaluated'),
+    base(6, 'passing'),
+    ...(period === 'this_week' ? [base(7, 'passing'), base(8, 'passing'), base(9, 'passing')] : []),
+  ];
+  const counts = {
+    cohort_units: units.length,
+    review_required: 0,
+    not_evaluated: 0,
+    passing: 0,
+    failing_recovery_available: 0,
+    failing_needs_analysis: 0,
+    failing_no_measured_recovery: 0,
+  };
+  units.forEach(unit => { counts[unit.status] += 1; });
   return {
     data_source: 'test_database', tls: 'encrypted_unverified', extracted_at_utc: '2026-11-13T20:00:00Z', timezone: 'America/Los_Angeles',
     period: { key: period, start_utc, end_utc, partial }, filters: { purpose: purposes },
     classification_rule: 'strict >, run limit snapshot',
-    counts: { cohort_units: 6, review_required: 1, not_evaluated: 1, passing: 1, failing_recovery_available: 1, failing_needs_analysis: 1, failing_no_measured_recovery: 1 },
-    units: [
-      failing(1, 'failing_no_measured_recovery', analysis(301, true, 0)),
-      failing(2, 'failing_needs_analysis', analysis(302, false, 0)),
-      failing(3, 'failing_recovery_available', analysis(303, true, 2, 'recommendations_available')),
-      { ...base(4, 'review_required'), review_reasons: ['DEMO incompatible wavelength evidence.'] },
-      base(5, 'not_evaluated'),
-      base(6, 'passing'),
-    ],
-    incomplete: false,
+    counts,
+    units,
+    incomplete: unitStatusMode === 'incomplete',
   };
 };
 const recommendationUsageFixture = url => {
@@ -406,6 +419,7 @@ const visit = async route => {
 };
 const assertText = async (locator, text) => assert.ok((await locator.innerText()).includes(text), `Expected ${text}`);
 const assertFocus = async locator => assert.ok(await locator.evaluate(element => element === document.activeElement), 'Expected keyboard focus');
+const unitOutcomesPanel = () => page.getByRole('heading', { name: 'Unit outcomes', exact: true }).locator('..').locator('..').locator('..').locator('..');
 const assertFocusRing = async locator => {
   const ring = await locator.evaluate(element => { const s = getComputedStyle(element); return { style: s.outlineStyle, width: parseFloat(s.outlineWidth) }; });
   assert.ok(ring.style !== 'none' && ring.width >= 2, 'Expected a visible focus outline');
@@ -445,8 +459,15 @@ try {
   assert.equal(unitStatusRequests.at(-1).searchParams.get('period'), 'today');
   await page.getByRole('region', { name: 'Key metrics' }).getByText('Demo', { exact: true }).first().waitFor();
   assert.equal(await page.getByRole('region', { name: 'Key metrics' }).getByText('Demo', { exact: true }).count(), 3);
+  const demoUnitOutcomes = unitOutcomesPanel();
+  await assertText(demoUnitOutcomes, '24 units finished today');
+  await demoUnitOutcomes.getByText('Passed first time', { exact: true }).waitFor();
+  await demoUnitOutcomes.getByText('Passed after replacement', { exact: true }).waitFor();
+  await demoUnitOutcomes.getByText('Unrecoverable', { exact: true }).waitFor();
+  assert.equal(await demoUnitOutcomes.getByText('Live · test database', { exact: true }).count(), 0);
+  assert.equal(await demoUnitOutcomes.getByText('Demo', { exact: true }).count(), 0);
   await page.getByText('First-pass channels over the fail limit at either wavelength, last 20 workdays.').waitFor();
-  check('Live card, channel activity, and failure rate keep the demo path when not connected');
+  check('Live cards and Unit outcomes keep the unchanged demo path when not connected');
 
   await visit('/failures');
   const replacementPanel = page.getByRole('region', { name: 'Replacement activity' });
@@ -522,6 +543,41 @@ try {
   assert.equal(await page.getByRole('region', { name: 'Key metrics' }).getByText('Live · test database', { exact: true }).count(), 3);
   await assertText(page.getByRole('region', { name: 'Key metrics' }), 'currently failing, no measured recovery');
   await assertText(page.getByRole('region', { name: 'Key metrics' }), '+ 1 need analysis · 1 recovery available');
+  const liveUnitOutcomes = unitOutcomesPanel();
+  await assertText(liveUnitOutcomes, 'Current status of 6 units tested today.');
+  await liveUnitOutcomes.getByText('Live · test database', { exact: true }).waitFor();
+  for (const label of ['Passing', 'Recovery available', 'Needs analysis', 'No measured recovery', 'Review required', 'Not evaluated']) {
+    const row = liveUnitOutcomes.getByText(label, { exact: true }).locator('..').locator('..');
+    await assertText(row, '1');
+    await assertText(row, '16.7%');
+  }
+  assert.equal(await liveUnitOutcomes.getByRole('img', { name: 'Current unit status: 1 passing, 1 recovery available, 1 needs analysis, 1 no measured recovery, 1 review required, 1 not evaluated' }).count(), 1);
+  await liveUnitOutcomes.getByText('Current measured status at extraction time. Not a first-pass yield or a final scrap decision.', { exact: true }).waitFor();
+  const wavelengthDemo = liveUnitOutcomes.getByText('Demo', { exact: true });
+  await wavelengthDemo.waitFor();
+  assert.equal(await wavelengthDemo.getAttribute('title'), 'Example only; not from the test database.');
+  assert.ok((await liveUnitOutcomes.textContent()).includes('Live · test database'));
+
+  unitStatusMode = 'zero';
+  await page.getByRole('button', { name: 'Refresh unit status' }).click();
+  await liveUnitOutcomes.getByText('No units tested in this range.', { exact: true }).waitFor();
+  assert.equal(await liveUnitOutcomes.getByText('—', { exact: true }).count(), 6);
+  assert.ok((await liveUnitOutcomes.innerText()).includes('—'));
+
+  unitStatusMode = 'incomplete';
+  await page.getByRole('button', { name: 'Refresh unit status' }).click();
+  await liveUnitOutcomes.getByText('Bounded cohort is incomplete.', { exact: true }).waitFor();
+
+  unitStatusMode = 'values';
+  const unitStatusRequestsBeforeRange = unitStatusRequests.length;
+  await page.getByRole('button', { name: 'This week', exact: true }).click();
+  await liveUnitOutcomes.getByText('Current status of 9 units tested this week.', { exact: true }).waitFor();
+  const passingRow = liveUnitOutcomes.getByText('Passing', { exact: true }).locator('..').locator('..');
+  await assertText(passingRow, '4');
+  await assertText(passingRow, '44.4%');
+  assert.ok(unitStatusRequests.length > unitStatusRequestsBeforeRange);
+  assert.equal(unitStatusRequests.at(-1).searchParams.get('period'), 'this_week');
+  check('Overview Unit outcomes covers connected counts, shares, note, wavelength demo, zero, incomplete, and range refresh');
   assert.equal(await page.getByRole('img', { name: /^Live bar chart of channels/ }).locator('rect').count(), 31);
   const liveFailureChart = page.getByRole('img', { name: /^Live daily first-observation run-channel failure rate/ });
   await liveFailureChart.waitFor();

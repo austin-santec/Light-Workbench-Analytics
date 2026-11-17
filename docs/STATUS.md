@@ -1,3 +1,19 @@
+# Live Overview Unit outcomes
+
+Updated November 16, 2026. The existing Overview **Unit outcomes** panel now switches from its unchanged three-row synthetic demo to the already-loaded `unit-status` response when reporting is connected. It shows the six current status buckets in the approved order with counts, cohort shares, an accessible stacked bar, the selected range label, incomplete/empty handling, and the current-state interpretation note. The existing Unrecoverable KPI refresh remains the single refresh trigger for both presentations; no request or endpoint was added. The wavelength strip remains illustrative and gains a connected-mode **Demo** chip with an example-only title.
+
+The status labels are shared with Failures so both screens retain the same wording. The panel uses existing Workbench theme tokens, keeps the Failure examples link and original demo output, and continues to use synthetic DEMO identifiers in tests. `docs/DESIGN_REFERENCE.md` records the deliberate six-status/live difference, and the dashboard map in `docs/METRICS.md` records the Q04–Q08 implementation while Q03 remains Deferred.
+
+Offline verification:
+
+- `npm.cmd run typecheck` and `npm.cmd run lint` passed. The exact `npm.cmd run build` reached Vite after TypeScript and hit the known managed-filesystem/esbuild config-loader restriction; `npm.cmd run build -- --configLoader runner` passed with Vite 7.3.7 and 466 modules transformed.
+- `npm.cmd run test:browser` passed **30 checks** against an owned loopback Vite server on port 5189, which was started with the runner-loader workaround and stopped afterward. Synthetic interception covered the unchanged demo caption/three legend rows/no badge, connected six-row counts/shares/badge/note/wavelength Demo chip, zero-cohort em dashes and empty state, incomplete warning, shared range refetch/update, and the existing both-theme 1440/768/390px no-overflow matrix. Light 1440px and dark 390px connected Overview captures were visually inspected.
+- From `backend/`, `.venv\Scripts\python.exe -m pytest -q` passed **313 tests** and `.venv\Scripts\ruff.exe check .` passed. `git diff --check`, strict UTF-8 decoding of changed text files, and the mojibake-marker scan passed.
+
+No backend, SQL, endpoint, schema, dependency, database connection, real record, credential, target detail, commit or push was involved. Not verified here: live endpoint/count reconciliation with the authorized test database, including comparison with the Failures current-status panel. That remains reviewer live acceptance.
+
+Reviewer live check, November 16, 2026, against the authorized test database: the Overview panel showed the live badge and exactly the unit-status endpoint counts for the same range. Today: 2 units, 1 passing, 1 review required. Last 30 days: 8 units, 4 passing, 1 recovery available, 1 needs analysis, 0 no measured recovery, 1 review required, 1 not evaluated, matching the Failures current-status check above. The wavelength strip carried the Demo chip. Incomplete-cohort rendering was not seen live.
+
 # Live recommendation usage (R06)
 
 Updated November 16, 2026. Implemented the approved R06 slice without connecting to SQL Server. `GET /api/v1/reporting/recommendation-usage` returns saved-analysis and distinct recommendation-ID counts for one shared Pacific period and selected purposes, required/optional/other splits, linkage through extraction time, nullable four-place linkage share, linked/all predicted-improvement means with n, and in-period linked/unlinked event context. Analyses on excluded/superseded runs or runs with a superseding pointer are counted separately and excluded from the valid cohort.
