@@ -14,6 +14,7 @@ let unitStatusMode = 'values';
 let queryResponseMode = 'success';
 let recommendationUsageMode = 'values';
 let channelFailuresMode = 'values';
+let stationMode = 'values';
 const runActivityRequests = [];
 const configurationTimingRequests = [];
 const channelActivityRequests = [];
@@ -22,6 +23,7 @@ const replacementActivityRequests = [];
 const unitStatusRequests = [];
 const recommendationUsageRequests = [];
 const channelFailuresRequests = [];
+const stationSummaryRequests = [];
 const unitSearchRequests = [];
 const purposeTotals = { production: 2, engineering: 3, training: 1, calibration: 4 };
 const purposeOpenRuns = { production: 0, engineering: 1, training: 0, calibration: 0 };
@@ -311,6 +313,33 @@ const channelFailuresFixture = url => {
     incomplete: channelFailuresMode === 'incomplete',
   };
 };
+const stationSummaryFixture = url => {
+  const purposes = url.searchParams.getAll('purpose').length ? url.searchParams.getAll('purpose') : ['production'];
+  const counts = (runs, units, failed, observed, unknown, active, retested, median, n) => ({
+    failed, observed, rate: observed ? failed / observed : null, unknown_criteria: unknown, runs, units,
+    active_run_channels: active, retested_run_channels: retested,
+    retest_share: active ? retested / active : null,
+    seconds_per_channel: { median, n },
+  });
+  const stations = stationMode === 'empty' ? [] : [
+    { station_number: 1, ...counts(4, 3, 3, 120, 0, 130, 6, '18.2500', 4) },
+    { station_number: 2, ...counts(2, 2, 4, 50, 0, 50, 5, '21.0000', 1) },
+    { station_number: null, ...counts(1, 1, 0, 0, 24, 24, 0, null, 0) },
+  ];
+  const sum = key => stations.reduce((total, station) => total + station[key], 0);
+  const totals = stations.length
+    ? counts(sum('runs'), 5, sum('failed'), sum('observed'), sum('unknown_criteria'), sum('active_run_channels'), sum('retested_run_channels'), '19.0000', 5)
+    : counts(0, 0, 0, 0, 0, 0, 0, null, 0);
+  return {
+    data_source: 'test_database', tls: 'encrypted_unverified', extracted_at_utc: '2026-11-13T20:00:00Z', timezone: 'America/Los_Angeles',
+    period: { key: 'last_30_days', start_utc: '2026-10-14T07:00:00Z', end_utc: '2026-11-13T08:00:00Z', partial: false },
+    filters: { purpose: purposes },
+    classification_rule: 'strict >, run limit snapshot',
+    stations,
+    totals,
+    incomplete: stationMode === 'incomplete',
+  };
+};
 const recommendationUsageFixture = url => {
   const period = url.searchParams.get('period') || 'last_30_days';
   const purposes = url.searchParams.getAll('purpose').length ? url.searchParams.getAll('purpose') : ['production'];
@@ -422,6 +451,15 @@ await page.route('**/api/v1/reporting/channel-failures?*', async route => {
     body: JSON.stringify(runActivityMode === 'not_connected' ? { data_source: 'not_connected' } : channelFailuresFixture(url)),
   });
 });
+await page.route('**/api/v1/reporting/station-summary*', async route => {
+  const url = new URL(route.request().url());
+  stationSummaryRequests.push(url);
+  await route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify(runActivityMode === 'not_connected' ? { data_source: 'not_connected' } : stationSummaryFixture(url)),
+  });
+});
 await page.route('**/api/v1/reporting/recommendation-usage?*', async route => {
   const url = new URL(route.request().url());
   recommendationUsageRequests.push(url);
@@ -465,7 +503,7 @@ page.on('response', response => {
 });
 page.on('requestfailed', request => {
   const pathname = new URL(request.url()).pathname;
-  const expectedUnmountCancellation = ['/api/v1/reporting/run-activity', '/api/v1/reporting/test-time-by-configuration', '/api/v1/reporting/channel-activity', '/api/v1/reporting/failure-rate', '/api/v1/reporting/replacement-activity', '/api/v1/reporting/unit-status', '/api/v1/reporting/recommendation-usage', '/api/v1/reporting/channel-failures', '/api/v1/units/search', '/api/v1/query/schema', '/api/v1/query/execute'].includes(pathname) && request.failure()?.errorText === 'net::ERR_ABORTED';
+  const expectedUnmountCancellation = ['/api/v1/reporting/run-activity', '/api/v1/reporting/test-time-by-configuration', '/api/v1/reporting/channel-activity', '/api/v1/reporting/failure-rate', '/api/v1/reporting/replacement-activity', '/api/v1/reporting/unit-status', '/api/v1/reporting/recommendation-usage', '/api/v1/reporting/channel-failures', '/api/v1/reporting/station-summary', '/api/v1/units/search', '/api/v1/query/schema', '/api/v1/query/execute'].includes(pathname) && request.failure()?.errorText === 'net::ERR_ABORTED';
   if (!expectedUnmountCancellation) errors.push(`Request failed: ${request.url()} ${request.failure()?.errorText}`);
 });
 const check = label => { checks.push(label); console.log(`PASS ${label}`); };
@@ -477,6 +515,7 @@ const visit = async route => {
 const assertText = async (locator, text) => assert.ok((await locator.innerText()).includes(text), `Expected ${text}`);
 const assertFocus = async locator => assert.ok(await locator.evaluate(element => element === document.activeElement), 'Expected keyboard focus');
 const channelFailuresPanel = () => page.getByRole('heading', { name: 'Failures by logical channel', exact: true }).locator('..').locator('..').locator('..').locator('..');
+const stationPanel = () => page.getByRole('heading', { name: 'Stations, last 30 days', exact: true }).locator('..').locator('..').locator('..').locator('..');
 const unitOutcomesPanel = () => page.getByRole('heading', { name: 'Unit outcomes', exact: true }).locator('..').locator('..').locator('..').locator('..');
 const assertFocusRing = async locator => {
   const ring = await locator.evaluate(element => { const s = getComputedStyle(element); return { style: s.outlineStyle, width: parseFloat(s.outlineWidth) }; });
@@ -531,7 +570,13 @@ try {
   assert.equal(await demoChannelFailures.getByText('Live · test database', { exact: true }).count(), 0);
   assert.equal(await demoChannelFailures.locator('[title^="Logical channel 19: 96 first-pass failures"]').count(), 1);
   assert.equal(channelFailuresRequests.at(-1).searchParams.get('period'), 'today');
-  check('Live cards, Unit outcomes and channel heatmap keep the unchanged demo path when not connected');
+  const demoStations = stationPanel();
+  await assertText(demoStations, 'Time is per channel so 24, 36 and 48-channel units compare fairly.');
+  await assertText(demoStations, 'Station 2 fails 0.5 pts above the line average');
+  assert.equal(await demoStations.getByText('Live · test database', { exact: true }).count(), 0);
+  assert.equal(stationSummaryRequests.at(-1).searchParams.getAll('purpose').join(','), 'production');
+  assert.equal(stationSummaryRequests.at(-1).searchParams.has('period'), false);
+  check('Live cards, Unit outcomes, channel heatmap and stations keep the unchanged demo path when not connected');
 
   await visit('/failures');
   const replacementPanel = page.getByRole('region', { name: 'Replacement activity' });
@@ -562,6 +607,7 @@ try {
   await downPage.route('**/api/v1/reporting/unit-status?*', route => route.abort('connectionrefused'));
   await downPage.route('**/api/v1/reporting/recommendation-usage?*', route => route.abort('connectionrefused'));
   await downPage.route('**/api/v1/reporting/channel-failures?*', route => route.abort('connectionrefused'));
+  await downPage.route('**/api/v1/reporting/station-summary*', route => route.abort('connectionrefused'));
   try {
     await downPage.goto(`${base}/#/`, { waitUntil: 'domcontentloaded' });
     await downPage.getByRole('region', { name: 'Run activity' }).getByText('Backend not reachable on 127.0.0.1:8000').first().waitFor();
@@ -676,6 +722,47 @@ try {
   await page.getByRole('button', { name: 'This week', exact: true }).click();
   await liveChannelFailures.getByText('Ch 5 stands out', { exact: true }).waitFor();
   check('Overview channel heatmap covers connected cells, empty channels, standouts, notes, zero failures, and range refresh');
+  const liveStations = stationPanel();
+  await liveStations.getByText('Live · test database', { exact: true }).waitFor();
+  await assertText(liveStations, 'Time is wall-clock run time per channel (median)');
+  const stationRows = liveStations.getByRole('table', { name: 'Station comparison' }).getByRole('row');
+  assert.equal(await stationRows.count(), 5);
+  assert.deepEqual(
+    (await stationRows.allInnerTexts()).slice(1).map(text => text.split('\n')[0].trim()),
+    ['Station 1', 'Station 2', 'No station recorded', 'All stations'],
+  );
+  const station1 = stationRows.nth(1);
+  await assertText(station1, '18.3');
+  await assertText(station1, '2.5%');
+  await assertText(station1, '4.6%');
+  assert.equal(await station1.locator('[title="3 of 120 first observations failed"]').count(), 1);
+  assert.equal(await station1.locator('[title="6 of 130 run-channels retested"]').count(), 1);
+  assert.equal(await station1.locator('[title="Median of 4 runs"]').count(), 1);
+  // Station 2 has the highest rate (8.0%), so its bar is full width; station 1 is relative to it.
+  assert.equal(await stationRows.nth(2).locator('[title="4 of 50 first observations failed"] span span').evaluate(element => element.style.width), '100%');
+  assert.equal(await station1.locator('[title="3 of 120 first observations failed"] span span').evaluate(element => element.style.width), '31.3%');
+  const noStation = stationRows.nth(3);
+  assert.equal(await noStation.getByText('—', { exact: true }).count(), 2);
+  await assertText(stationRows.nth(4), '4.1%');
+  await liveStations.getByText('Station-level only. Rates pool first observations; a station with few runs can swing widely.', { exact: true }).waitFor();
+  await liveStations.getByText('24 observations with unknown limits not counted.', { exact: true }).waitFor();
+  assert.equal(await liveStations.getByText(/Station 2 fails/).count(), 0);
+  stationMode = 'incomplete';
+  await page.getByRole('button', { name: 'Refresh station summary' }).click();
+  await liveStations.getByText('Run cap reached; results are incomplete.', { exact: true }).waitFor();
+  stationMode = 'empty';
+  await page.getByRole('button', { name: 'Refresh station summary' }).click();
+  await liveStations.getByText('No station activity in the last 30 days.', { exact: true }).waitFor();
+  assert.equal(await stationRows.count(), 1);
+  stationMode = 'values';
+  const stationRequestsBeforePurpose = stationSummaryRequests.length;
+  await page.getByRole('button', { name: /^Engineering / }).click();
+  await liveStations.getByText('All stations', { exact: true }).waitFor();
+  assert.ok(stationSummaryRequests.length > stationRequestsBeforePurpose);
+  assert.equal(stationSummaryRequests.at(-1).searchParams.getAll('purpose').join(','), 'production,engineering');
+  await page.getByRole('button', { name: /^Engineering / }).click();
+  await page.getByRole('button', { name: /^Engineering / }).and(page.locator('[aria-pressed="false"]')).waitFor();
+  check('Overview stations cover connected rows, totals, titles, relative bars, null station, notes, empty state, and purpose refresh');
   assert.equal(await page.getByRole('img', { name: /^Live bar chart of channels/ }).locator('rect').count(), 31);
   const liveFailureChart = page.getByRole('img', { name: /^Live daily first-observation run-channel failure rate/ });
   await liveFailureChart.waitFor();

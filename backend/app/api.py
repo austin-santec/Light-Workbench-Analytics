@@ -22,6 +22,7 @@ from app.reporting.models import (
     RecommendationUsageQuery,
     ReplacementActivityQuery,
     RunQuery,
+    StationSummaryQuery,
     UnitStatusQuery,
 )
 from app.reporting.repository import (
@@ -74,6 +75,10 @@ from app.schemas import (
     RunCountsResponse,
     RunTimingResponse,
     StatementRejectedResponse,
+    StationCountsResponse,
+    StationRowResponse,
+    StationSummaryConnectedResponse,
+    StationSummaryQueryParams,
     SystemInfo,
     TestTimeByConfigurationConnectedResponse,
     TestTimeByConfigurationFilters,
@@ -202,6 +207,19 @@ def validated_channel_failures_query(
             wavelength_mode=params.wavelength_mode,
             switch_model=params.switch_model,
         )
+    except ValidationError as exc:
+        errors = [
+            item | {"loc": ("query", *item["loc"])}
+            for item in exc.errors(include_url=False, include_input=False, include_context=False)
+        ]
+        raise RequestValidationError(errors) from None
+
+
+def validated_station_summary_query(
+    params: Annotated[StationSummaryQueryParams, Query()],
+) -> StationSummaryQuery:
+    try:
+        return StationSummaryQuery(purposes=tuple(params.purpose))
     except ValidationError as exc:
         errors = [
             item | {"loc": ("query", *item["loc"])}
@@ -540,6 +558,42 @@ def channel_failures(
         runs=metrics.runs,
         max_channel=metrics.max_channel,
         channels=[ChannelFailureResponse(**channel.model_dump()) for channel in metrics.channels],
+        incomplete=metrics.incomplete,
+    )
+
+
+@router.get(
+    "/reporting/station-summary",
+    response_model=StationSummaryConnectedResponse | RunActivityNotConnectedResponse,
+    responses={503: {"model": ReportingFailureResponse}},
+    tags=["reporting"],
+)
+def station_summary(
+    query: Annotated[StationSummaryQuery, Depends(validated_station_summary_query)],
+    access: Annotated[ReportingAccess | None, Depends(get_reporting_access)],
+    extracted_at: Annotated[datetime, Depends(get_extracted_at_utc)],
+) -> StationSummaryConnectedResponse | RunActivityNotConnectedResponse | JSONResponse:
+    """Last-30-day station-level failures, retests and elapsed seconds per channel."""
+    if access is None:
+        return RunActivityNotConnectedResponse()
+    boundaries = compute_channel_activity_boundaries(extracted_at)
+    try:
+        metrics = access.repository.get_station_summary(query, boundaries)
+    except ReportingError as exc:
+        return JSONResponse(status_code=503, content={"code": exc.code})
+    window = boundaries.periods["last_30_days"]
+    return StationSummaryConnectedResponse(
+        tls=access.tls,
+        extracted_at_utc=boundaries.extracted_at_utc,
+        period=UnitStatusPeriodResponse(
+            key="last_30_days",
+            start_utc=window.start_utc,
+            end_utc=window.end_utc,
+            partial=window.partial,
+        ),
+        filters=UnitStatusFilters(purpose=list(query.purposes)),
+        stations=[StationRowResponse(**station.model_dump()) for station in metrics.stations],
+        totals=StationCountsResponse(**metrics.totals.model_dump()),
         incomplete=metrics.incomplete,
     )
 

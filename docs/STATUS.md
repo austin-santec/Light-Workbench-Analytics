@@ -1,3 +1,18 @@
+# Live Overview station summary
+
+Updated November 16, 2026. Implemented directly by Claude (Codex was at its usage limit). `GET /api/v1/reporting/station-summary` returns last-30-day station-level runs, distinct units, Q02 first-observation failures, V08/V10 within-run retests and median elapsed seconds per channel, with pooled totals and `incomplete`. It reuses the failure-rate candidate-run and first-observation CTE text; the failure-rate and channel-failures SQL were verified byte-identical before and after. The Overview **Stations, last 30 days** table shows it for the selected purposes with a live badge, refresh, an All stations row, relative bars, `—` for nulls and a neutral station-level note instead of the demo callout. No operator data is read.
+
+Offline verification:
+
+- From `backend/`, `.venv\Scripts\python.exe -m pytest -q` passed **333 tests**; `ruff check .` and `ruff format --check .` passed. New DEMO tests cover parameter binding, shared CTE reuse, station grouping with null last, distinct units, invalid and mismatched limits, retest and timing aggregation with medians, station sums equal to failure-rate totals, empty data, the run cap, fail-closed rows, the row cap, `not_connected`, rejected purpose and period parameters and the sanitized 503.
+- `npm.cmd run typecheck` and `npm.cmd run lint` passed. `npm.cmd run test:browser` passed **32 checks** against the local dev server, including the unchanged demo table and callout, connected rows, totals, titles, relative bar widths, the null station row, unknown-limit, incomplete and empty states, purpose re-requests, and the both-theme 1440/768/390px matrix.
+
+Reviewer live check, November 16, 2026, against the authorized test database (production, last 30 days):
+
+- Totals: 11 runs, 8 units, 11 of 301 first observations failed with 0 unknown criteria, matching the failure-rate endpoint exactly; 19 of 301 run-channels retested; not incomplete.
+- Independent Query console reads matched every station's runs, distinct units, active and retested run-channels (stations 1, 2 and 99: 1/1/36/1, 2/2/42/0 and 8/5/223/18). Recomputing seconds per channel from each run's `elapsed_ms` and front-panel count reproduced every median (99.6, 49.6, 30.9 and 55.2 overall). One test-database run has about 24 hours of elapsed time, which is why wall-clock medians are labeled as such.
+- In the browser, the table showed the live badge, three station rows plus All stations (3.7% failure, 6.3% retests), relative bars and the neutral note, in both themes; the narrow dark view scrolls inside the table wrapper as designed. Live 503 rendering and query plans remain unverified.
+
 # Live Overview channel failure heatmap
 
 Updated November 16, 2026. Implemented directly by Claude (Codex was at its usage limit). `GET /api/v1/reporting/channel-failures` returns Q02 first-observation failures for one shared Pacific period, split by logical channel, with totals, contributing runs, the largest front-panel count and `incomplete`. It reuses the failure-rate candidate-run and first-observation CTE text (extracted into a shared constant; the failure-rate SQL text was verified byte-identical before and after) and the same per-run SQL/Python limit agreement. The Overview **Failures by logical channel** heatmap shows it for the selected range and purposes with a live badge, refresh, rate-relative token ramp, `—` for unobserved channels, up to three ringed standouts and unknown-limit/incomplete notes. Unavailable states keep the original demo heatmap.

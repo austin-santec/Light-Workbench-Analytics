@@ -34,6 +34,11 @@ from app.reporting.models import (
     RunPage,
     RunQuery,
     SampleState,
+    StationCounts,
+    StationRow,
+    StationSecondsPerChannel,
+    StationSummaryMetrics,
+    StationSummaryQuery,
     StoppedStatistics,
     TestTimeByConfigurationMetrics,
     TimingQuality,
@@ -403,6 +408,56 @@ SELECT logical_channel, run_id, front_panel_channel_count, COUNT_BIG(*) AS obser
 FROM windowed_observations
 GROUP BY logical_channel, run_id, front_panel_channel_count, sql_fail_limit
 ORDER BY logical_channel, run_id
+"""
+
+STATION_SUMMARY_SQL = f"""
+WITH period_bounds(start_utc, end_utc) AS (
+    SELECT start_utc, end_utc FROM (VALUES (?, ?)) AS supplied(start_utc, end_utc)
+),
+{_failure_rate_candidate_runs_sql(FAILURE_RATE_RUN_CAP).strip()},
+{FIRST_OBSERVATION_CTES}run_context AS (
+    SELECT c.run_id, r.station_number, a.unit_id, c.front_panel_channel_count,
+        p.sql_fail_limit,
+        CASE WHEN r.run_ended_at_utc IS NULL THEN NULL ELSE t.elapsed_ms END AS elapsed_ms
+    FROM candidate_runs AS c
+    JOIN parsed_runs AS p ON p.run_id = c.run_id
+    JOIN dbo.IL_RUNS AS r ON r.run_id = c.run_id
+    JOIN dbo.UNIT_SWITCH_ASSIGNMENTS AS a ON a.assignment_id = r.assignment_id
+    LEFT JOIN dbo.vw_RunTimingSummary AS t ON t.run_id = c.run_id
+),
+first_counts AS (
+    SELECT f.run_id, COUNT_BIG(*) AS observed,
+        SUM(CASE WHEN p.sql_fail_limit IS NOT NULL AND (
+                f.wavelength_1_il_db > p.sql_fail_limit
+                OR f.wavelength_2_il_db > p.sql_fail_limit
+            ) THEN CONVERT(BIGINT, 1) ELSE CONVERT(BIGINT, 0) END) AS failed_sql
+    FROM first_observations AS f
+    JOIN parsed_runs AS p ON p.run_id = f.run_id
+    CROSS JOIN period_bounds AS w
+    WHERE f.written_at_utc >= w.start_utc AND f.written_at_utc < w.end_utc
+    GROUP BY f.run_id
+),
+channel_activity AS (
+    SELECT o.run_id, o.logical_channel,
+        MAX(CASE WHEN o.observation_rank > 1 THEN 1 ELSE 0 END) AS retested
+    FROM ranked_observations AS o
+    CROSS JOIN period_bounds AS w
+    WHERE o.written_at_utc >= w.start_utc AND o.written_at_utc < w.end_utc
+    GROUP BY o.run_id, o.logical_channel
+),
+retest_counts AS (
+    SELECT run_id, COUNT_BIG(*) AS active_run_channels,
+        SUM(CONVERT(BIGINT, retested)) AS retested_run_channels
+    FROM channel_activity
+    GROUP BY run_id
+)
+SELECT rc.run_id, rc.station_number, rc.unit_id, rc.front_panel_channel_count,
+    rc.sql_fail_limit, COALESCE(fc.observed, 0), COALESCE(fc.failed_sql, 0),
+    x.active_run_channels, x.retested_run_channels, rc.elapsed_ms
+FROM run_context AS rc
+JOIN retest_counts AS x ON x.run_id = rc.run_id
+LEFT JOIN first_counts AS fc ON fc.run_id = rc.run_id
+ORDER BY rc.run_id
 """
 
 ATTRIBUTION_KEYS = (
@@ -941,6 +996,128 @@ def summarize_channel_failures(
     )
 
 
+def build_station_summary_queries(
+    query: StationSummaryQuery, boundaries: ChannelActivityBoundaries
+) -> tuple[tuple[str, tuple], tuple[str, tuple]]:
+    query = StationSummaryQuery.model_validate(query.model_dump())
+    window = boundaries.periods["last_30_days"]
+    filters = _candidate_run_parameters(query, window.start_utc, window.end_utc)
+    bounds = (window.start_utc.replace(tzinfo=None), window.end_utc.replace(tzinfo=None))
+    return (STATION_SUMMARY_SQL, (*bounds, *filters)), (FAILURE_RATE_LIMITS_SQL, filters)
+
+
+_FOUR_PLACES = Decimal("0.0001")
+
+
+def _median_string(values: list[Decimal]) -> str | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    median = ordered[middle] if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / 2
+    return str(median.quantize(_FOUR_PLACES, rounding=ROUND_HALF_UP))
+
+
+def summarize_station_summary(rows: list[tuple], limit_rows: list[tuple]) -> StationSummaryMetrics:
+    """Q02 first observations, V08/V10 retests and elapsed seconds per channel, by station."""
+    validated_limits, incomplete = _validated_failure_limits(limit_rows)
+    groups: dict[int | None, dict] = {}
+    seen: set[int] = set()
+
+    def new_group() -> dict:
+        return {
+            "runs": 0,
+            "units": set(),
+            "failed": 0,
+            "observed": 0,
+            "unknown_criteria": 0,
+            "active": 0,
+            "retested": 0,
+            "seconds": [],
+        }
+
+    for row in rows:
+        if len(row) != 10:
+            raise ReportingError("schema_incompatible")
+        (
+            run_id,
+            station,
+            unit_id,
+            front_panel,
+            raw_sql_limit,
+            observed,
+            failed_sql,
+            active,
+            retested,
+            elapsed_ms,
+        ) = row
+        if (
+            type(run_id) is not int
+            or run_id <= 0
+            or run_id in seen
+            or run_id not in validated_limits
+            or not (station is None or (type(station) is int and station > 0))
+            or type(unit_id) is not int
+            or unit_id <= 0
+            or type(front_panel) is not int
+            or front_panel <= 0
+            or type(observed) is not int
+            or type(failed_sql) is not int
+            or not 0 <= failed_sql <= observed
+            or type(active) is not int
+            or active <= 0
+            or not observed <= active
+            or type(retested) is not int
+            or not 0 <= retested <= active
+            or not (elapsed_ms is None or (type(elapsed_ms) is int and elapsed_ms >= 0))
+        ):
+            raise ReportingError("schema_incompatible")
+        seen.add(run_id)
+        for key in (station, "__totals__"):
+            group = groups.setdefault(key, new_group())
+            group["runs"] += 1
+            group["units"].add(unit_id)
+            group["active"] += active
+            group["retested"] += retested
+            if elapsed_ms is not None:
+                group["seconds"].append(Decimal(elapsed_ms) / 1000 / front_panel)
+        sql_limit = _normalized_sql_limit(raw_sql_limit)
+        python_limit = validated_limits[run_id]
+        for key in (station, "__totals__"):
+            group = groups[key]
+            if python_limit is None or sql_limit != python_limit:
+                group["unknown_criteria"] += observed
+            else:
+                group["failed"] += failed_sql
+                group["observed"] += observed
+
+    def counts(group: dict) -> dict:
+        return {
+            "runs": group["runs"],
+            "units": len(group["units"]),
+            "failed": group["failed"],
+            "observed": group["observed"],
+            "rate": group["failed"] / group["observed"] if group["observed"] else None,
+            "unknown_criteria": group["unknown_criteria"],
+            "active_run_channels": group["active"],
+            "retested_run_channels": group["retested"],
+            "retest_share": group["retested"] / group["active"] if group["active"] else None,
+            "seconds_per_channel": StationSecondsPerChannel(
+                median=_median_string(group["seconds"]), n=len(group["seconds"])
+            ),
+        }
+
+    totals = groups.pop("__totals__", new_group())
+    station_keys = sorted(groups, key=lambda key: (key is None, key or 0))
+    return StationSummaryMetrics(
+        stations=tuple(
+            StationRow(station_number=key, **counts(groups[key])) for key in station_keys
+        ),
+        totals=StationCounts(**counts(totals)),
+        incomplete=incomplete,
+    )
+
+
 def build_replacement_activity_queries(
     query: ReplacementActivityQuery, boundaries: ChannelActivityBoundaries
 ) -> tuple[tuple[str, tuple], tuple[str, tuple]]:
@@ -1202,6 +1379,9 @@ class ReportingRepository(Protocol):
     def get_channel_failures(
         self, query: ChannelFailuresQuery, boundaries: ChannelActivityBoundaries
     ) -> ChannelFailuresMetrics: ...
+    def get_station_summary(
+        self, query: StationSummaryQuery, boundaries: ChannelActivityBoundaries
+    ) -> StationSummaryMetrics: ...
     def get_replacement_activity(
         self, query: ReplacementActivityQuery, boundaries: ChannelActivityBoundaries
     ) -> ReplacementActivityMetrics: ...
@@ -1354,6 +1534,19 @@ class SqlServerReportingRepository:
             if len(rows) > CHANNEL_FAILURES_ROW_CAP:
                 raise ReportingError("schema_incompatible")
             return summarize_channel_failures(rows, limit_rows)
+
+    def get_station_summary(
+        self, query: StationSummaryQuery, boundaries: ChannelActivityBoundaries
+    ) -> StationSummaryMetrics:
+        query = StationSummaryQuery.model_validate(query.model_dump())
+        station_query, limits_query = build_station_summary_queries(query, boundaries)
+        with self._adapter.cursor() as cursor:
+            self._preflight(cursor)
+            rows = cursor.execute(*station_query).fetchmany(FAILURE_RATE_RUN_CAP + 1)
+            limit_rows = cursor.execute(*limits_query).fetchmany(FAILURE_RATE_RUN_CAP + 1)
+            if len(rows) > FAILURE_RATE_RUN_CAP:
+                raise ReportingError("schema_incompatible")
+            return summarize_station_summary(rows, limit_rows)
 
     def get_replacement_activity(
         self, query: ReplacementActivityQuery, boundaries: ChannelActivityBoundaries

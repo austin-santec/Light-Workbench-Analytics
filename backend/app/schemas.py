@@ -138,6 +138,12 @@ class RecommendationUsageQueryParams(BaseModel):
     purpose: list[RunPurpose] = Field(default_factory=lambda: [RunPurpose.PRODUCTION])
 
 
+class StationSummaryQueryParams(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    purpose: list[RunPurpose] = Field(default_factory=lambda: [RunPurpose.PRODUCTION])
+
+
 class ChannelFailuresQueryParams(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
@@ -519,6 +525,37 @@ class RecommendationUsageConnectedResponse(BaseModel):
     unlinked_events: int = Field(ge=0)
     unlinked_unattributed: int = Field(ge=0)
     linked_events_in_period: int = Field(ge=0)
+
+
+class StationSecondsPerChannelResponse(BaseModel):
+    median: FourPlaceDecimalString | None
+    n: int = Field(ge=0)
+
+
+class StationCountsResponse(FailureRateCountsResponse):
+    runs: int = Field(ge=0)
+    units: int = Field(ge=0)
+    active_run_channels: int = Field(ge=0)
+    retested_run_channels: int = Field(ge=0)
+    retest_share: float | None = Field(default=None, ge=0, le=1)
+    seconds_per_channel: StationSecondsPerChannelResponse
+
+
+class StationRowResponse(StationCountsResponse):
+    station_number: int | None = Field(default=None, gt=0)
+
+
+class StationSummaryConnectedResponse(BaseModel):
+    data_source: Literal["test_database"] = "test_database"
+    tls: Literal["verified", "encrypted_unverified"]
+    extracted_at_utc: AwareDatetime
+    timezone: Literal["America/Los_Angeles"] = "America/Los_Angeles"
+    period: UnitStatusPeriodResponse
+    filters: UnitStatusFilters
+    classification_rule: Literal["strict >, run limit snapshot"] = "strict >, run limit snapshot"
+    stations: list[StationRowResponse]
+    totals: StationCountsResponse
+    incomplete: bool
 
 
 class ChannelFailureResponse(FailureRateCountsResponse):

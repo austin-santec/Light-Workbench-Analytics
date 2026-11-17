@@ -147,6 +147,19 @@ The cohort contains active assignments with population-A accepted logical activi
 
 Disabled reporting returns exactly `{"data_source":"not_connected"}` and enabled failures return the established sanitized 503 code. The Overview tile follows its range/purpose controls, removes history/comparison in live mode and shows the two other failing counts. The Failures live list uses production and shares the live replacement panel's range control, sorts no-measured-recovery first, and shows review/not-evaluated counts separately. Strict clients abort superseded requests, validate the entire response, and retain the unchanged demo UI on unavailable responses. The Overview Unit outcomes panel remains synthetic because its split needs out-of-scope Q03/Q05 evidence.
 
+### Station summary
+
+`GET /api/v1/reporting/station-summary?purpose=<purpose>[&purpose=...]` returns last-30-day station-level diagnostics. The period is fixed to the shared Pacific `last_30_days` window and is echoed as `period`; there is no period parameter. Defaults, purpose validation, `not_connected` and the sanitized 503 match unit status. Station means `IL_RUNS.station_number`; operator data is never read or returned.
+
+Candidate runs are exactly failure-rate's population seeded by logical activity in the window (TOP 5000; the TOP 5001 limits read sets `incomplete`). Each run with logical-channel activity in the window contributes to its station; a null station is reported as `station_number: null`, listed last. Per station, and pooled in `totals`:
+
+- `runs`, `units` (distinct units through the run's assignment; totals count distinct units overall);
+- Q02 `failed`, `observed`, nullable `rate` and `unknown_criteria` with failure-rate's exact rule. Station sums equal failure-rate's `last_30_days` values when neither response is incomplete;
+- V08/V10 `active_run_channels` (run-channels with an accepted attempt in the window), `retested_run_channels` (those with an attempt in the window that has an earlier accepted attempt in the same run; the earlier one may predate the window) and nullable `retest_share`. A later run on the same unit is not a retest;
+- `seconds_per_channel` {`median` four-place string or null, `n`}: for ended runs with `vw_RunTimingSummary.elapsed_ms`, elapsed seconds divided by the run's front-panel count. This is a wall-clock run diagnostic including pauses, not T12 per-unit time.
+
+The Overview **Stations, last 30 days** table shows these for the selected purposes with an **All stations** row, bars relative to the highest station rate, `—` for null values and a neutral station-level note in place of the demo callout. Unavailable states keep the demo table and callout.
+
 ### Channel failures by logical channel
 
 `GET /api/v1/reporting/channel-failures?period=today|yesterday|this_week|last_30_days&purpose=<purpose>[&purpose=...]&wavelength_mode=SM|MM&switch_model=<model>` returns Q02, the first-observation run-channel failure fraction, for one shared Pacific period split by logical channel. Defaults are `last_30_days` and `production`. Validation, filter echo, `not_connected` and the sanitized 503 match failure-rate; `period` is echoed like unit status.

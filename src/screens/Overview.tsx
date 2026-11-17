@@ -12,6 +12,7 @@ import { loadChannelActivity, type ChannelActivityConnectedResponse, type Channe
 import { loadFailureRate, type FailureRateConnectedResponse } from '../lib/api/failureRate';
 import { loadUnitStatus, type UnitStatusConnectedResponse } from '../lib/api/unitStatus';
 import { channelHeatmap, loadChannelFailures, type ChannelFailuresConnectedResponse } from '../lib/api/channelFailures';
+import { loadStationSummary, stationTableRows, type StationSummaryConnectedResponse } from '../lib/api/stationSummary';
 import { UNIT_STATUS_LABEL, UNIT_STATUS_OUTCOME_COLOR, UNIT_STATUS_OUTCOME_ORDER } from '../lib/unitStatusPresentation';
 
 type ChannelActivityState =
@@ -25,6 +26,10 @@ type FailureRateState =
 type UnitStatusState =
   | { kind: 'loading' | 'demo' | 'error' }
   | { kind: 'connected'; data: UnitStatusConnectedResponse };
+
+type StationSummaryState =
+  | { kind: 'loading' | 'demo' | 'error' }
+  | { kind: 'connected'; data: StationSummaryConnectedResponse };
 
 type ChannelFailuresState =
   | { kind: 'loading' | 'demo' | 'error' }
@@ -132,6 +137,8 @@ export default function Overview() {
  const [unitStatusRefresh, setUnitStatusRefresh] = useState(0);
  const [channelFailures, setChannelFailures] = useState<ChannelFailuresState>({ kind: 'loading' });
  const [channelFailuresRefresh, setChannelFailuresRefresh] = useState(0);
+ const [stationSummary, setStationSummary] = useState<StationSummaryState>({ kind: 'loading' });
+ const [stationRefresh, setStationRefresh] = useState(0);
  const updateLivePurposeCounts = useCallback((counts: Record<Purpose, number> | null) => setLivePurposeCounts(counts), []);
  const resetPurpose = () => setState(current => ({ ...current, purp: { ...PRODUCTION_ONLY } }));
  const values = getOverviewValues(state);
@@ -166,6 +173,13 @@ export default function Overview() {
      .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setChannelFailures({ kind: 'error' }); });
    return () => controller.abort();
  }, [channelFailuresRefresh, purposeKey, selectedPurposes, state.range]);
+ useEffect(() => {
+   const controller = new AbortController();
+   loadStationSummary(selectedPurposes, controller.signal)
+     .then(result => setStationSummary(result.data_source === 'test_database' ? { kind: 'connected', data: result } : { kind: 'demo' }))
+     .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setStationSummary({ kind: 'error' }); });
+   return () => controller.abort();
+ }, [purposeKey, selectedPurposes, stationRefresh]);
  const liveChannelData = channelActivity.kind === 'connected' ? channelActivity.data : null;
  const livePeriod = liveChannelData?.periods[PERIOD_FOR_RANGE[state.range]];
  const liveSpark = liveChannelData ? sparkline(liveChannelData.daily.map(day => day.channels_tested), 160, 34) : null;
@@ -196,6 +210,8 @@ export default function Overview() {
  }, [liveUnitData]);
  const liveChannelFailures = channelFailures.kind === 'connected' ? channelFailures.data : null;
  const liveHeatmap = useMemo(() => liveChannelFailures ? channelHeatmap(liveChannelFailures) : null, [liveChannelFailures]);
+ const liveStations = stationSummary.kind === 'connected' ? stationSummary.data : null;
+ const liveStationRows = useMemo(() => liveStations ? stationTableRows(liveStations) : null, [liveStations]);
  const includedPurposes = selectedPurposes.map(purpose => PURPOSE_LABELS[purpose]).join(' + ');
  return (<>
 
@@ -494,8 +510,14 @@ export default function Overview() {
 
       <div style={css("flex:1.4 1 440px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:12px")}>
         <div style={css("display:flex;flex-direction:column;gap:3px")}>
-          <h2 style={css("margin:0;font-size:16px;font-weight:600")}>Stations, last 30 days</h2>
-          <span style={css("font-size:12.5px;color:var(--muted)")}>Time is per channel so 24, 36 and 48-channel units compare fairly.</span>
+          <div style={css("display:flex;justify-content:space-between;align-items:flex-start;gap:10px")}>
+            <span style={css("display:flex;align-items:center;flex-wrap:wrap;gap:7px")}>
+              <h2 style={css("margin:0;font-size:16px;font-weight:600")}>Stations, last 30 days</h2>
+              {liveStations && <span className="live-unit-badge">Live · test database</span>}
+            </span>
+            {liveStations && <button type="button" aria-label="Refresh station summary" onClick={() => setStationRefresh(value => value + 1)} style={css("min-height:28px;padding:0 8px;border-radius:6px;border:1px solid var(--line);background:var(--panel);color:var(--ink2);font-size:10.5px;font-weight:600")}>Refresh</button>}
+          </div>
+          <span style={css("font-size:12.5px;color:var(--muted)")}>{liveStations ? 'Time is wall-clock run time per channel (median), so 24, 36 and 48-channel units compare fairly.' : 'Time is per channel so 24, 36 and 48-channel units compare fairly.'}</span>
         </div>
         <div style={css("overflow-x:auto")}>
           <div role="table" aria-label="Station comparison" style={css("min-width:420px")}>
@@ -506,7 +528,13 @@ export default function Overview() {
               <span role="columnheader">Channel failure rate</span>
               <span role="columnheader" style={css("text-align:right")}>Retests</span>
             </div>
-            {stations.map((s, index11) => <Fragment key={index11}>
+            {liveStationRows ? liveStationRows.map(row => <div role="row" key={row.key} style={css("display:grid;grid-template-columns:1fr 0.7fr 0.9fr 1.5fr 0.8fr;gap:10px;align-items:center;padding:11px 4px;font-variant-numeric:tabular-nums;" + (row.total ? 'border-top:1px solid var(--line);margin-top:-1px' : 'border-bottom:1px solid var(--line2)'))}>
+                <span role="cell" style={css("font-weight:600")}>{row.name}</span>
+                <span role="cell" style={css("text-align:right;color:var(--ink2)" + (row.total ? ';font-weight:600' : ''))}>{row.units}</span>
+                <span role="cell" title={row.secondsTitle} style={css("text-align:right;color:var(--ink2)" + (row.total ? ';font-weight:600' : ''))}>{row.secondsPerChannel}</span>
+                <span role="cell" title={row.failTitle} style={css("display:flex;align-items:center;gap:8px")}><span style={css("flex:1;height:7px;border-radius:4px;background:var(--line2);overflow:hidden")}><span style={css("display:block;height:7px;border-radius:4px;width:" + row.barWidth + "%;background:" + String(accent))}></span></span><span style={css("min-width:40px;text-align:right;font-weight:600;color:var(--ink)")}>{row.failRate}</span></span>
+                <span role="cell" title={row.retestTitle} style={css("text-align:right;color:var(--ink2)" + (row.total ? ';font-weight:600' : ''))}>{row.retests}</span>
+              </div>) : stations.map((s, index11) => <Fragment key={index11}>
               <div role="row" style={css("display:grid;grid-template-columns:1fr 0.7fr 0.9fr 1.5fr 0.8fr;gap:10px;align-items:center;padding:11px 4px;border-bottom:1px solid var(--line2);font-variant-numeric:tabular-nums")}>
                 <span role="cell" style={css("font-weight:600")}>{s.name}</span>
                 <span role="cell" style={css("text-align:right;color:var(--ink2)")}>{s.units}</span>
@@ -517,10 +545,15 @@ export default function Overview() {
             </Fragment>)}
           </div>
         </div>
-        <div style={css("display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-radius:10px;background:var(--warn-bg);color:var(--warn-fg);font-size:12.5px")}>
+        {liveStations ? <div style={css("display:flex;flex-direction:column;gap:4px;font-size:11.5px;color:var(--muted)")}>
+          {liveStations.stations.length === 0 && <span style={css("font-size:12.5px")}>No station activity in the last 30 days.</span>}
+          <span>Station-level only. Rates pool first observations; a station with few runs can swing widely.</span>
+          {liveStations.totals.unknown_criteria > 0 && <span>{liveStations.totals.unknown_criteria.toLocaleString('en-US')} observations with unknown limits not counted.</span>}
+          {liveStations.incomplete && <span style={css("color:var(--warn-fg)")}>Run cap reached; results are incomplete.</span>}
+        </div> : <div style={css("display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-radius:10px;background:var(--warn-bg);color:var(--warn-fg);font-size:12.5px")}>
           <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" style={css("flex:0 0 auto;margin-top:1px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round")}><path d="M12 3l9.5 17h-19z"></path><path d="M12 10v4M12 17.5v.01"></path></svg>
           <span >Station 2 fails 0.5 pts above the line average and retests the most. Worth checking its reference and patch cords.</span>
-        </div>
+        </div>}
       </div>
 
       <div style={css("flex:1.2 1 380px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:12px")}>

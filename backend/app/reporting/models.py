@@ -246,6 +246,50 @@ class ChannelFailuresQuery(BaseModel):
         return value
 
 
+class StationSummaryQuery(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
+
+    purposes: tuple[RunPurpose, ...] = (RunPurpose.PRODUCTION,)
+    # Fixed to the existing candidate-run filters; mode/model stay unset for this panel.
+    wavelength_mode: None = None
+    switch_model: None = None
+
+    @field_validator("purposes")
+    @classmethod
+    def selected_purposes(cls, value: tuple[RunPurpose, ...]) -> tuple[RunPurpose, ...]:
+        if not 1 <= len(value) <= len(RunPurpose) or len(set(value)) != len(value):
+            raise ValueError("One to four unique purposes are required")
+        return value
+
+
+class StationSecondsPerChannel(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    median: str | None
+    n: int = Field(ge=0)
+
+
+class StationCounts(FailureRateCounts):
+    runs: int = Field(ge=0)
+    units: int = Field(ge=0)
+    active_run_channels: int = Field(ge=0)
+    retested_run_channels: int = Field(ge=0)
+    retest_share: float | None = Field(default=None, ge=0, le=1)
+    seconds_per_channel: StationSecondsPerChannel
+
+
+class StationRow(StationCounts):
+    station_number: int | None = Field(default=None, gt=0)
+
+
+class StationSummaryMetrics(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    stations: tuple[StationRow, ...]
+    totals: StationCounts
+    incomplete: bool
+
+
 class ChannelFailureCounts(FailureRateCounts):
     logical_channel: int = Field(gt=0)
 
