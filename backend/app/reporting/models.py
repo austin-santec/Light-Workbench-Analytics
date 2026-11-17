@@ -230,6 +230,36 @@ class FailureRateMetrics(BaseModel):
     incomplete: bool
 
 
+class ChannelFailuresQuery(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
+
+    period: Literal["today", "yesterday", "this_week", "last_30_days"] = "last_30_days"
+    purposes: tuple[RunPurpose, ...] = (RunPurpose.PRODUCTION,)
+    wavelength_mode: Literal["SM", "MM"] | None = None
+    switch_model: str | None = Field(default=None, min_length=1, max_length=30)
+
+    @field_validator("purposes")
+    @classmethod
+    def selected_purposes(cls, value: tuple[RunPurpose, ...]) -> tuple[RunPurpose, ...]:
+        if not 1 <= len(value) <= len(RunPurpose) or len(set(value)) != len(value):
+            raise ValueError("One to four unique purposes are required")
+        return value
+
+
+class ChannelFailureCounts(FailureRateCounts):
+    logical_channel: int = Field(gt=0)
+
+
+class ChannelFailuresMetrics(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    totals: FailureRateCounts
+    runs: int = Field(ge=0)
+    max_channel: int | None = Field(default=None, gt=0)
+    channels: tuple[ChannelFailureCounts, ...]
+    incomplete: bool
+
+
 class ReplacementActivityQuery(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
 

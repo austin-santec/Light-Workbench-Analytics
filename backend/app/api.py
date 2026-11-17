@@ -18,6 +18,7 @@ from app.reporting.config import ReportingSettings
 from app.reporting.console_guard import StatementRejected
 from app.reporting.models import (
     ChannelActivityQuery,
+    ChannelFailuresQuery,
     RecommendationUsageQuery,
     ReplacementActivityQuery,
     RunQuery,
@@ -36,10 +37,14 @@ from app.schemas import (
     ChannelActivityFilters,
     ChannelActivityPeriodResponse,
     ChannelActivityQueryParams,
+    ChannelFailureResponse,
+    ChannelFailuresConnectedResponse,
+    ChannelFailuresQueryParams,
     DemoRunQuery,
     DemoRunsResponse,
     ErrorResponse,
     FailureRateConnectedResponse,
+    FailureRateCountsResponse,
     FailureRateDayResponse,
     FailureRatePeriodResponse,
     HealthResponse,
@@ -179,6 +184,24 @@ def validated_unit_status_query(
 ) -> UnitStatusQuery:
     try:
         return UnitStatusQuery(period=params.period, purposes=tuple(params.purpose))
+    except ValidationError as exc:
+        errors = [
+            item | {"loc": ("query", *item["loc"])}
+            for item in exc.errors(include_url=False, include_input=False, include_context=False)
+        ]
+        raise RequestValidationError(errors) from None
+
+
+def validated_channel_failures_query(
+    params: Annotated[ChannelFailuresQueryParams, Query()],
+) -> ChannelFailuresQuery:
+    try:
+        return ChannelFailuresQuery(
+            period=params.period,
+            purposes=tuple(params.purpose),
+            wavelength_mode=params.wavelength_mode,
+            switch_model=params.switch_model,
+        )
     except ValidationError as exc:
         errors = [
             item | {"loc": ("query", *item["loc"])}
@@ -475,6 +498,48 @@ def failure_rate(
         },
         periods=periods,
         daily=daily,
+        incomplete=metrics.incomplete,
+    )
+
+
+@router.get(
+    "/reporting/channel-failures",
+    response_model=ChannelFailuresConnectedResponse | RunActivityNotConnectedResponse,
+    responses={503: {"model": ReportingFailureResponse}},
+    tags=["reporting"],
+)
+def channel_failures(
+    query: Annotated[ChannelFailuresQuery, Depends(validated_channel_failures_query)],
+    access: Annotated[ReportingAccess | None, Depends(get_reporting_access)],
+    extracted_at: Annotated[datetime, Depends(get_extracted_at_utc)],
+) -> ChannelFailuresConnectedResponse | RunActivityNotConnectedResponse | JSONResponse:
+    """First-observation run-channel failures in one Pacific period, by logical channel."""
+    if access is None:
+        return RunActivityNotConnectedResponse()
+    boundaries = compute_channel_activity_boundaries(extracted_at)
+    try:
+        metrics = access.repository.get_channel_failures(query, boundaries)
+    except ReportingError as exc:
+        return JSONResponse(status_code=503, content={"code": exc.code})
+    window = boundaries.periods[query.period]
+    return ChannelFailuresConnectedResponse(
+        tls=access.tls,
+        extracted_at_utc=boundaries.extracted_at_utc,
+        period=UnitStatusPeriodResponse(
+            key=query.period,
+            start_utc=window.start_utc,
+            end_utc=window.end_utc,
+            partial=window.partial,
+        ),
+        filters=ChannelActivityFilters(
+            purpose=list(query.purposes),
+            wavelength_mode=query.wavelength_mode,
+            switch_model=query.switch_model,
+        ),
+        totals=FailureRateCountsResponse(**metrics.totals.model_dump()),
+        runs=metrics.runs,
+        max_channel=metrics.max_channel,
+        channels=[ChannelFailureResponse(**channel.model_dump()) for channel in metrics.channels],
         incomplete=metrics.incomplete,
     )
 

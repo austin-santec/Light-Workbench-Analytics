@@ -11,6 +11,7 @@ import { LiveRunActivityCard } from '../components/LiveRunActivityCard';
 import { loadChannelActivity, type ChannelActivityConnectedResponse, type ChannelActivityPeriodKey } from '../lib/api/channelActivity';
 import { loadFailureRate, type FailureRateConnectedResponse } from '../lib/api/failureRate';
 import { loadUnitStatus, type UnitStatusConnectedResponse } from '../lib/api/unitStatus';
+import { channelHeatmap, loadChannelFailures, type ChannelFailuresConnectedResponse } from '../lib/api/channelFailures';
 import { UNIT_STATUS_LABEL, UNIT_STATUS_OUTCOME_COLOR, UNIT_STATUS_OUTCOME_ORDER } from '../lib/unitStatusPresentation';
 
 type ChannelActivityState =
@@ -24,6 +25,20 @@ type FailureRateState =
 type UnitStatusState =
   | { kind: 'loading' | 'demo' | 'error' }
   | { kind: 'connected'; data: UnitStatusConnectedResponse };
+
+type ChannelFailuresState =
+  | { kind: 'loading' | 'demo' | 'error' }
+  | { kind: 'connected'; data: ChannelFailuresConnectedResponse };
+
+// Live heatmap steps use theme tokens; each text/background pair measured >= 4.5:1 in both themes.
+// The demo keeps its fixed ramp.
+const LIVE_HEAT_RAMP: { bg: string; fg: string }[] = [
+  { bg: 'color-mix(in srgb,var(--accent) 6%,var(--panel))', fg: 'var(--ink2)' },
+  { bg: 'color-mix(in srgb,var(--accent) 22%,var(--panel))', fg: 'var(--ink)' },
+  { bg: 'color-mix(in srgb,var(--accent) 38%,var(--panel))', fg: 'var(--ink)' },
+  { bg: 'color-mix(in srgb,var(--accent) 55%,var(--panel))', fg: 'var(--ink)' },
+  { bg: 'var(--accent)', fg: 'var(--panel)' },
+];
 
 const PERIOD_FOR_RANGE: Record<TimeRange, ChannelActivityPeriodKey> = {
   today: 'today', yesterday: 'yesterday', week: 'this_week', month: 'last_30_days',
@@ -115,6 +130,8 @@ export default function Overview() {
  const [failureRefresh, setFailureRefresh] = useState(0);
  const [unitStatus, setUnitStatus] = useState<UnitStatusState>({ kind: 'loading' });
  const [unitStatusRefresh, setUnitStatusRefresh] = useState(0);
+ const [channelFailures, setChannelFailures] = useState<ChannelFailuresState>({ kind: 'loading' });
+ const [channelFailuresRefresh, setChannelFailuresRefresh] = useState(0);
  const updateLivePurposeCounts = useCallback((counts: Record<Purpose, number> | null) => setLivePurposeCounts(counts), []);
  const resetPurpose = () => setState(current => ({ ...current, purp: { ...PRODUCTION_ONLY } }));
  const values = getOverviewValues(state);
@@ -142,6 +159,13 @@ export default function Overview() {
      .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setUnitStatus({ kind: 'error' }); });
    return () => controller.abort();
  }, [purposeKey, selectedPurposes, state.range, unitStatusRefresh]);
+ useEffect(() => {
+   const controller = new AbortController();
+   loadChannelFailures(PERIOD_FOR_RANGE[state.range], selectedPurposes, controller.signal)
+     .then(result => setChannelFailures(result.data_source === 'test_database' ? { kind: 'connected', data: result } : { kind: 'demo' }))
+     .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setChannelFailures({ kind: 'error' }); });
+   return () => controller.abort();
+ }, [channelFailuresRefresh, purposeKey, selectedPurposes, state.range]);
  const liveChannelData = channelActivity.kind === 'connected' ? channelActivity.data : null;
  const livePeriod = liveChannelData?.periods[PERIOD_FOR_RANGE[state.range]];
  const liveSpark = liveChannelData ? sparkline(liveChannelData.daily.map(day => day.channels_tested), 160, 34) : null;
@@ -170,6 +194,8 @@ export default function Overview() {
      aria: `Current unit status: ${outcomes.map(outcome => `${outcome.count} ${outcome.label.toLowerCase()}`).join(', ')}`,
    };
  }, [liveUnitData]);
+ const liveChannelFailures = channelFailures.kind === 'connected' ? channelFailures.data : null;
+ const liveHeatmap = useMemo(() => liveChannelFailures ? channelHeatmap(liveChannelFailures) : null, [liveChannelFailures]);
  const includedPurposes = selectedPurposes.map(purpose => PURPOSE_LABELS[purpose]).join(' + ');
  return (<>
 
@@ -500,12 +526,24 @@ export default function Overview() {
       <div style={css("flex:1.2 1 380px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:12px")}>
         <div style={css("display:flex;justify-content:space-between;align-items:flex-start;gap:10px")}>
           <div style={css("display:flex;flex-direction:column;gap:3px")}>
-            <h2 style={css("margin:0;font-size:16px;font-weight:600")}>Failures by logical channel</h2>
-            <span style={css("font-size:12.5px;color:var(--muted)")}>48-channel units, first pass, last 30 days.</span>
+            <span style={css("display:flex;align-items:center;flex-wrap:wrap;gap:7px")}>
+              <h2 style={css("margin:0;font-size:16px;font-weight:600")}>Failures by logical channel</h2>
+              {liveChannelFailures && <span className="live-unit-badge">Live · test database</span>}
+            </span>
+            {liveChannelFailures
+              ? <span style={css("font-size:12.5px;color:var(--muted)")}>First observation per run-channel, strict &gt; each run's saved limit · {liveChannelFailures.runs.toLocaleString('en-US')} {liveChannelFailures.runs === 1 ? 'run' : 'runs'} {d.label}.</span>
+              : <span style={css("font-size:12.5px;color:var(--muted)")}>48-channel units, first pass, last 30 days.</span>}
           </div>
+          {liveChannelFailures && <button type="button" aria-label="Refresh channel failures" onClick={() => setChannelFailuresRefresh(value => value + 1)} style={css("align-self:flex-start;min-height:28px;padding:0 8px;border-radius:6px;border:1px solid var(--line);background:var(--panel);color:var(--ink2);font-size:10.5px;font-weight:600")}>Refresh</button>}
         </div>
         <div style={css("display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:4px")}>
-          {cells.map((c, index12) => <Fragment key={index12}>
+          {liveHeatmap ? liveHeatmap.cells.map(cell => {
+            const tone = cell.level === null ? { bg: 'var(--panel2)', fg: 'var(--muted)' } : LIVE_HEAT_RAMP[cell.level];
+            return <div key={cell.channel} title={cell.title} style={css("aspect-ratio:1/0.82;border-radius:6px;padding:4px 5px;display:flex;flex-direction:column;justify-content:space-between;background:" + tone.bg + ";color:" + tone.fg + ";outline:" + (cell.highlight ? '2px solid var(--ink)' : 'none'))}>
+              <span style={css("font-size:10px;opacity:0.8;line-height:1")}>{cell.channel}</span>
+              <span style={css("font-size:12.5px;font-weight:650;font-family:'Geist Mono',monospace;text-align:right;line-height:1")}>{cell.failed === null ? '—' : cell.failed.toLocaleString('en-US')}</span>
+            </div>;
+          }) : cells.map((c, index12) => <Fragment key={index12}>
             <div title={c.title} style={css("aspect-ratio:1/0.82;border-radius:6px;padding:4px 5px;display:flex;flex-direction:column;justify-content:space-between;background:" + String(c.bg) + ";color:" + String(c.fg) + ";outline:" + String(c.ring))}>
               <span style={css("font-size:10px;opacity:0.8;line-height:1")}>{c.n}</span>
               <span style={css("font-size:12.5px;font-weight:650;font-family:'Geist Mono',monospace;text-align:right;line-height:1")}>{c.count}</span>
@@ -514,10 +552,14 @@ export default function Overview() {
         </div>
         <div style={css("display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;font-size:11.5px;color:var(--muted)")}>
           <span >Fewer</span>
-          <span style={css("display:flex;gap:2px")}>{legendCells.map((l, index13) => <Fragment key={index13}><span style={css("width:18px;height:10px;border-radius:2px;background:" + String(l.bg))}></span></Fragment>)}</span>
+          <span style={css("display:flex;gap:2px")}>{(liveHeatmap ? LIVE_HEAT_RAMP : legendCells).map((l, index13) => <Fragment key={index13}><span style={css("width:18px;height:10px;border-radius:2px;background:" + String(l.bg))}></span></Fragment>)}</span>
           <span >More</span>
-          <span style={css("margin-left:auto;color:var(--ink2)")}>Ch 19, 33, 41 stand out</span>
+          <span style={css("margin-left:auto;color:var(--ink2)")}>{liveHeatmap
+            ? (liveHeatmap.standouts.length ? `Ch ${liveHeatmap.standouts.join(', ')} stand${liveHeatmap.standouts.length === 1 ? 's' : ''} out` : 'No failures in this range')
+            : 'Ch 19, 33, 41 stand out'}</span>
         </div>
+        {liveChannelFailures && liveChannelFailures.totals.unknown_criteria > 0 && <span style={css("font-size:11.5px;color:var(--muted)")}>{liveChannelFailures.totals.unknown_criteria.toLocaleString('en-US')} observations with unknown limits not counted.</span>}
+        {liveChannelFailures?.incomplete && <span style={css("font-size:11.5px;color:var(--warn-fg)")}>Run cap reached; results are incomplete.</span>}
       </div>
     </section>
 

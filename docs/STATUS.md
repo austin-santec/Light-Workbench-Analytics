@@ -1,3 +1,18 @@
+# Live Overview channel failure heatmap
+
+Updated November 16, 2026. Implemented directly by Claude (Codex was at its usage limit). `GET /api/v1/reporting/channel-failures` returns Q02 first-observation failures for one shared Pacific period, split by logical channel, with totals, contributing runs, the largest front-panel count and `incomplete`. It reuses the failure-rate candidate-run and first-observation CTE text (extracted into a shared constant; the failure-rate SQL text was verified byte-identical before and after) and the same per-run SQL/Python limit agreement. The Overview **Failures by logical channel** heatmap shows it for the selected range and purposes with a live badge, refresh, rate-relative token ramp, `—` for unobserved channels, up to three ringed standouts and unknown-limit/incomplete notes. Unavailable states keep the original demo heatmap.
+
+Offline verification:
+
+- From `backend/`, `.venv\Scripts\python.exe -m pytest -q` passed **324 tests**; `ruff check .` and `ruff format --check .` passed. New fake-cursor DEMO tests cover parameter order and period binding, reuse of the failure-rate CTE text, the unchanged 30-day failure-rate seed, per-channel grouping, invalid and mismatched limits, per-channel sums equal to the failure-rate period totals for the same runs, empty periods, the run cap, fail-closed row validation, the row cap, `not_connected`, invalid period and the sanitized 503. The OpenAPI path allowlist gained the endpoint.
+- `npm.cmd run typecheck` and `npm.cmd run lint` passed. `npm.cmd run test:browser` passed **31 checks** against the local dev server, including the unchanged demo heatmap, connected cells/titles/standouts, 8 unobserved channels, a 24-channel week, the unknown-limit and incomplete notes, zero failures, refresh and range re-requests, plus the both-theme 1440/768/390px matrix.
+
+Reviewer live check, November 16, 2026, against the authorized test database:
+
+- Production totals equal the failure-rate endpoint's period values exactly: today and this week 0 of 72 (2 runs, 36 channels), yesterday none, last 30 days 11 of 301 with 0 unknown criteria (11 runs, largest front panel 49). Neither response was incomplete.
+- Independent Query console first-observation counts over the same 30-day window matched channels 1 (0 of 8), 7 (1 of 7), 43 (1 of 3) and 49 (0 of 2).
+- In the browser, the heatmap filled 7 rows (channels 50–56 shown as `—`) and named "Ch 43, 45, 7 stand out", which is correct: 43 and 45 lead at 1 of 3, and 7 wins the 1-of-7 tie as the lowest channel. Measured text contrast on every live ramp step is at least 4.7:1 in dark and 4.8:1 in light after adjusting steps 3–5. Live 503 rendering and query plans remain unverified.
+
 # Live Overview Unit outcomes
 
 Updated November 16, 2026. The existing Overview **Unit outcomes** panel now switches from its unchanged three-row synthetic demo to the already-loaded `unit-status` response when reporting is connected. It shows the six current status buckets in the approved order with counts, cohort shares, an accessible stacked bar, the selected range label, incomplete/empty handling, and the current-state interpretation note. The existing Unrecoverable KPI refresh remains the single refresh trigger for both presentations; no request or endpoint was added. The wavelength strip remains illustrative and gains a connected-mode **Demo** chip with an example-only title.

@@ -138,6 +138,15 @@ class RecommendationUsageQueryParams(BaseModel):
     purpose: list[RunPurpose] = Field(default_factory=lambda: [RunPurpose.PRODUCTION])
 
 
+class ChannelFailuresQueryParams(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    period: Literal["today", "yesterday", "this_week", "last_30_days"] = "last_30_days"
+    purpose: list[RunPurpose] = Field(default_factory=lambda: [RunPurpose.PRODUCTION])
+    wavelength_mode: Literal["SM", "MM"] | None = None
+    switch_model: str | None = None
+
+
 class RunActivityWindow(BaseModel):
     started_from: AwareDatetime
     started_before: AwareDatetime
@@ -510,6 +519,25 @@ class RecommendationUsageConnectedResponse(BaseModel):
     unlinked_events: int = Field(ge=0)
     unlinked_unattributed: int = Field(ge=0)
     linked_events_in_period: int = Field(ge=0)
+
+
+class ChannelFailureResponse(FailureRateCountsResponse):
+    logical_channel: int = Field(gt=0)
+
+
+class ChannelFailuresConnectedResponse(BaseModel):
+    data_source: Literal["test_database"] = "test_database"
+    tls: Literal["verified", "encrypted_unverified"]
+    extracted_at_utc: AwareDatetime
+    timezone: Literal["America/Los_Angeles"] = "America/Los_Angeles"
+    period: UnitStatusPeriodResponse
+    filters: ChannelActivityFilters
+    classification_rule: Literal["strict >, run limit snapshot"] = "strict >, run limit snapshot"
+    totals: FailureRateCountsResponse
+    runs: int = Field(ge=0)
+    max_channel: int | None = Field(default=None, gt=0)
+    channels: list[ChannelFailureResponse]
+    incomplete: bool
 
 
 class ReportingFailureResponse(BaseModel):

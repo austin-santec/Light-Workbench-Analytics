@@ -467,6 +467,7 @@ def test_openapi_matches_error_and_query_contracts(client):
         "/api/v1/demo/runs",
         "/api/v1/reporting/run-activity",
         "/api/v1/reporting/channel-activity",
+        "/api/v1/reporting/channel-failures",
         "/api/v1/reporting/failure-rate",
         "/api/v1/reporting/recommendation-usage",
         "/api/v1/reporting/replacement-activity",

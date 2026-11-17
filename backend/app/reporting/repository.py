@@ -16,6 +16,9 @@ from app.reporting.models import (
     ChannelActivityCounts,
     ChannelActivityMetrics,
     ChannelActivityQuery,
+    ChannelFailureCounts,
+    ChannelFailuresMetrics,
+    ChannelFailuresQuery,
     CompletionStatus,
     ConfigurationTestTime,
     DurationStatistics,
@@ -311,16 +314,7 @@ candidate_runs AS (
 """
 
 
-def _failure_rate_sql(window_count: int) -> str:
-    window_values = ", ".join("(?, ?, ?)" for _ in range(window_count))
-    candidate_runs = _failure_rate_candidate_runs_sql(FAILURE_RATE_RUN_CAP)
-    return f"""
-WITH window_bounds(window_ordinal, start_utc, end_utc) AS (
-    SELECT window_ordinal, start_utc, end_utc
-    FROM (VALUES {window_values}) AS supplied(window_ordinal, start_utc, end_utc)
-),
-{candidate_runs.strip()},
-ranked_observations AS (
+FIRST_OBSERVATION_CTES = """ranked_observations AS (
     SELECT m.run_id, m.logical_channel, m.measurement_id,
         m.wavelength_1_il_db, m.wavelength_2_il_db, m.written_at_utc,
         ROW_NUMBER() OVER (
@@ -348,7 +342,19 @@ parsed_runs AS (
         )) AS sql_fail_limit
     FROM candidate_runs AS r
 ),
-windowed_observations AS (
+"""
+
+
+def _failure_rate_sql(window_count: int) -> str:
+    window_values = ", ".join("(?, ?, ?)" for _ in range(window_count))
+    candidate_runs = _failure_rate_candidate_runs_sql(FAILURE_RATE_RUN_CAP)
+    return f"""
+WITH window_bounds(window_ordinal, start_utc, end_utc) AS (
+    SELECT window_ordinal, start_utc, end_utc
+    FROM (VALUES {window_values}) AS supplied(window_ordinal, start_utc, end_utc)
+),
+{candidate_runs.strip()},
+{FIRST_OBSERVATION_CTES}windowed_observations AS (
     SELECT w.window_ordinal, f.run_id,
         f.wavelength_1_il_db, f.wavelength_2_il_db, p.sql_fail_limit
     FROM window_bounds AS w
@@ -375,6 +381,28 @@ WITH {_failure_rate_candidate_runs_sql(FAILURE_RATE_RUN_CAP + 1).strip()}
 SELECT run_id, wavelength_mode, limit_snapshot_json
 FROM candidate_runs
 ORDER BY run_id
+"""
+
+CHANNEL_FAILURES_ROW_CAP = FAILURE_RATE_RUN_CAP * 64
+CHANNEL_FAILURES_SQL = f"""
+WITH {_failure_rate_candidate_runs_sql(FAILURE_RATE_RUN_CAP).strip()},
+{FIRST_OBSERVATION_CTES}windowed_observations AS (
+    SELECT f.logical_channel, f.run_id, c.front_panel_channel_count,
+        f.wavelength_1_il_db, f.wavelength_2_il_db, p.sql_fail_limit
+    FROM first_observations AS f
+    JOIN parsed_runs AS p ON p.run_id = f.run_id
+    JOIN candidate_runs AS c ON c.run_id = f.run_id
+    WHERE f.written_at_utc >= ? AND f.written_at_utc < ?
+)
+SELECT logical_channel, run_id, front_panel_channel_count, COUNT_BIG(*) AS observed,
+    SUM(CASE WHEN sql_fail_limit IS NOT NULL AND (
+            wavelength_1_il_db > sql_fail_limit
+            OR wavelength_2_il_db > sql_fail_limit
+        ) THEN CONVERT(BIGINT, 1) ELSE CONVERT(BIGINT, 0) END) AS failed_sql,
+    sql_fail_limit
+FROM windowed_observations
+GROUP BY logical_channel, run_id, front_panel_channel_count, sql_fail_limit
+ORDER BY logical_channel, run_id
 """
 
 ATTRIBUTION_KEYS = (
@@ -702,19 +730,27 @@ def summarize_channel_activity(
     )
 
 
-def _failure_rate_filter_parameters(
-    query: ChannelActivityQuery, boundaries: ChannelActivityBoundaries
+def _candidate_run_parameters(
+    query: ChannelActivityQuery | ChannelFailuresQuery, seed_start: datetime, seed_end: datetime
 ) -> tuple:
     purposes = tuple(str(purpose) for purpose in query.purposes)
     padded_purposes = purposes + (purposes[-1],) * (len(RunPurpose) - len(purposes))
     return (
-        boundaries.periods["last_30_days"].start_utc.replace(tzinfo=None),
-        boundaries.extracted_at_utc.replace(tzinfo=None),
+        seed_start.replace(tzinfo=None),
+        seed_end.replace(tzinfo=None),
         *padded_purposes,
         query.wavelength_mode,
         query.wavelength_mode,
         query.switch_model,
         query.switch_model,
+    )
+
+
+def _failure_rate_filter_parameters(
+    query: ChannelActivityQuery, boundaries: ChannelActivityBoundaries
+) -> tuple:
+    return _candidate_run_parameters(
+        query, boundaries.periods["last_30_days"].start_utc, boundaries.extracted_at_utc
     )
 
 
@@ -815,6 +851,92 @@ def summarize_failure_rate(
     return FailureRateMetrics(
         periods=dict(zip(PERIOD_KEYS, period_counts, strict=True)),
         daily=daily_counts,
+        incomplete=incomplete,
+    )
+
+
+def build_channel_failures_queries(
+    query: ChannelFailuresQuery, boundaries: ChannelActivityBoundaries
+) -> tuple[tuple[str, tuple], tuple[str, tuple]]:
+    query = ChannelFailuresQuery.model_validate(query.model_dump())
+    window = boundaries.periods[query.period]
+    filters = _candidate_run_parameters(query, window.start_utc, window.end_utc)
+    return (
+        (
+            CHANNEL_FAILURES_SQL,
+            (*filters, window.start_utc.replace(tzinfo=None), window.end_utc.replace(tzinfo=None)),
+        ),
+        (FAILURE_RATE_LIMITS_SQL, filters),
+    )
+
+
+def summarize_channel_failures(
+    rows: list[tuple], limit_rows: list[tuple]
+) -> ChannelFailuresMetrics:
+    """Q02 first observations in one period, grouped by logical channel.
+
+    Uses the same per-run SQL/Python limit agreement as the failure-rate summary, so the
+    per-channel sums equal the failure-rate period totals for the same candidate runs.
+    """
+    validated_limits, incomplete = _validated_failure_limits(limit_rows)
+    channels: dict[int, dict[str, int]] = {}
+    runs: set[int] = set()
+    max_channel: int | None = None
+    seen: set[tuple[int, int]] = set()
+    for row in rows:
+        if len(row) != 6:
+            raise ReportingError("schema_incompatible")
+        channel, run_id, front_panel, observed, failed_sql, raw_sql_limit = row
+        if (
+            type(channel) is not int
+            or type(run_id) is not int
+            or type(front_panel) is not int
+            or not 1 <= channel <= front_panel
+            or run_id <= 0
+            or type(observed) is not int
+            or observed <= 0
+            or type(failed_sql) is not int
+            or not 0 <= failed_sql <= observed
+            or (channel, run_id) in seen
+            or run_id not in validated_limits
+        ):
+            raise ReportingError("schema_incompatible")
+        seen.add((channel, run_id))
+        runs.add(run_id)
+        max_channel = front_panel if max_channel is None else max(max_channel, front_panel)
+        total = channels.setdefault(channel, {"failed": 0, "observed": 0, "unknown_criteria": 0})
+        sql_limit = _normalized_sql_limit(raw_sql_limit)
+        python_limit = validated_limits[run_id]
+        if python_limit is None or sql_limit != python_limit:
+            total["unknown_criteria"] += observed
+            continue
+        total["failed"] += failed_sql
+        total["observed"] += observed
+
+    def counts(failed: int, observed: int, unknown: int) -> FailureRateCounts:
+        return FailureRateCounts(
+            failed=failed,
+            observed=observed,
+            rate=failed / observed if observed else None,
+            unknown_criteria=unknown,
+        )
+
+    per_channel = tuple(
+        ChannelFailureCounts(
+            logical_channel=channel,
+            **counts(t["failed"], t["observed"], t["unknown_criteria"]).model_dump(),
+        )
+        for channel, t in sorted(channels.items())
+    )
+    return ChannelFailuresMetrics(
+        totals=counts(
+            sum(c.failed for c in per_channel),
+            sum(c.observed for c in per_channel),
+            sum(c.unknown_criteria for c in per_channel),
+        ),
+        runs=len(runs),
+        max_channel=max_channel,
+        channels=per_channel,
         incomplete=incomplete,
     )
 
@@ -1077,6 +1199,9 @@ class ReportingRepository(Protocol):
     def get_failure_rate(
         self, query: ChannelActivityQuery, boundaries: ChannelActivityBoundaries
     ) -> FailureRateMetrics: ...
+    def get_channel_failures(
+        self, query: ChannelFailuresQuery, boundaries: ChannelActivityBoundaries
+    ) -> ChannelFailuresMetrics: ...
     def get_replacement_activity(
         self, query: ReplacementActivityQuery, boundaries: ChannelActivityBoundaries
     ) -> ReplacementActivityMetrics: ...
@@ -1216,6 +1341,19 @@ class SqlServerReportingRepository:
             ):
                 raise ReportingError("schema_incompatible")
             return summarize_failure_rate(period_rows, daily_rows, limit_rows)
+
+    def get_channel_failures(
+        self, query: ChannelFailuresQuery, boundaries: ChannelActivityBoundaries
+    ) -> ChannelFailuresMetrics:
+        query = ChannelFailuresQuery.model_validate(query.model_dump())
+        channel_query, limits_query = build_channel_failures_queries(query, boundaries)
+        with self._adapter.cursor() as cursor:
+            self._preflight(cursor)
+            rows = cursor.execute(*channel_query).fetchmany(CHANNEL_FAILURES_ROW_CAP + 1)
+            limit_rows = cursor.execute(*limits_query).fetchmany(FAILURE_RATE_RUN_CAP + 1)
+            if len(rows) > CHANNEL_FAILURES_ROW_CAP:
+                raise ReportingError("schema_incompatible")
+            return summarize_channel_failures(rows, limit_rows)
 
     def get_replacement_activity(
         self, query: ReplacementActivityQuery, boundaries: ChannelActivityBoundaries
