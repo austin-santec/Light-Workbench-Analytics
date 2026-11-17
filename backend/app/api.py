@@ -25,6 +25,7 @@ from app.reporting.models import (
     RunQuery,
     StationSummaryQuery,
     UnitStatusQuery,
+    UnitTestTimeQuery,
 )
 from app.reporting.repository import (
     ConsoleQueryError,
@@ -95,6 +96,10 @@ from app.schemas import (
     UnitStatusFilters,
     UnitStatusPeriodResponse,
     UnitStatusQueryParams,
+    UnitTestTimeConnectedResponse,
+    UnitTestTimeFilters,
+    UnitTestTimePeriodResponse,
+    UnitTestTimeQueryParams,
 )
 from app.services.demo import list_demo_runs
 
@@ -194,6 +199,19 @@ def validated_unit_status_query(
 ) -> UnitStatusQuery:
     try:
         return UnitStatusQuery(period=params.period, purposes=tuple(params.purpose))
+    except ValidationError as exc:
+        errors = [
+            item | {"loc": ("query", *item["loc"])}
+            for item in exc.errors(include_url=False, include_input=False, include_context=False)
+        ]
+        raise RequestValidationError(errors) from None
+
+
+def validated_unit_test_time_query(
+    params: Annotated[UnitTestTimeQueryParams, Query()],
+) -> UnitTestTimeQuery:
+    try:
+        return UnitTestTimeQuery(period=params.period, purposes=tuple(params.purpose))
     except ValidationError as exc:
         errors = [
             item | {"loc": ("query", *item["loc"])}
@@ -741,6 +759,42 @@ def unit_status(
         filters=UnitStatusFilters(purpose=list(query.purposes)),
         counts=metrics.counts,
         units=[asdict(unit) for unit in metrics.units],
+        incomplete=metrics.incomplete,
+    )
+
+
+@router.get(
+    "/reporting/unit-test-time",
+    response_model=UnitTestTimeConnectedResponse | RunActivityNotConnectedResponse,
+    responses={503: {"model": ReportingFailureResponse}},
+    tags=["reporting"],
+)
+def unit_test_time(
+    query: Annotated[UnitTestTimeQuery, Depends(validated_unit_test_time_query)],
+    access: Annotated[ReportingAccess | None, Depends(get_reporting_access)],
+    extracted_at: Annotated[datetime, Depends(get_extracted_at_utc)],
+) -> UnitTestTimeConnectedResponse | RunActivityNotConnectedResponse | JSONResponse:
+    """Cumulative qualifying-run time for units finished under working rule D17."""
+    if access is None:
+        return RunActivityNotConnectedResponse()
+    boundaries = compute_channel_activity_boundaries(extracted_at)
+    try:
+        metrics = access.repository.get_unit_test_time(query, boundaries)
+    except ReportingError as exc:
+        return JSONResponse(status_code=503, content={"code": exc.code})
+    window = boundaries.periods[query.period]
+    return UnitTestTimeConnectedResponse(
+        tls=access.tls,
+        extracted_at_utc=boundaries.extracted_at_utc,
+        period=UnitTestTimePeriodResponse(
+            key=query.period,
+            start_utc=window.start_utc,
+            end_utc=window.end_utc,
+            partial=window.partial,
+        ),
+        filters=UnitTestTimeFilters(purpose=list(query.purposes)),
+        units=[asdict(unit) for unit in metrics.units],
+        excluded=metrics.excluded,
         incomplete=metrics.incomplete,
     )
 

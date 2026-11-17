@@ -1,5 +1,5 @@
 import { ConfigurationTable } from './ConfigurationTable';
-import { TIME_RANGES, PRODUCTION_ONLY, PURPOSES, sparkline, togglePurpose } from '../mock/presentation';
+import { TIME_RANGES, PRODUCTION_ONLY, PURPOSES, formatDuration, sparkline, togglePurpose } from '../mock/presentation';
 import { PreviewButton, PreviewSelect } from '../components/PreviewControl';
 import { SegmentedControl } from '../components/SegmentedControl';
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
@@ -14,6 +14,7 @@ import { loadUnitStatus, type UnitStatusConnectedResponse } from '../lib/api/uni
 import { channelHeatmap, loadChannelFailures, type ChannelFailuresConnectedResponse } from '../lib/api/channelFailures';
 import { loadStationSummary, stationTableRows, type StationSummaryConnectedResponse } from '../lib/api/stationSummary';
 import { UNIT_STATUS_LABEL, UNIT_STATUS_OUTCOME_COLOR, UNIT_STATUS_OUTCOME_ORDER } from '../lib/unitStatusPresentation';
+import { loadUnitTestTime, summarizeUnitTestTime, UNIT_TEST_TIME_EXCLUDED_KEYS, type UnitTestTimeConnectedResponse, type UnitTestTimeOutcomeFilter } from '../lib/api/unitTestTime';
 
 type ChannelActivityState =
   | { kind: 'loading' | 'demo' | 'error' }
@@ -26,6 +27,10 @@ type FailureRateState =
 type UnitStatusState =
   | { kind: 'loading' | 'demo' | 'error' }
   | { kind: 'connected'; data: UnitStatusConnectedResponse };
+
+type UnitTestTimeState =
+  | { kind: 'loading' | 'demo' | 'error' }
+  | { kind: 'connected'; data: UnitTestTimeConnectedResponse };
 
 type StationSummaryState =
   | { kind: 'loading' | 'demo' | 'error' }
@@ -51,6 +56,17 @@ const PERIOD_FOR_RANGE: Record<TimeRange, ChannelActivityPeriodKey> = {
 
 const PURPOSE_LABELS: Record<Purpose, string> = {
   production: 'Production', engineering: 'Engineering', training: 'Training', calibration: 'Calibration',
+};
+
+const UNIT_TEST_TIME_EXCLUDED_LABELS: Record<typeof UNIT_TEST_TIME_EXCLUDED_KEYS[number], string> = {
+  review_required: 'review required',
+  not_evaluated: 'not evaluated',
+  failing_recovery_available: 'recovery available',
+  failing_needs_analysis: 'needs analysis',
+  other_saved_result: 'another saved analysis result',
+  run_in_progress: 'run in progress',
+  missing_duration: 'missing duration',
+  outside_period: 'finish date outside the range',
 };
 
 function liveThroughputChart(data: ChannelActivityConnectedResponse) {
@@ -126,6 +142,34 @@ function liveFailureRateChart(data: FailureRateConnectedResponse) {
   return { segments: lineSegments(values, x, y), points, labels, grid };
 }
 
+function liveUnitTestTimeHistogram(data: ReturnType<typeof summarizeUnitTestTime>) {
+  if (data.bins.length === 0 || data.meanMs === null) return null;
+  const x0 = 12, x1 = 388, y1 = 160, height = 120;
+  const maximum = Math.max(1, ...data.bins.map(bin => bin.count));
+  const width = (x1 - x0) / data.bins.length;
+  const bars = data.bins.map((bin, index) => {
+    const barHeight = bin.count ? height * bin.count / maximum : 1;
+    const x = x0 + index * width + 3;
+    return {
+      x: x.toFixed(1),
+      width: (width - 6).toFixed(1),
+      center: (x + (width - 6) / 2).toFixed(1),
+      labelX: (x0 + index * width).toFixed(1),
+      y: (y1 - barHeight).toFixed(1),
+      height: barHeight.toFixed(1),
+      valueY: (y1 - barHeight - 5).toFixed(1),
+      count: bin.count,
+      label: bin.startMinute,
+      holdsMean: bin.holdsMean,
+    };
+  });
+  const start = data.bins[0].startMinute;
+  const end = data.bins.at(-1)?.endMinute ?? start + 8;
+  const meanMinute = data.meanMs / 60_000;
+  const meanX = x0 + (meanMinute - start) / (end - start) * (x1 - x0);
+  return { bars, meanX: Math.max(x0, Math.min(x1, meanX)) };
+}
+
 export default function Overview() {
  const [state, setState] = useState<OverviewState>({ range: 'today', cfg: 0, purp: { production: true, engineering: false, training: false, calibration: false } });
  const [livePurposeCounts, setLivePurposeCounts] = useState<Record<Purpose, number> | null>(null);
@@ -135,6 +179,9 @@ export default function Overview() {
  const [failureRefresh, setFailureRefresh] = useState(0);
  const [unitStatus, setUnitStatus] = useState<UnitStatusState>({ kind: 'loading' });
  const [unitStatusRefresh, setUnitStatusRefresh] = useState(0);
+ const [unitTestTime, setUnitTestTime] = useState<UnitTestTimeState>({ kind: 'loading' });
+ const [unitTestTimeRefresh, setUnitTestTimeRefresh] = useState(0);
+ const [unitTestTimeOutcome, setUnitTestTimeOutcome] = useState<UnitTestTimeOutcomeFilter>('all');
  const [channelFailures, setChannelFailures] = useState<ChannelFailuresState>({ kind: 'loading' });
  const [channelFailuresRefresh, setChannelFailuresRefresh] = useState(0);
  const [stationSummary, setStationSummary] = useState<StationSummaryState>({ kind: 'loading' });
@@ -168,6 +215,13 @@ export default function Overview() {
  }, [purposeKey, selectedPurposes, state.range, unitStatusRefresh]);
  useEffect(() => {
    const controller = new AbortController();
+   loadUnitTestTime('last_30_days', ['production'], controller.signal)
+     .then(result => setUnitTestTime(result.data_source === 'test_database' ? { kind: 'connected', data: result } : { kind: 'demo' }))
+     .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setUnitTestTime({ kind: 'error' }); });
+   return () => controller.abort();
+ }, [unitTestTimeRefresh]);
+ useEffect(() => {
+   const controller = new AbortController();
    loadChannelFailures(PERIOD_FOR_RANGE[state.range], selectedPurposes, controller.signal)
      .then(result => setChannelFailures(result.data_source === 'test_database' ? { kind: 'connected', data: result } : { kind: 'demo' }))
      .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setChannelFailures({ kind: 'error' }); });
@@ -189,6 +243,20 @@ export default function Overview() {
  const liveFailureSpark = liveFailureData ? liveFailureSparkline(liveFailureData) : null;
  const liveFailureChart = liveFailureData ? liveFailureRateChart(liveFailureData) : null;
  const liveUnitData = unitStatus.kind === 'connected' ? unitStatus.data : null;
+ const liveUnitTestTime = unitTestTime.kind === 'connected' ? unitTestTime.data : null;
+ const liveUnitTestTimeSummary = useMemo(
+   () => liveUnitTestTime ? summarizeUnitTestTime(liveUnitTestTime.units, unitTestTimeOutcome) : null,
+   [liveUnitTestTime, unitTestTimeOutcome],
+ );
+ const liveUnitTestTimeChart = useMemo(
+   () => liveUnitTestTimeSummary ? liveUnitTestTimeHistogram(liveUnitTestTimeSummary) : null,
+   [liveUnitTestTimeSummary],
+ );
+ const liveUnitTestTimeExcluded = useMemo(() => liveUnitTestTime
+   ? UNIT_TEST_TIME_EXCLUDED_KEYS.flatMap(key => liveUnitTestTime.excluded[key] > 0
+     ? [`${liveUnitTestTime.excluded[key].toLocaleString('en-US')} ${UNIT_TEST_TIME_EXCLUDED_LABELS[key]}`]
+     : [])
+   : [], [liveUnitTestTime]);
  const liveUnitOutcomes = useMemo(() => {
    if (!liveUnitData) return null;
    const cohort = liveUnitData.counts.cohort_units;
@@ -358,28 +426,70 @@ export default function Overview() {
       </div>
 
       <div style={css("flex:2 1 380px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:10px")}>
-        <div style={css("display:flex;flex-direction:column;gap:3px")}>
-          <h2 style={css("margin:0;font-size:16px;font-weight:600")}>Time to test one unit</h2>
-          <span style={css("font-size:12.5px;color:var(--muted)")}>{sel.title} · {sel.units} units, last 30 days</span>
-        </div>
-        <div style={css("display:flex;flex-wrap:wrap;gap:8px")}>
-          <div style={css("flex:1 1 80px;padding:8px 10px;border-radius:9px;background:var(--panel2)")}><div style={css("font-size:11.5px;color:var(--muted)")}>Average</div><div style={css("font-size:17px;font-weight:650;font-variant-numeric:tabular-nums")}>{sel.avg}</div></div>
-          <div style={css("flex:1 1 80px;padding:8px 10px;border-radius:9px;background:var(--panel2)")}><div style={css("font-size:11.5px;color:var(--muted)")}>Median</div><div style={css("font-size:17px;font-weight:650;font-variant-numeric:tabular-nums")}>{sel.med}</div></div>
-          <div style={css("flex:1 1 80px;padding:8px 10px;border-radius:9px;background:var(--panel2)")}><div style={css("font-size:11.5px;color:var(--muted)")}>Slowest 10%</div><div style={css("font-size:17px;font-weight:650;font-variant-numeric:tabular-nums")}>{sel.p90}+</div></div>
-        </div>
-        <svg id="configuration-histogram" viewBox="0 0 400 200" role="img" aria-label={sel.aria} style={css("width:100%;height:auto;display:block")}>
-          <line x1="12" x2="388" y1="160" y2="160" style={css("stroke:var(--line);stroke-width:1")}></line>
-          {hist.map((h, index4) => <Fragment key={index4}>
-            <g >
-              <rect x={h.x} y={h.y} width={h.w} height={h.h} rx="3" style={css("fill:" + String(h.fill))}></rect>
-              <text x={h.cx} y={h.vy} style={css("font-size:11px;font-weight:600;fill:var(--ink2);text-anchor:middle;font-family:'Geist Mono',monospace")}>{h.count}</text>
-              <text x={h.lx} y="176" style={css("font-size:11px;fill:var(--muted);text-anchor:middle;font-family:'Geist Mono',monospace")}>{h.label}</text>
-            </g>
-          </Fragment>)}
-          <line x1={meanX} x2={meanX} y1="26" y2="160" style={css("stroke:var(--ink);stroke-width:1.4;stroke-dasharray:4 3")}></line>
-          <text x={meanLX} y="20" style={css("font-size:11.5px;font-weight:600;fill:var(--ink);text-anchor:middle")}>avg {sel.avg}</text>
-          <text x="200" y="196" style={css("font-size:11px;fill:var(--muted);text-anchor:middle")}>minutes per unit</text>
-        </svg>
+        {liveUnitTestTime && liveUnitTestTimeSummary ? <>
+          <div style={css("display:flex;justify-content:space-between;align-items:flex-start;gap:10px")}>
+            <div style={css("display:flex;flex-direction:column;gap:3px")}>
+              <span style={css("display:flex;align-items:center;flex-wrap:wrap;gap:7px")}>
+                <h2 style={css("margin:0;font-size:16px;font-weight:600")}>Time to test one unit</h2>
+                <span className="live-unit-badge">Live · test database</span>
+              </span>
+              <span style={css("font-size:12.5px;color:var(--muted)")}>{liveUnitTestTimeSummary.n} finished {liveUnitTestTimeSummary.n === 1 ? 'unit' : 'units'}, last 30 days{liveUnitTestTimeSummary.sampleLabel ? ` · ${liveUnitTestTimeSummary.sampleLabel}` : ''}</span>
+            </div>
+            <button type="button" aria-label="Refresh unit test time" onClick={() => setUnitTestTimeRefresh(value => value + 1)} style={css("align-self:flex-start;min-height:28px;padding:0 8px;border-radius:6px;border:1px solid var(--line);background:var(--panel);color:var(--ink2);font-size:10.5px;font-weight:600")}>Refresh</button>
+          </div>
+          <div role="group" aria-label="Unit test time outcome" style={css("display:flex;flex-wrap:wrap;gap:5px")}>
+            {([['all', 'All'], ['passed', 'Passed'], ['unrecoverable', 'Unrecoverable']] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={unitTestTimeOutcome === value} onClick={() => setUnitTestTimeOutcome(value)} style={css("min-height:30px;padding:0 9px;border-radius:7px;border:1px solid " + (unitTestTimeOutcome === value ? 'color-mix(in srgb,var(--accent) 45%,var(--line))' : 'var(--line)') + ";background:" + (unitTestTimeOutcome === value ? 'color-mix(in srgb,var(--accent) 8%,var(--panel))' : 'var(--panel)') + ";color:var(--ink2);font-size:11.5px;font-weight:600")}>{label}</button>)}
+          </div>
+          <div style={css("display:flex;flex-wrap:wrap;gap:8px")}>
+            <div style={css("flex:1 1 80px;padding:8px 10px;border-radius:9px;background:var(--panel2)")}><div style={css("font-size:11.5px;color:var(--muted)")}>Average</div><div style={css("font-size:17px;font-weight:650;font-variant-numeric:tabular-nums")}>{liveUnitTestTimeSummary.meanMs === null ? '—' : formatDuration(liveUnitTestTimeSummary.meanMs / 1000)}</div></div>
+            <div style={css("flex:1 1 80px;padding:8px 10px;border-radius:9px;background:var(--panel2)")}><div style={css("font-size:11.5px;color:var(--muted)")}>Median</div><div style={css("font-size:17px;font-weight:650;font-variant-numeric:tabular-nums")}>{liveUnitTestTimeSummary.medianMs === null ? '—' : formatDuration(liveUnitTestTimeSummary.medianMs / 1000)}</div></div>
+            <div style={css("flex:1 1 80px;padding:8px 10px;border-radius:9px;background:var(--panel2)")}><div style={css("font-size:11.5px;color:var(--muted)")}>Slowest 10%</div><div style={css("font-size:17px;font-weight:650;font-variant-numeric:tabular-nums")}>{liveUnitTestTimeSummary.p90Ms === null ? '—' : `${formatDuration(liveUnitTestTimeSummary.p90Ms / 1000)}+`}</div></div>
+          </div>
+          <svg id="configuration-histogram" data-source="live-unit-test-time" viewBox="0 0 400 200" role="img" aria-label={`Histogram of ${liveUnitTestTimeSummary.n} finished units, ${unitTestTimeOutcome} outcomes, last 30 days${liveUnitTestTimeSummary.meanMs === null ? '' : `, average ${formatDuration(liveUnitTestTimeSummary.meanMs / 1000)}`}`} style={css("width:100%;height:auto;display:block")}>
+            <line x1="12" x2="388" y1="160" y2="160" style={css("stroke:var(--line);stroke-width:1")}></line>
+            {liveUnitTestTimeChart?.bars.map((bar, index4) => <g key={index4} data-mean-bin={bar.holdsMean ? 'true' : undefined}>
+              <rect x={bar.x} y={bar.y} width={bar.width} height={bar.height} rx="3" style={css("fill:" + (bar.holdsMean ? String(accent) : 'color-mix(in srgb,var(--accent) 38%,var(--panel))'))}></rect>
+              <text x={bar.center} y={bar.valueY} style={css("font-size:11px;font-weight:600;fill:var(--ink2);text-anchor:middle;font-family:'Geist Mono',monospace")}>{bar.count}</text>
+              <text x={bar.labelX} y="176" style={css("font-size:11px;fill:var(--muted);text-anchor:middle;font-family:'Geist Mono',monospace")}>{bar.label}</text>
+            </g>)}
+            {liveUnitTestTimeChart && liveUnitTestTimeSummary.meanMs !== null && <>
+              <line data-mean-line="true" x1={liveUnitTestTimeChart.meanX} x2={liveUnitTestTimeChart.meanX} y1="26" y2="160" style={css("stroke:var(--ink);stroke-width:1.4;stroke-dasharray:4 3")}></line>
+              <text x={liveUnitTestTimeChart.meanX} y="20" style={css("font-size:11.5px;font-weight:600;fill:var(--ink);text-anchor:middle")}>avg {formatDuration(liveUnitTestTimeSummary.meanMs / 1000)}</text>
+            </>}
+            <text x="200" y="196" style={css("font-size:11px;fill:var(--muted);text-anchor:middle")}>minutes per unit</text>
+          </svg>
+          {liveUnitTestTimeSummary.n === 0 && <span style={css("font-size:12.5px;color:var(--muted)")}>No finished units in this range.</span>}
+          <div style={css("display:flex;flex-direction:column;gap:4px;font-size:11.5px;color:var(--muted);line-height:1.45")}>
+            <span>Sum of each unit&apos;s production runs: idle-excluded time where session timing is confirmed, otherwise run start to end. Finished means passing, or failing with a current analysis that found no recovery; not a final manufacturing disposition.</span>
+            <span>{liveUnitTestTimeSummary.fallbackRunTotal.toLocaleString('en-US')} of {(liveUnitTestTimeSummary.activeRunTotal + liveUnitTestTimeSummary.fallbackRunTotal).toLocaleString('en-US')} runs used start-to-end time.</span>
+            {liveUnitTestTimeSummary.over90Minutes > 0 && <span>{liveUnitTestTimeSummary.over90Minutes.toLocaleString('en-US')} over 90 minutes, included.</span>}
+            {liveUnitTestTimeExcluded.length > 0 && <span>Not counted: {liveUnitTestTimeExcluded.join(', ')}.</span>}
+            {liveUnitTestTime.incomplete && <span style={css("color:var(--warn-fg)")}>Bounded cohort is incomplete.</span>}
+          </div>
+        </> : <>
+          <div style={css("display:flex;flex-direction:column;gap:3px")}>
+            <h2 style={css("margin:0;font-size:16px;font-weight:600")}>Time to test one unit</h2>
+            <span style={css("font-size:12.5px;color:var(--muted)")}>{sel.title} · {sel.units} units, last 30 days</span>
+          </div>
+          <div style={css("display:flex;flex-wrap:wrap;gap:8px")}>
+            <div style={css("flex:1 1 80px;padding:8px 10px;border-radius:9px;background:var(--panel2)")}><div style={css("font-size:11.5px;color:var(--muted)")}>Average</div><div style={css("font-size:17px;font-weight:650;font-variant-numeric:tabular-nums")}>{sel.avg}</div></div>
+            <div style={css("flex:1 1 80px;padding:8px 10px;border-radius:9px;background:var(--panel2)")}><div style={css("font-size:11.5px;color:var(--muted)")}>Median</div><div style={css("font-size:17px;font-weight:650;font-variant-numeric:tabular-nums")}>{sel.med}</div></div>
+            <div style={css("flex:1 1 80px;padding:8px 10px;border-radius:9px;background:var(--panel2)")}><div style={css("font-size:11.5px;color:var(--muted)")}>Slowest 10%</div><div style={css("font-size:17px;font-weight:650;font-variant-numeric:tabular-nums")}>{sel.p90}+</div></div>
+          </div>
+          <svg id="configuration-histogram" viewBox="0 0 400 200" role="img" aria-label={sel.aria} style={css("width:100%;height:auto;display:block")}>
+            <line x1="12" x2="388" y1="160" y2="160" style={css("stroke:var(--line);stroke-width:1")}></line>
+            {hist.map((h, index4) => <Fragment key={index4}>
+              <g >
+                <rect x={h.x} y={h.y} width={h.w} height={h.h} rx="3" style={css("fill:" + String(h.fill))}></rect>
+                <text x={h.cx} y={h.vy} style={css("font-size:11px;font-weight:600;fill:var(--ink2);text-anchor:middle;font-family:'Geist Mono',monospace")}>{h.count}</text>
+                <text x={h.lx} y="176" style={css("font-size:11px;fill:var(--muted);text-anchor:middle;font-family:'Geist Mono',monospace")}>{h.label}</text>
+              </g>
+            </Fragment>)}
+            <line x1={meanX} x2={meanX} y1="26" y2="160" style={css("stroke:var(--ink);stroke-width:1.4;stroke-dasharray:4 3")}></line>
+            <text x={meanLX} y="20" style={css("font-size:11.5px;font-weight:600;fill:var(--ink);text-anchor:middle")}>avg {sel.avg}</text>
+            <text x="200" y="196" style={css("font-size:11px;fill:var(--muted);text-anchor:middle")}>minutes per unit</text>
+          </svg>
+        </>}
       </div>
     </section>
 

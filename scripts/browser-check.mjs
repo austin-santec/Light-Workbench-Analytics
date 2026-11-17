@@ -11,6 +11,7 @@ const errors = [];
 const checks = [];
 let runActivityMode = 'not_connected';
 let unitStatusMode = 'values';
+let unitTestTimeMode = 'values';
 let queryResponseMode = 'success';
 let recommendationUsageMode = 'values';
 let channelFailuresMode = 'values';
@@ -22,6 +23,7 @@ const channelActivityRequests = [];
 const failureRateRequests = [];
 const replacementActivityRequests = [];
 const unitStatusRequests = [];
+const unitTestTimeRequests = [];
 const recommendationUsageRequests = [];
 const channelFailuresRequests = [];
 const failureConcentrationRequests = [];
@@ -294,6 +296,31 @@ const unitStatusFixture = url => {
     incomplete: unitStatusMode === 'incomplete' || unitStatusMode === 'reasons_incomplete',
   };
 };
+const unitTestTimeFixture = url => {
+  const period = url.searchParams.get('period') || 'last_30_days';
+  const purposes = url.searchParams.getAll('purpose').length ? url.searchParams.getAll('purpose') : ['production'];
+  const unit = (unit_id, outcome, finished_at_utc, total_ms, run_count, active_run_count, fallback_run_count) => ({
+    unit_id, main_board_serial: `DEMO-TIME-${unit_id}`, outcome, finished_at_utc,
+    total_ms, run_count, active_run_count, fallback_run_count,
+  });
+  const allUnits = [
+    unit(4, 'unrecoverable', '2026-11-12T18:00:00Z', 6_000_000, 1, 0, 1),
+    unit(3, 'unrecoverable', '2026-11-11T18:00:00Z', 5_400_000, 2, 2, 0),
+    unit(2, 'passed', '2026-11-10T18:00:00Z', 1_200_000, 2, 1, 1),
+    unit(1, 'passed', '2026-11-09T18:00:00Z', 600_000, 1, 1, 0),
+  ];
+  const units = unitTestTimeMode === 'no_data' ? [] : unitTestTimeMode === 'singular' ? [allUnits[3]] : allUnits;
+  const excluded = Object.fromEntries([
+    'review_required', 'not_evaluated', 'failing_recovery_available', 'failing_needs_analysis',
+    'other_saved_result', 'run_in_progress', 'missing_duration', 'outside_period',
+  ].map((key, index) => [key, unitTestTimeMode === 'no_data' ? 0 : index === 0 || index === 5 || index === 6 ? 1 : 0]));
+  return {
+    data_source: 'test_database', tls: 'encrypted_unverified', extracted_at_utc: '2026-11-13T20:00:00Z', timezone: 'America/Los_Angeles',
+    period: { key: period, start_utc: '2026-10-14T07:00:00Z', end_utc: '2026-11-13T08:00:00Z', partial: false },
+    filters: { purpose: purposes }, units, excluded,
+    incomplete: unitTestTimeMode === 'incomplete',
+  };
+};
 const channelFailuresFixture = url => {
   const period = url.searchParams.get('period') || 'last_30_days';
   const purposes = url.searchParams.getAll('purpose').length ? url.searchParams.getAll('purpose') : ['production'];
@@ -513,6 +540,15 @@ await page.route('**/api/v1/reporting/unit-status?*', async route => {
     body: JSON.stringify(runActivityMode === 'not_connected' ? { data_source: 'not_connected' } : unitStatusFixture(url)),
   });
 });
+await page.route('**/api/v1/reporting/unit-test-time?*', async route => {
+  const url = new URL(route.request().url());
+  unitTestTimeRequests.push(url);
+  await route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify(runActivityMode === 'not_connected' ? { data_source: 'not_connected' } : unitTestTimeFixture(url)),
+  });
+});
 await page.route('**/api/v1/reporting/channel-failures?*', async route => {
   const url = new URL(route.request().url());
   channelFailuresRequests.push(url);
@@ -583,7 +619,7 @@ page.on('response', response => {
 });
 page.on('requestfailed', request => {
   const pathname = new URL(request.url()).pathname;
-  const expectedUnmountCancellation = ['/api/v1/reporting/run-activity', '/api/v1/reporting/test-time-by-configuration', '/api/v1/reporting/channel-activity', '/api/v1/reporting/failure-rate', '/api/v1/reporting/replacement-activity', '/api/v1/reporting/unit-status', '/api/v1/reporting/recommendation-usage', '/api/v1/reporting/channel-failures', '/api/v1/reporting/failure-concentration', '/api/v1/reporting/station-summary', '/api/v1/units/search', '/api/v1/query/schema', '/api/v1/query/execute'].includes(pathname) && request.failure()?.errorText === 'net::ERR_ABORTED';
+  const expectedUnmountCancellation = ['/api/v1/reporting/run-activity', '/api/v1/reporting/test-time-by-configuration', '/api/v1/reporting/channel-activity', '/api/v1/reporting/failure-rate', '/api/v1/reporting/replacement-activity', '/api/v1/reporting/unit-status', '/api/v1/reporting/unit-test-time', '/api/v1/reporting/recommendation-usage', '/api/v1/reporting/channel-failures', '/api/v1/reporting/failure-concentration', '/api/v1/reporting/station-summary', '/api/v1/units/search', '/api/v1/query/schema', '/api/v1/query/execute'].includes(pathname) && request.failure()?.errorText === 'net::ERR_ABORTED';
   if (!expectedUnmountCancellation) errors.push(`Request failed: ${request.url()} ${request.failure()?.errorText}`);
 });
 const check = label => { checks.push(label); console.log(`PASS ${label}`); };
@@ -597,6 +633,7 @@ const assertFocus = async locator => assert.ok(await locator.evaluate(element =>
 const channelFailuresPanel = () => page.getByRole('heading', { name: 'Failures by logical channel', exact: true }).locator('..').locator('..').locator('..').locator('..');
 const stationPanel = () => page.getByRole('heading', { name: 'Stations, last 30 days', exact: true }).locator('..').locator('..').locator('..').locator('..');
 const unitOutcomesPanel = () => page.getByRole('heading', { name: 'Unit outcomes', exact: true }).locator('..').locator('..').locator('..').locator('..');
+const unitTestTimePanel = (target = page) => target.locator('#configuration-histogram').locator('..');
 const failureHistogramPanel = () => page.getByRole('heading', { name: 'Failed channels per unit', exact: true }).locator('..').locator('..').locator('..');
 const failureReasonsPanel = (target = page) => target.getByRole('region', { name: 'Failing unit reasons' });
 const assertFocusRing = async locator => {
@@ -658,6 +695,12 @@ try {
   assert.equal(await demoStations.getByText('Live · test database', { exact: true }).count(), 0);
   assert.equal(stationSummaryRequests.at(-1).searchParams.getAll('purpose').join(','), 'production');
   assert.equal(stationSummaryRequests.at(-1).searchParams.has('period'), false);
+  const demoUnitTestTime = unitTestTimePanel();
+  await assertText(demoUnitTestTime, 'OSX-150 · SM · 48 channels · 412 units, last 30 days');
+  assert.equal(await demoUnitTestTime.getByText('Live · test database', { exact: true }).count(), 0);
+  assert.equal(await demoUnitTestTime.getByRole('button', { name: 'All', exact: true }).count(), 0);
+  assert.equal(unitTestTimeRequests.at(-1).searchParams.get('period'), 'last_30_days');
+  assert.equal(unitTestTimeRequests.at(-1).searchParams.getAll('purpose').join(','), 'production');
   check('Live cards, Unit outcomes, channel heatmap and stations keep the unchanged demo path when not connected');
 
   await visit('/failures');
@@ -703,6 +746,7 @@ try {
   await downPage.route('**/api/v1/reporting/failure-rate?*', route => route.abort('connectionrefused'));
   await downPage.route('**/api/v1/reporting/replacement-activity*', route => route.abort('connectionrefused'));
   await downPage.route('**/api/v1/reporting/unit-status?*', route => route.abort('connectionrefused'));
+  await downPage.route('**/api/v1/reporting/unit-test-time?*', route => route.abort('connectionrefused'));
   await downPage.route('**/api/v1/reporting/recommendation-usage?*', route => route.abort('connectionrefused'));
   await downPage.route('**/api/v1/reporting/channel-failures?*', route => route.abort('connectionrefused'));
   await downPage.route('**/api/v1/reporting/failure-concentration?*', route => route.abort('connectionrefused'));
@@ -710,6 +754,7 @@ try {
   try {
     await downPage.goto(`${base}/#/`, { waitUntil: 'domcontentloaded' });
     await downPage.getByRole('region', { name: 'Run activity' }).getByText('Backend not reachable on 127.0.0.1:8000').first().waitFor();
+    await assertText(unitTestTimePanel(downPage), 'OSX-150 · SM · 48 channels · 412 units, last 30 days');
     check('Live card backend-down state');
     await downPage.goto(`${base}/#/failures`, { waitUntil: 'domcontentloaded' });
     await downPage.getByRole('region', { name: 'Replacement activity' }).getByText('Backend not reachable on 127.0.0.1:8000').waitFor();
@@ -727,7 +772,12 @@ try {
   await databaseFailurePage.route('**/api/v1/reporting/failure-concentration?*', route => route.fulfill({
     status: 503, contentType: 'application/json', body: JSON.stringify({ code: 'query_timeout' }),
   }));
+  await databaseFailurePage.route('**/api/v1/reporting/unit-test-time?*', route => route.fulfill({
+    status: 503, contentType: 'application/json', body: JSON.stringify({ code: 'query_timeout' }),
+  }));
   try {
+    await databaseFailurePage.goto(`${base}/#/`, { waitUntil: 'domcontentloaded' });
+    await assertText(unitTestTimePanel(databaseFailurePage), 'OSX-150 · SM · 48 channels · 412 units, last 30 days');
     await databaseFailurePage.goto(`${base}/#/failures`, { waitUntil: 'domcontentloaded' });
     await databaseFailurePage.getByRole('region', { name: 'Replacement activity' }).getByText('Database check failed').waitFor();
     await databaseFailurePage.getByText('query_timeout', { exact: true }).waitFor();
@@ -752,6 +802,51 @@ try {
   await assertText(liveConfigurationTable, '48 ch');
   await assertText(liveConfigurationTable, '1 / 2 confirmed');
   assert.equal(configurationTimingRequests.at(-1).searchParams.get('purpose'), 'production');
+  const liveUnitTestTime = unitTestTimePanel();
+  await liveUnitTestTime.getByText('Live · test database', { exact: true }).waitFor();
+  await liveUnitTestTime.getByText('4 finished units, last 30 days · Small Sample', { exact: true }).waitFor();
+  assert.equal(await liveUnitTestTime.getByText('55m 00s', { exact: true }).count(), 2);
+  await liveUnitTestTime.getByText('100m 00s+', { exact: true }).waitFor();
+  assert.equal(await liveUnitTestTime.locator('svg rect').count(), 8);
+  assert.equal(await liveUnitTestTime.locator('[data-mean-bin="true"]').count(), 1);
+  assert.equal(await liveUnitTestTime.locator('[data-mean-line="true"]').count(), 1);
+  await liveUnitTestTime.getByText('2 of 6 runs used start-to-end time.', { exact: true }).waitFor();
+  await liveUnitTestTime.getByText('1 over 90 minutes, included.', { exact: true }).waitFor();
+  await assertText(liveUnitTestTime, 'Not counted: 1 review required, 1 run in progress, 1 missing duration.');
+  const testTimeOutcome = liveUnitTestTime.getByRole('group', { name: 'Unit test time outcome' });
+  await testTimeOutcome.getByRole('button', { name: 'Passed', exact: true }).click();
+  await liveUnitTestTime.getByText('2 finished units, last 30 days · Small Sample', { exact: true }).waitFor();
+  assert.equal(await liveUnitTestTime.getByText('15m 00s', { exact: true }).count(), 2);
+  await liveUnitTestTime.getByText('20m 00s+', { exact: true }).waitFor();
+  await testTimeOutcome.getByRole('button', { name: 'Unrecoverable', exact: true }).click();
+  assert.equal(await liveUnitTestTime.getByText('95m 00s', { exact: true }).count(), 2);
+  await liveUnitTestTime.getByText('100m 00s+', { exact: true }).waitFor();
+  await testTimeOutcome.getByRole('button', { name: 'All', exact: true }).click();
+  const unitTestTimeRequestsBeforeRefresh = unitTestTimeRequests.length;
+  await liveUnitTestTime.getByRole('button', { name: 'Refresh unit test time' }).click();
+  assert.ok(unitTestTimeRequests.length > unitTestTimeRequestsBeforeRefresh);
+  assert.equal(unitTestTimeRequests.at(-1).searchParams.get('period'), 'last_30_days');
+  assert.equal(unitTestTimeRequests.at(-1).searchParams.getAll('purpose').join(','), 'production');
+
+  unitTestTimeMode = 'no_data';
+  await liveUnitTestTime.getByRole('button', { name: 'Refresh unit test time' }).click();
+  await liveUnitTestTime.getByText('0 finished units, last 30 days · No Data', { exact: true }).waitFor();
+  await liveUnitTestTime.getByText('No finished units in this range.', { exact: true }).waitFor();
+  assert.equal(await liveUnitTestTime.getByText('—', { exact: true }).count(), 3);
+  assert.equal(await liveUnitTestTime.locator('svg rect').count(), 0);
+
+  unitTestTimeMode = 'singular';
+  await liveUnitTestTime.getByRole('button', { name: 'Refresh unit test time' }).click();
+  await liveUnitTestTime.getByText('1 finished unit, last 30 days · Small Sample', { exact: true }).waitFor();
+
+  unitTestTimeMode = 'incomplete';
+  await liveUnitTestTime.getByRole('button', { name: 'Refresh unit test time' }).click();
+  await liveUnitTestTime.getByText('Bounded cohort is incomplete.', { exact: true }).waitFor();
+
+  unitTestTimeMode = 'values';
+  await liveUnitTestTime.getByRole('button', { name: 'Refresh unit test time' }).click();
+  await liveUnitTestTime.getByText('4 finished units, last 30 days · Small Sample', { exact: true }).waitFor();
+  check('Live unit test time covers connected stats, even median, nearest-rank P90, outcome filters, histogram, notes, refresh, Small Sample, No Data, singular wording, and incomplete state');
   await assertText(page.getByRole('button', { name: /^Engineering / }), '3');
   assert.ok((await page.getByRole('button', { name: /^Engineering / }).innerText()).includes('3'));
   await page.getByRole('region', { name: 'Key metrics' }).getByText('Live · test database', { exact: true }).first().waitFor();
@@ -1088,9 +1183,11 @@ try {
   assert.equal(await page.getByRole('button', { name: /^Production / }).getAttribute('aria-pressed'), 'true');
   check('Range and purpose filters update summary; final purpose cannot be deselected');
 
+  const liveHistogramLabel = await page.getByRole('img', { name: /^Histogram of/ }).getAttribute('aria-label');
   await page.getByRole('button', { name: /OSX-150 SM 36 ch/ }).click();
-  assert.ok((await page.getByRole('img', { name: /^Histogram of/ }).getAttribute('aria-label')).includes('36 channels'));
-  check('Configuration selection updates histogram');
+  assert.equal(await page.getByRole('button', { name: /OSX-150 SM 36 ch/ }).getAttribute('aria-pressed'), 'true');
+  assert.equal(await page.getByRole('img', { name: /^Histogram of/ }).getAttribute('aria-label'), liveHistogramLabel);
+  check('Configuration selection updates the demo table only; the live unit test-time histogram is unchanged');
   assert.equal(await page.getByRole('img', { name: /^Live daily first-observation/ }).locator('path').last().getAttribute('d'), productionFailureTrend);
   await page.getByRole('button', { name: 'Yesterday', exact: true }).focus();
   await page.keyboard.press('Space');

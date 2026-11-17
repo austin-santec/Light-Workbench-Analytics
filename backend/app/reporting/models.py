@@ -92,6 +92,20 @@ class UnitStatusQuery(BaseModel):
         return value
 
 
+class UnitTestTimeQuery(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
+
+    period: Literal["today", "yesterday", "this_week", "last_30_days"] = "last_30_days"
+    purposes: tuple[RunPurpose, ...] = (RunPurpose.PRODUCTION,)
+
+    @field_validator("purposes")
+    @classmethod
+    def selected_purposes(cls, value: tuple[RunPurpose, ...]) -> tuple[RunPurpose, ...]:
+        if not 1 <= len(value) <= len(RunPurpose) or len(set(value)) != len(value):
+            raise ValueError("One to four unique purposes are required")
+        return value
+
+
 class RecommendationUsageQuery(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
 

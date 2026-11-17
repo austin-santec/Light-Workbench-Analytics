@@ -545,32 +545,12 @@ def _bounded(cursor, query: tuple[str, tuple], cap: int) -> tuple[list, bool]:
     return list(rows[:cap]), len(rows) > cap
 
 
-def read_unit_status(cursor, query: UnitStatusQuery, window: ActivityWindow) -> UnitStatusMetrics:
-    cohort_rows = cursor.execute(COHORT_SQL, _cohort_params(query, window)).fetchmany(
-        UNIT_STATUS_COHORT_CAP + 1
-    )
-    incomplete = len(cohort_rows) > UNIT_STATUS_COHORT_CAP
-    cohorts: list[CohortAssignment] = []
-    for row in cohort_rows[:UNIT_STATUS_COHORT_CAP]:
-        if len(row) != 6:
-            raise ReportingError("schema_incompatible")
-        _utc(row[5])
-        cohorts.append(
-            CohortAssignment(
-                _positive_int(row[0]),
-                _positive_int(row[1]),
-                str(row[2]),
-                str(row[3]),
-                str(row[4]),
-            )
-        )
+def read_unit_status_projections(
+    cursor, cohorts: Sequence[CohortAssignment]
+) -> tuple[tuple[UnitStatusProjection, ...], bool]:
+    """Read and project the shared D16 evidence for an already bounded cohort."""
     if not cohorts:
-        return UnitStatusMetrics(
-            counts={"cohort_units": 0, **dict.fromkeys(UNIT_STATUS_KEYS, 0)},
-            units=(),
-            incomplete=incomplete,
-        )
-
+        return (), False
     assignment_ids = tuple(item.assignment_id for item in cohorts)
     run_query, measurement_query, map_query, replacement_query, analysis_query = (
         build_unit_status_queries(assignment_ids)
@@ -584,7 +564,7 @@ def read_unit_status(cursor, query: UnitStatusQuery, window: ActivityWindow) -> 
         cursor, replacement_query, UNIT_STATUS_HARDWARE_CAP
     )
     analysis_rows, analysis_incomplete = _bounded(cursor, analysis_query, UNIT_STATUS_ANALYSIS_CAP)
-    incomplete = incomplete or any(
+    incomplete = any(
         (
             run_incomplete,
             measurement_incomplete,
@@ -712,6 +692,30 @@ def read_unit_status(cursor, query: UnitStatusQuery, window: ActivityWindow) -> 
         )
         for cohort in cohorts
     )
+    return projections, incomplete
+
+
+def read_unit_status(cursor, query: UnitStatusQuery, window: ActivityWindow) -> UnitStatusMetrics:
+    cohort_rows = cursor.execute(COHORT_SQL, _cohort_params(query, window)).fetchmany(
+        UNIT_STATUS_COHORT_CAP + 1
+    )
+    incomplete = len(cohort_rows) > UNIT_STATUS_COHORT_CAP
+    cohorts: list[CohortAssignment] = []
+    for row in cohort_rows[:UNIT_STATUS_COHORT_CAP]:
+        if len(row) != 6:
+            raise ReportingError("schema_incompatible")
+        _utc(row[5])
+        cohorts.append(
+            CohortAssignment(
+                _positive_int(row[0]),
+                _positive_int(row[1]),
+                str(row[2]),
+                str(row[3]),
+                str(row[4]),
+            )
+        )
+    projections, projection_incomplete = read_unit_status_projections(cursor, cohorts)
+    incomplete = incomplete or projection_incomplete
     counts = Counter(item.status for item in projections)
     response_counts = {"cohort_units": len(projections)}
     response_counts.update({key: counts[key] for key in UNIT_STATUS_KEYS})

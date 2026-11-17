@@ -1,5 +1,6 @@
 """Offline current-unit-status tests. No test opens a database connection."""
 
+import hashlib
 import re
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -290,6 +291,18 @@ def test_generated_queries_are_bounded_parameterized_and_read_only():
             unquoted,
             re.I,
         )
+
+
+def test_shared_projection_refactor_preserves_all_unit_status_sql_text():
+    texts = [COHORT_SQL, *(query[0] for query in build_unit_status_queries((10, 11)))]
+    assert [hashlib.sha256(text.encode()).hexdigest() for text in texts] == [
+        "fcf1f7b6179468c3524a3c22cfbf97cc85ff6fe594eb7d5ab0ed8c143a7d5abd",
+        "dbfc4c66dc0523582d5f637a99b6ae7b7cc364e535bb904e435c298d932731b7",
+        "bdef463f9b05460d7def16a97b7ed51ed4b7bf835faf8f7ac6ed55d6d9143cb0",
+        "c31431f081f433ac78e27bc15be03eb907f331a286a63d47f041f1c9ec8e31b2",
+        "a09e373cf300f0825f1117a2c3fa7e5f349c68616b31693b60585c7218d0399e",
+        "8d2bab63bda708bc684b38dc32f45944a2863e5878d62a4f404b25a4e9ff9103",
+    ]
 
 
 class Result:

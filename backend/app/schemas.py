@@ -131,6 +131,13 @@ class UnitStatusQueryParams(BaseModel):
     purpose: list[RunPurpose] = Field(default_factory=lambda: [RunPurpose.PRODUCTION])
 
 
+class UnitTestTimeQueryParams(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    period: Literal["today", "yesterday", "this_week", "last_30_days"] = "last_30_days"
+    purpose: list[RunPurpose] = Field(default_factory=lambda: [RunPurpose.PRODUCTION])
+
+
 class RecommendationUsageQueryParams(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
@@ -496,6 +503,61 @@ class UnitStatusConnectedResponse(BaseModel):
     classification_rule: Literal["strict >, run limit snapshot"] = "strict >, run limit snapshot"
     counts: UnitStatusCounts
     units: list[UnitStatusItem]
+    incomplete: bool
+
+
+class UnitTestTimePeriodResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: Literal["today", "yesterday", "this_week", "last_30_days"]
+    start_utc: AwareDatetime
+    end_utc: AwareDatetime
+    partial: bool
+
+
+class UnitTestTimeFilters(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    purpose: list[RunPurpose]
+
+
+class UnitTestTimeItemResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    unit_id: int = Field(gt=0)
+    main_board_serial: str = Field(min_length=1)
+    outcome: Literal["passed", "unrecoverable"]
+    finished_at_utc: AwareDatetime
+    total_ms: int = Field(ge=0)
+    run_count: int = Field(gt=0)
+    active_run_count: int = Field(ge=0)
+    fallback_run_count: int = Field(ge=0)
+
+
+class UnitTestTimeExcludedResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    review_required: int = Field(ge=0)
+    not_evaluated: int = Field(ge=0)
+    failing_recovery_available: int = Field(ge=0)
+    failing_needs_analysis: int = Field(ge=0)
+    other_saved_result: int = Field(ge=0)
+    run_in_progress: int = Field(ge=0)
+    missing_duration: int = Field(ge=0)
+    outside_period: int = Field(ge=0)
+
+
+class UnitTestTimeConnectedResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    data_source: Literal["test_database"] = "test_database"
+    tls: Literal["verified", "encrypted_unverified"]
+    extracted_at_utc: AwareDatetime
+    timezone: Literal["America/Los_Angeles"] = "America/Los_Angeles"
+    period: UnitTestTimePeriodResponse
+    filters: UnitTestTimeFilters
+    units: list[UnitTestTimeItemResponse]
+    excluded: UnitTestTimeExcludedResponse
     incomplete: bool
 
 

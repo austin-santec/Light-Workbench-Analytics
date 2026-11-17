@@ -47,6 +47,7 @@ from app.reporting.models import (
     TestTimeByConfigurationMetrics,
     TimingQuality,
     UnitStatusQuery,
+    UnitTestTimeQuery,
 )
 from app.reporting.recommendation_usage import read_recommendation_usage
 from app.reporting.schema import (
@@ -67,6 +68,7 @@ from app.reporting.unit_lookup import (
     search_units,
 )
 from app.reporting.unit_status import UnitStatusMetrics, read_unit_status
+from app.reporting.unit_test_time import UnitTestTimeMetrics, read_unit_test_time
 from app.schemas import RunPurpose
 
 RUN_ACTIVITY_ROW_CAP = 5000
@@ -1512,6 +1514,9 @@ class ReportingRepository(Protocol):
     def get_unit_status(
         self, query: UnitStatusQuery, boundaries: ChannelActivityBoundaries
     ) -> UnitStatusMetrics: ...
+    def get_unit_test_time(
+        self, query: UnitTestTimeQuery, boundaries: ChannelActivityBoundaries
+    ) -> UnitTestTimeMetrics: ...
     def get_recommendation_usage(
         self, query: RecommendationUsageQuery, boundaries: ChannelActivityBoundaries
     ) -> RecommendationUsageMetrics: ...
@@ -1704,6 +1709,14 @@ class SqlServerReportingRepository:
         with self._adapter.cursor() as cursor:
             self._preflight(cursor)
             return read_unit_status(cursor, query, boundaries.periods[query.period])
+
+    def get_unit_test_time(
+        self, query: UnitTestTimeQuery, boundaries: ChannelActivityBoundaries
+    ) -> UnitTestTimeMetrics:
+        query = UnitTestTimeQuery.model_validate(query.model_dump())
+        with self._adapter.cursor() as cursor:
+            self._preflight(cursor)
+            return read_unit_test_time(cursor, query, boundaries.periods[query.period])
 
     def get_recommendation_usage(
         self, query: RecommendationUsageQuery, boundaries: ChannelActivityBoundaries
