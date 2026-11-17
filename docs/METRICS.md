@@ -592,6 +592,8 @@ These are future mappings of owner-approved intent, **not implementation authori
 
 **D16 distribution note (November 17, 2026):** The Failures histogram may show the current failing-channel-count distribution for evaluated D16 units, optionally filtered by the context run's channel count; it is current state at T and not Q03 first-pass unit yield.
 
+**D16 failing-reason note (November 17, 2026):** The Failures reasons panel may group D16 currently failing units by their latest saved analysis; this is neither Q07 saved-analysis history nor a final manufacturing disposition.
+
 **Station implementation note (November 16, 2026):** `GET /api/v1/reporting/station-summary` reports last-30-day Q02 first-observation failures, V08/V10 within-run retested run-channels and a T10-style median elapsed seconds per channel, grouped by run station with pooled totals. It is station-level only: no operator detail, ranking or blame, and not T12 per-unit time.
 
 **Q02 heatmap implementation note (November 16, 2026):** `GET /api/v1/reporting/channel-failures` splits the Q02 first-observation run-channel fraction by logical channel for one shared Pacific period, with the same population, strict `>` saved-limit rule and unknown-criteria handling as `failure-rate`. The Overview heatmap colors channels by that rate. It is not Q01 historical coverage, first-pass unit yield or a unit failure rate.

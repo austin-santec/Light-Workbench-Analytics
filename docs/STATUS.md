@@ -1,3 +1,18 @@
+# Live Failures failing-unit reasons
+
+Updated November 17, 2026. The existing Failures **Why units were unrecoverable** card now switches to the already-loaded D16 `unit-status` response only when reporting is connected. Live mode is retitled **Why failing units aren't recovered** and groups every currently failing unit, in the approved order, into recovery available, no viable recovery found, no usable extra ports, other saved result, analysis out of date or no saved analysis. Counts, rounded cohort shares, largest-group-relative bars and sorted distinct result codes are derived from response rows by a typed pure function. The note separates current extraction-time status and saved analysis from final manufacturing disposition; review-required and incomplete-cohort states remain explicit. Loading and all unavailable states retain the original 27-unit demo card.
+
+Offline verification:
+
+- `npm.cmd run typecheck` and `npm.cmd run lint` passed.
+- The exact `npm.cmd run build` reached Vite after TypeScript and hit the known managed-filesystem/esbuild config-loader restriction; `npm.cmd run build -- --configLoader runner` passed with Vite 7.3.7 and **470 modules transformed**.
+- `npm.cmd run test:browser` passed **35 checks** against the already-running loopback Vite server on port 5173, which was reused and left running. Synthetic interception covered the unchanged demo/down paths; all six live grouping rules and sorted codes; zero-group suppression; shares and relative widths; review/incomplete notes; singular and empty states; shared-range updates; and both themes at 1440/768/390px. Light/dark desktop and narrow Failures captures were visually inspected.
+- `git diff --check`, strict UTF-8 decoding of changed text files and the mojibake-marker scan passed.
+
+No backend file, database connection, real record, credential, target detail, `AGENTS.md` change, dependency, commit or push occurred. Not verified here: live group totals against the authorized test-database response and Unrecoverable units table, or live result codes against `REPLACEMENT_ANALYSES.result_status` through the Query console. Those remain the approved live reviewer acceptance.
+
+Live verification (Claude, November 17, 2026, authorized non-production test database, production purpose, last 30 days): the card showed 2 currently failing units, one **Recovery available** (latest analysis current, 2 unused recommendations, code `recommendations_available`) and one **No saved analysis**, each 50%; the two review-required units were noted and not grouped. Group counts summed to the response's failing units, and each unit's group matched its status and latest analysis in the response and in the Unrecoverable units table. A read-only Query console read of `REPLACEMENT_ANALYSES` confirmed one unit has no saved analysis and the other's only analysis is `recommendations_available`. Not verified live: the stale-analysis, no-viable-recovery, no-extra-ports and other-result groups (no such units in range), and live 503 rendering.
+
 # Live Failures failure concentration
 
 Updated November 17, 2026. `GET /api/v1/reporting/failure-concentration` now returns the bounded Q02 first-observation population for one shared Pacific period and selected purposes, grouped both by logical channel and by measured physical port. It reuses the unchanged failure-rate candidate-run and first-observation CTE text, projects `IL_MEASUREMENTS.physical_port` through the selected `measurement_id`, applies the existing SQL/Python saved-limit agreement, splits a repeated port number by per-run `extra`, and enforces the channel-failures row cap plus the shared criteria-run cap. No schema gate, grant, dependency or database setting changed.

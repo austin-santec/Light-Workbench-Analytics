@@ -10,6 +10,7 @@ import { loadUnitStatus, type UnitStatus, type UnitStatusConnectedResponse } fro
 import { loadRecommendationUsage, type RecommendationUsageConnectedResponse } from '../lib/api/recommendationUsage';
 import { loadFailureConcentration, topConcentration, type FailureConcentrationConnectedResponse } from '../lib/api/failureConcentration';
 import { UNIT_STATUS_LABEL } from '../lib/unitStatusPresentation';
+import { groupFailingUnitReasons } from '../lib/failingUnitReasons';
 
 const STATUS_PERIOD: Record<LiveReplacementRange, 'today' | 'yesterday' | 'this_week' | 'last_30_days'> = {
   today: 'today', yesterday: 'yesterday', week: 'this_week', month: 'last_30_days',
@@ -135,6 +136,10 @@ export default function Failures() {
    };
  }, [liveChannelCount, liveChannelCountOptions, liveRange, unitStatus]);
  const histogramBars = liveHistogram?.bars ?? fbars;
+ const liveReasons = useMemo(
+   () => unitStatus ? groupFailingUnitReasons(unitStatus.units) : null,
+   [unitStatus],
+ );
  const liveConcentration = useMemo(
    () => failureConcentration ? topConcentration(failureConcentration) : null,
    [failureConcentration],
@@ -211,22 +216,33 @@ export default function Failures() {
         </svg>
       </div>
 
-      <div style={css("flex:1 1 340px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:12px")}>
+      <div role="region" aria-label="Failing unit reasons" style={css("flex:1 1 340px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:12px")}>
         <div style={css("display:flex;flex-direction:column;gap:3px")}>
-          <h2 style={css("margin:0;font-size:16px;font-weight:600")}>Why units were unrecoverable</h2>
-          <span style={css("font-size:12.5px;color:var(--muted)")}>27 units, from each run's latest replacement analysis.</span>
+          <h2 style={css("margin:0;font-size:16px;font-weight:600")}>{liveReasons ? "Why failing units aren't recovered" : 'Why units were unrecoverable'}</h2>
+          {liveReasons && <span className="live-unit-badge" style={css("align-self:flex-start;font-size:10px;font-weight:650;letter-spacing:.05em;text-transform:uppercase;padding:3px 8px;border-radius:999px;background:color-mix(in srgb,var(--accent) 10%,var(--panel));color:var(--accent-ink)")}>Live · test database</span>}
+          <span style={css("font-size:12.5px;color:var(--muted)")}>{liveReasons
+            ? `${liveReasons.total.toLocaleString('en-US')} currently failing ${liveReasons.total === 1 ? 'unit' : 'units'} ${HISTOGRAM_RANGE_LABEL[liveRange]}, by each unit's latest saved analysis.`
+            : "27 units, from each run's latest replacement analysis."}</span>
         </div>
-        {reasons.map((r, index3) => <Fragment key={index3}>
+        {liveReasons?.total === 0 && <p style={css("margin:0;padding:12px 0;border-top:1px solid var(--line2);font-size:12.5px;color:var(--muted)")}>No currently failing units in this range.</p>}
+        {(liveReasons?.groups ?? reasons).map((r, index3) => <Fragment key={'key' in r ? r.key : index3}>
           <div style={css("display:flex;flex-direction:column;gap:7px;padding:12px 0;border-top:1px solid var(--line2)")}>
             <div style={css("display:flex;justify-content:space-between;align-items:baseline;gap:10px")}>
               <span style={css("font-weight:600")}>{r.title}</span>
-              <span style={css("display:flex;align-items:baseline;gap:8px;font-variant-numeric:tabular-nums")}><span style={css("font-size:22px;font-weight:650")}>{r.count}</span><span style={css("font-size:12px;color:var(--muted)")}>{r.share}</span></span>
+              <span style={css("display:flex;align-items:baseline;gap:8px;font-variant-numeric:tabular-nums")}><span style={css("font-size:22px;font-weight:650")}>{r.count}</span><span style={css("font-size:12px;color:var(--muted)")}>{'key' in r ? `${r.share}%` : r.share}</span></span>
             </div>
-            <div style={css("height:6px;border-radius:3px;background:var(--line2);overflow:hidden")}><div style={css("height:6px;border-radius:3px;width:" + String(r.w) + "%;background:" + String(r.color))}></div></div>
-            <span style={css("font-size:12.5px;color:var(--ink2);line-height:1.5")}>{r.text}</span>
-            <code style={css("align-self:flex-start;font-family:'Geist Mono',monospace;font-size:11.5px;color:var(--muted);background:var(--panel2);padding:2px 7px;border-radius:5px")}>result_status = '{r.code}'</code>
+            <div style={css("height:6px;border-radius:3px;background:var(--line2);overflow:hidden")}><div data-reason-bar={'key' in r ? r.key : undefined} style={css("height:6px;border-radius:3px;width:" + String('key' in r ? r.width : r.w) + "%;background:" + String(r.color))}></div></div>
+            <span style={css("font-size:12.5px;color:var(--ink2);line-height:1.5")}>{'key' in r ? r.description : r.text}</span>
+            {'key' in r
+              ? r.resultStatuses.length > 0 && <code style={css("align-self:flex-start;font-family:'Geist Mono',monospace;font-size:11.5px;color:var(--muted);background:var(--panel2);padding:2px 7px;border-radius:5px")}>result_status = '{r.resultStatuses.join("', '")}'</code>
+              : <code style={css("align-self:flex-start;font-family:'Geist Mono',monospace;font-size:11.5px;color:var(--muted);background:var(--panel2);padding:2px 7px;border-radius:5px")}>result_status = '{r.code}'</code>}
           </div>
         </Fragment>)}
+        {liveReasons && unitStatus && <p style={css("margin:0;font-size:11.5px;color:var(--muted);line-height:1.5")}>
+          Current status at extraction time. A saved analysis is not a final manufacturing disposition.
+          {unitStatus.counts.review_required > 0 && ` ${unitStatus.counts.review_required.toLocaleString('en-US')} review-required ${unitStatus.counts.review_required === 1 ? 'unit' : 'units'} not shown.`}
+          {unitStatus.incomplete && <span style={css("color:var(--warn-fg)")}> Bounded cohort is incomplete.</span>}
+        </p>}
       </div>
     </section>
 

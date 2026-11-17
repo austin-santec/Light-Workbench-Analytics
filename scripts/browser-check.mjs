@@ -242,7 +242,7 @@ const unitStatusFixture = url => {
     ...base(id, status, channelCount), latest_analysis: latest,
     failing_channels: Array.from({ length: failingCount }, (_, index) => ({ logical_channel: id + index, effective_port: id + index + 48, wavelength_1_il_db: 2.6001, wavelength_2_il_db: 1.1 })),
   });
-  const units = unitStatusMode === 'zero' ? [] : [
+  const defaultUnits = [
     failing(1, 'failing_no_measured_recovery', analysis(301, true, 0), 48, 1),
     failing(2, 'failing_needs_analysis', analysis(302, false, 0), 36, 2),
     failing(3, 'failing_recovery_available', analysis(303, true, 2, 'recommendations_available'), 48, 7),
@@ -251,6 +251,30 @@ const unitStatusFixture = url => {
     base(6, 'passing', null),
     ...(period === 'this_week' ? [base(7, 'passing', 36), base(8, 'passing', 48), base(9, 'passing', null)] : []),
   ];
+  const reasonUnits = [
+    failing(11, 'failing_recovery_available', analysis(311, true, 2, 'z_recovery_result'), 48, 1),
+    failing(12, 'failing_recovery_available', analysis(312, true, 1, 'recommendations_available'), 48, 2),
+    failing(13, 'failing_no_measured_recovery', analysis(313, true, 0, 'fail_no_viable_recovery'), 48, 1),
+    failing(14, 'failing_no_measured_recovery', analysis(314, true, 0, 'fail_no_viable_recovery'), 48, 3),
+    failing(15, 'failing_no_measured_recovery', analysis(315, true, 0, 'not_applicable_no_extra_ports'), 48, 2),
+    failing(16, 'failing_no_measured_recovery', analysis(316, true, 0, 'z_other_saved_result'), 48, 4),
+    failing(17, 'failing_no_measured_recovery', analysis(317, true, 0, 'manual_review'), 48, 1),
+    failing(18, 'failing_needs_analysis', analysis(318, false, 0, 'stale_saved_result'), 48, 2),
+    failing(19, 'failing_needs_analysis', null, 48, 1),
+    { ...base(20, 'review_required', 48), review_reasons: ['DEMO review evidence.'] },
+    { ...base(21, 'review_required', 48), review_reasons: ['DEMO review evidence.'] },
+  ];
+  const singularReasonUnits = [
+    failing(31, 'failing_needs_analysis', null, 48, 1),
+    { ...base(32, 'review_required', 48), review_reasons: ['DEMO review evidence.'] },
+  ];
+  const units = unitStatusMode === 'zero'
+    ? []
+    : unitStatusMode === 'reasons' || unitStatusMode === 'reasons_incomplete'
+      ? reasonUnits
+      : unitStatusMode === 'reasons_singular'
+        ? singularReasonUnits
+        : defaultUnits;
   const counts = {
     cohort_units: units.length,
     review_required: 0,
@@ -267,7 +291,7 @@ const unitStatusFixture = url => {
     classification_rule: 'strict >, run limit snapshot',
     counts,
     units,
-    incomplete: unitStatusMode === 'incomplete',
+    incomplete: unitStatusMode === 'incomplete' || unitStatusMode === 'reasons_incomplete',
   };
 };
 const channelFailuresFixture = url => {
@@ -574,6 +598,7 @@ const channelFailuresPanel = () => page.getByRole('heading', { name: 'Failures b
 const stationPanel = () => page.getByRole('heading', { name: 'Stations, last 30 days', exact: true }).locator('..').locator('..').locator('..').locator('..');
 const unitOutcomesPanel = () => page.getByRole('heading', { name: 'Unit outcomes', exact: true }).locator('..').locator('..').locator('..').locator('..');
 const failureHistogramPanel = () => page.getByRole('heading', { name: 'Failed channels per unit', exact: true }).locator('..').locator('..').locator('..');
+const failureReasonsPanel = (target = page) => target.getByRole('region', { name: 'Failing unit reasons' });
 const assertFocusRing = async locator => {
   const ring = await locator.evaluate(element => { const s = getComputedStyle(element); return { style: s.outlineStyle, width: parseFloat(s.outlineWidth) }; });
   assert.ok(ring.style !== 'none' && ring.width >= 2, 'Expected a visible focus outline');
@@ -649,6 +674,11 @@ try {
   await demoFailureHistogram.getByText('More failures than usable extras (4)', { exact: true }).waitFor();
   await demoFailureHistogram.getByText('failed channels in one unit, first pass', { exact: true }).waitFor();
   assert.equal(await demoFailureHistogram.getByText('Live · test database', { exact: true }).count(), 0);
+  const demoFailureReasons = failureReasonsPanel();
+  await demoFailureReasons.getByRole('heading', { name: 'Why units were unrecoverable', exact: true }).waitFor();
+  await demoFailureReasons.getByText("27 units, from each run's latest replacement analysis.", { exact: true }).waitFor();
+  assert.equal(await demoFailureReasons.locator('code').count(), 3);
+  assert.equal(await demoFailureReasons.getByText('Live · test database', { exact: true }).count(), 0);
   await demoFailureHistogram.getByRole('button', { name: '24 ch', exact: true }).click();
   assert.ok((await demoFailureHistogram.getByRole('img').getAttribute('aria-label')).includes('24-channel'));
   const demoConcentration = page.getByRole('region', { name: 'Failure concentration' });
@@ -685,6 +715,7 @@ try {
     await downPage.getByRole('region', { name: 'Replacement activity' }).getByText('Backend not reachable on 127.0.0.1:8000').waitFor();
     await downPage.getByText('More failures than usable extras (4)', { exact: true }).waitFor();
     await downPage.getByText('failed channels in one unit, first pass', { exact: true }).waitFor();
+    await failureReasonsPanel(downPage).getByText("27 units, from each run's latest replacement analysis.", { exact: true }).waitFor();
     await downPage.getByText('Extra port 50 fails as a replacement candidate 31% of the time, about 3× the other extras.', { exact: true }).waitFor();
     check('Replacement activity and failure concentration backend-down states');
   } finally { await downPage.close(); }
@@ -928,6 +959,62 @@ try {
   await assertText(liveUnitTable, 'Recovery available');
   assert.equal(unitStatusRequests.at(-1).searchParams.get('period'), 'today');
   assert.equal(unitStatusRequests.at(-1).searchParams.getAll('purpose').join(','), 'production');
+  const liveFailureReasons = failureReasonsPanel();
+  await liveFailureReasons.getByRole('heading', { name: "Why failing units aren't recovered", exact: true }).waitFor();
+  await liveFailureReasons.getByText('Live · test database', { exact: true }).waitFor();
+  await liveFailureReasons.getByText("3 currently failing units today, by each unit's latest saved analysis.", { exact: true }).waitFor();
+  unitStatusMode = 'reasons';
+  await page.getByRole('button', { name: 'Refresh unit status' }).click();
+  await liveFailureReasons.getByText("9 currently failing units today, by each unit's latest saved analysis.", { exact: true }).waitFor();
+  const expectedReasonRows = [
+    ['Recovery available', '2 22%', 'recommendations_available', 'z_recovery_result'],
+    ['No viable recovery found', '2 22%', 'fail_no_viable_recovery'],
+    ['No usable extra ports', '1 11%', 'not_applicable_no_extra_ports'],
+    ['Other saved result', '2 22%', 'manual_review', 'z_other_saved_result'],
+    ['Analysis out of date', '1 11%', 'stale_saved_result'],
+    ['No saved analysis', '1 11%'],
+  ];
+  for (const [title, countAndShare, ...codes] of expectedReasonRows) {
+    const row = liveFailureReasons.getByText(title, { exact: true }).locator('..').locator('..');
+    await row.waitFor();
+    assert.ok((await row.innerText()).replace(/\s+/g, ' ').includes(countAndShare));
+    for (const code of codes) await assertText(row, code);
+    assert.equal(await row.locator('code').count(), codes.length ? 1 : 0);
+  }
+  assert.deepEqual(await liveFailureReasons.locator('code').allTextContents(), [
+    "result_status = 'recommendations_available', 'z_recovery_result'",
+    "result_status = 'fail_no_viable_recovery'",
+    "result_status = 'not_applicable_no_extra_ports'",
+    "result_status = 'manual_review', 'z_other_saved_result'",
+    "result_status = 'stale_saved_result'",
+  ]);
+  assert.deepEqual(await liveFailureReasons.locator('[data-reason-bar]').evaluateAll(elements => elements.map(element => element.style.width)), ['100%', '100%', '50%', '100%', '50%', '50%']);
+  await assertText(liveFailureReasons, '2 review-required units not shown.');
+  unitStatusMode = 'reasons_incomplete';
+  await page.getByRole('button', { name: 'Refresh unit status' }).click();
+  await liveFailureReasons.getByText('Bounded cohort is incomplete.', { exact: false }).waitFor();
+  unitStatusMode = 'reasons_singular';
+  await page.getByRole('button', { name: 'Refresh unit status' }).click();
+  await liveFailureReasons.getByText("1 currently failing unit today, by each unit's latest saved analysis.", { exact: true }).waitFor();
+  await assertText(liveFailureReasons, '1 review-required unit not shown.');
+  assert.equal(await liveFailureReasons.locator('[data-reason-bar]').count(), 1);
+  assert.equal(await liveFailureReasons.getByText('No saved analysis', { exact: true }).count(), 1);
+  assert.equal(await liveFailureReasons.getByText('Recovery available', { exact: true }).count(), 0);
+  unitStatusMode = 'zero';
+  await page.getByRole('button', { name: 'Refresh unit status' }).click();
+  await liveFailureReasons.getByText('No currently failing units in this range.', { exact: true }).waitFor();
+  assert.equal(await liveFailureReasons.locator('[data-reason-bar]').count(), 0);
+  unitStatusMode = 'reasons';
+  await page.getByRole('button', { name: 'Refresh unit status' }).click();
+  await replacementPanel.getByRole('button', { name: 'This week', exact: true }).click();
+  await liveFailureReasons.getByText("9 currently failing units this week, by each unit's latest saved analysis.", { exact: true }).waitFor();
+  assert.equal(unitStatusRequests.at(-1).searchParams.get('period'), 'this_week');
+  await replacementPanel.getByRole('button', { name: 'Today', exact: true }).click();
+  await liveFailureReasons.getByText("9 currently failing units today, by each unit's latest saved analysis.", { exact: true }).waitFor();
+  unitStatusMode = 'values';
+  await page.getByRole('button', { name: 'Refresh unit status' }).click();
+  await liveFailureReasons.getByText("3 currently failing units today, by each unit's latest saved analysis.", { exact: true }).waitFor();
+  check('Failing-unit reasons cover demo fallback, live groups and codes, hidden zero groups, shares, relative bars, notes, singular, empty, and range changes');
   await recommendationPanel.getByText('Linked to a replacement', { exact: true }).waitFor();
   await assertText(recommendationPanel, 'Saved recommendations from analyses in Today · replacement links recorded through now.');
   await assertText(recommendationPanel, '5');
