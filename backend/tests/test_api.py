@@ -475,6 +475,7 @@ def test_openapi_matches_error_and_query_contracts(client):
         "/api/v1/reporting/station-summary",
         "/api/v1/reporting/test-time-by-configuration",
         "/api/v1/reporting/unit-status",
+        "/api/v1/reporting/unit-outcomes-weekly",
         "/api/v1/reporting/unit-test-time",
         "/api/v1/runs/{run_id}/channels",
         "/api/v1/units/search",
@@ -537,6 +538,11 @@ def test_openapi_matches_error_and_query_contracts(client):
         "purpose",
     }
     assert unit_test_time["responses"]["503"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/ReportingFailureResponse"
+    }
+    unit_outcomes = spec["paths"]["/api/v1/reporting/unit-outcomes-weekly"]["get"]
+    assert {parameter["name"] for parameter in unit_outcomes["parameters"]} == {"purpose"}
+    assert unit_outcomes["responses"]["503"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/ReportingFailureResponse"
     }
     configuration = spec["paths"]["/api/v1/reporting/test-time-by-configuration"]["get"]

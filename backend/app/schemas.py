@@ -1,9 +1,9 @@
 """Transport models, deliberately independent of frontend presentation contracts."""
 
-from datetime import UTC, date
+from datetime import UTC, date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Self
 
 from pydantic import (
     AwareDatetime,
@@ -13,6 +13,7 @@ from pydantic import (
     PlainSerializer,
     StringConstraints,
     field_validator,
+    model_validator,
 )
 
 
@@ -135,6 +136,12 @@ class UnitTestTimeQueryParams(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     period: Literal["today", "yesterday", "this_week", "last_30_days"] = "last_30_days"
+    purpose: list[RunPurpose] = Field(default_factory=lambda: [RunPurpose.PRODUCTION])
+
+
+class UnitOutcomesWeeklyQueryParams(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
     purpose: list[RunPurpose] = Field(default_factory=lambda: [RunPurpose.PRODUCTION])
 
 
@@ -559,6 +566,115 @@ class UnitTestTimeConnectedResponse(BaseModel):
     units: list[UnitTestTimeItemResponse]
     excluded: UnitTestTimeExcludedResponse
     incomplete: bool
+
+
+class UnitOutcomesWeeklyWeekResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    start_utc: AwareDatetime
+    end_utc: AwareDatetime
+    local_start_date: date
+    partial: bool
+    passed_no_replacement: int = Field(ge=0)
+    passed_after_replacement: int = Field(ge=0)
+    unrecoverable: int = Field(ge=0)
+
+
+class UnitOutcomesWeeklyItemResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    unit_id: int = Field(gt=0)
+    main_board_serial: str = Field(min_length=1)
+    outcome: Literal["passed", "unrecoverable"]
+    replaced: bool
+    finished_at_utc: AwareDatetime
+    week_start_date: date
+
+    @model_validator(mode="after")
+    def unrecoverable_is_not_split(self) -> Self:
+        if self.outcome == "unrecoverable" and self.replaced:
+            raise ValueError("Unrecoverable units cannot be replacement-split")
+        return self
+
+
+class UnitOutcomesWeeklyFilters(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    purpose: list[RunPurpose]
+
+
+class UnitOutcomesWeeklyExcludedResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    review_required: int = Field(ge=0)
+    not_evaluated: int = Field(ge=0)
+    failing_recovery_available: int = Field(ge=0)
+    failing_needs_analysis: int = Field(ge=0)
+    other_saved_result: int = Field(ge=0)
+    run_in_progress: int = Field(ge=0)
+    outside_period: int = Field(ge=0)
+
+
+class UnitOutcomesWeeklyConnectedResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    data_source: Literal["test_database"] = "test_database"
+    tls: Literal["verified", "encrypted_unverified"]
+    extracted_at_utc: AwareDatetime
+    timezone: Literal["America/Los_Angeles"] = "America/Los_Angeles"
+    filters: UnitOutcomesWeeklyFilters
+    weeks: list[UnitOutcomesWeeklyWeekResponse]
+    units: list[UnitOutcomesWeeklyItemResponse]
+    excluded: UnitOutcomesWeeklyExcludedResponse
+    incomplete: bool
+
+    @model_validator(mode="after")
+    def consistent_weeks_and_units(self) -> Self:
+        if len(self.weeks) != 8 or [week.partial for week in self.weeks] != [False] * 7 + [True]:
+            raise ValueError("Exactly eight weeks are required and only the last may be partial")
+        for index, week in enumerate(self.weeks):
+            if week.start_utc > week.end_utc:
+                raise ValueError("Week bounds must be ordered")
+            if index and (
+                self.weeks[index - 1].end_utc != week.start_utc
+                or self.weeks[index - 1].local_start_date + timedelta(days=7)
+                != week.local_start_date
+            ):
+                raise ValueError("Weeks must be contiguous and oldest first")
+        if self.weeks[-1].end_utc != self.extracted_at_utc:
+            raise ValueError("The partial week must end at extraction")
+        seen: set[int] = set()
+        expected = {(week.local_start_date, key): 0 for week in self.weeks for key in range(3)}
+        previous: UnitOutcomesWeeklyItemResponse | None = None
+        by_date = {week.local_start_date: week for week in self.weeks}
+        for unit in self.units:
+            if unit.unit_id in seen:
+                raise ValueError("Unit identifiers must be unique")
+            seen.add(unit.unit_id)
+            if previous is not None and (
+                previous.finished_at_utc < unit.finished_at_utc
+                or (
+                    previous.finished_at_utc == unit.finished_at_utc
+                    and previous.unit_id > unit.unit_id
+                )
+            ):
+                raise ValueError("Units must be ordered by finish date descending then identifier")
+            previous = unit
+            week = by_date.get(unit.week_start_date)
+            if week is None or not week.start_utc <= unit.finished_at_utc < week.end_utc:
+                raise ValueError("Each unit must belong to its declared week")
+            key = 2 if unit.outcome == "unrecoverable" else 1 if unit.replaced else 0
+            expected[(unit.week_start_date, key)] += 1
+        for week in self.weeks:
+            actual = (
+                week.passed_no_replacement,
+                week.passed_after_replacement,
+                week.unrecoverable,
+            )
+            wanted = tuple(expected[(week.local_start_date, key)] for key in range(3))
+            if actual != wanted:
+                raise ValueError("Week counts must match the unit records")
+        return self
 
 
 class RecommendationUsageAnalyses(BaseModel):

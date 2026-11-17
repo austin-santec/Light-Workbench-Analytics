@@ -1,5 +1,6 @@
 """Offline D17 unit-test-time tests. No test opens a database connection."""
 
+import hashlib
 import re
 from datetime import UTC, datetime, timedelta
 
@@ -141,6 +142,12 @@ def test_parameter_binding_and_bounded_read_only_sql():
             unquoted,
             re.I,
         )
+    assert hashlib.sha256(UNIT_TEST_TIME_COHORT_SQL.encode()).hexdigest() == (
+        "7b2858dc9b3eed765201dcbed242d45faf8fb1889b19dd7728f79403162c0f7c"
+    )
+    assert hashlib.sha256(build_unit_timing_query((10, 11))[0].encode()).hexdigest() == (
+        "293e477eba39fe7ff11e08e350aeff2a07aa5fc5e0372f67f7f0f29eaf12a8aa"
+    )
 
 
 def test_combined_totals_removed_assignment_and_analysis_finish_date():

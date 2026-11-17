@@ -10,7 +10,11 @@ from typing import Protocol
 from uuid import UUID
 
 from app.reporting.adapter import ReportingError, SqlServerAdapter, _diagnostic, _error_code
-from app.reporting.channel_activity import PERIOD_KEYS, ChannelActivityBoundaries
+from app.reporting.channel_activity import (
+    PERIOD_KEYS,
+    ChannelActivityBoundaries,
+    WeeklyOutcomeBoundaries,
+)
 from app.reporting.console_guard import StatementRejected, validate_console_statement
 from app.reporting.models import (
     ChannelActivityCounts,
@@ -46,6 +50,7 @@ from app.reporting.models import (
     StoppedStatistics,
     TestTimeByConfigurationMetrics,
     TimingQuality,
+    UnitOutcomesWeeklyQuery,
     UnitStatusQuery,
     UnitTestTimeQuery,
 )
@@ -66,6 +71,10 @@ from app.reporting.unit_lookup import (
     get_unit_detail,
     parse_limit_snapshot,
     search_units,
+)
+from app.reporting.unit_outcomes_weekly import (
+    UnitOutcomesWeeklyMetrics,
+    read_unit_outcomes_weekly,
 )
 from app.reporting.unit_status import UnitStatusMetrics, read_unit_status
 from app.reporting.unit_test_time import UnitTestTimeMetrics, read_unit_test_time
@@ -1517,6 +1526,9 @@ class ReportingRepository(Protocol):
     def get_unit_test_time(
         self, query: UnitTestTimeQuery, boundaries: ChannelActivityBoundaries
     ) -> UnitTestTimeMetrics: ...
+    def get_unit_outcomes_weekly(
+        self, query: UnitOutcomesWeeklyQuery, boundaries: WeeklyOutcomeBoundaries
+    ) -> UnitOutcomesWeeklyMetrics: ...
     def get_recommendation_usage(
         self, query: RecommendationUsageQuery, boundaries: ChannelActivityBoundaries
     ) -> RecommendationUsageMetrics: ...
@@ -1717,6 +1729,14 @@ class SqlServerReportingRepository:
         with self._adapter.cursor() as cursor:
             self._preflight(cursor)
             return read_unit_test_time(cursor, query, boundaries.periods[query.period])
+
+    def get_unit_outcomes_weekly(
+        self, query: UnitOutcomesWeeklyQuery, boundaries: WeeklyOutcomeBoundaries
+    ) -> UnitOutcomesWeeklyMetrics:
+        query = UnitOutcomesWeeklyQuery.model_validate(query.model_dump())
+        with self._adapter.cursor() as cursor:
+            self._preflight(cursor)
+            return read_unit_outcomes_weekly(cursor, query, boundaries)
 
     def get_recommendation_usage(
         self, query: RecommendationUsageQuery, boundaries: ChannelActivityBoundaries

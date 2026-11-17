@@ -12,6 +12,7 @@ const checks = [];
 let runActivityMode = 'not_connected';
 let unitStatusMode = 'values';
 let unitTestTimeMode = 'values';
+let unitOutcomesWeeklyMode = 'values';
 let queryResponseMode = 'success';
 let recommendationUsageMode = 'values';
 let channelFailuresMode = 'values';
@@ -24,6 +25,7 @@ const failureRateRequests = [];
 const replacementActivityRequests = [];
 const unitStatusRequests = [];
 const unitTestTimeRequests = [];
+const unitOutcomesWeeklyRequests = [];
 const recommendationUsageRequests = [];
 const channelFailuresRequests = [];
 const failureConcentrationRequests = [];
@@ -321,6 +323,42 @@ const unitTestTimeFixture = url => {
     incomplete: unitTestTimeMode === 'incomplete',
   };
 };
+const unitOutcomesWeeklyFixture = url => {
+  const purposes = url.searchParams.getAll('purpose').length ? url.searchParams.getAll('purpose') : ['production'];
+  const starts = [
+    '2026-09-28T07:00:00Z', '2026-10-05T07:00:00Z', '2026-10-12T07:00:00Z', '2026-10-19T07:00:00Z',
+    '2026-10-26T07:00:00Z', '2026-11-02T08:00:00Z', '2026-11-09T08:00:00Z', '2026-11-16T08:00:00Z',
+  ];
+  const dates = ['2026-09-28', '2026-10-05', '2026-10-12', '2026-10-19', '2026-10-26', '2026-11-02', '2026-11-09', '2026-11-16'];
+  const values = unitOutcomesWeeklyMode === 'empty'
+    ? Array.from({ length: 8 }, () => [0, 0, 0])
+    : unitOutcomesWeeklyMode === 'singular'
+      ? [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [1, 0, 0]]
+      : [[2, 3, 1], [4, 1, 0], [2, 2, 1], [3, 0, 0], [1, 3, 1], [2, 1, 0], [3, 2, 1], [1, 1, 0]];
+  const weeks = values.map(([passed_no_replacement, passed_after_replacement, unrecoverable], index) => ({
+    start_utc: starts[index], end_utc: index === 7 ? '2026-11-17T20:00:00Z' : starts[index + 1],
+    local_start_date: dates[index], partial: index === 7,
+    passed_no_replacement, passed_after_replacement, unrecoverable,
+  }));
+  let unitId = 0;
+  const units = weeks.flatMap((week, weekIndex) => [
+    ...Array.from({ length: week.passed_no_replacement }, () => ({ outcome: 'passed', replaced: false })),
+    ...Array.from({ length: week.passed_after_replacement }, () => ({ outcome: 'passed', replaced: true })),
+    ...Array.from({ length: week.unrecoverable }, () => ({ outcome: 'unrecoverable', replaced: false })),
+  ].map((value, itemIndex) => {
+    unitId += 1;
+    return { unit_id: unitId, main_board_serial: `DEMO-WEEK-${unitId}`, ...value, finished_at_utc: new Date(Date.parse(starts[weekIndex]) + (itemIndex + 1) * 3_600_000).toISOString().replace('.000Z', 'Z'), week_start_date: dates[weekIndex] };
+  })).sort((left, right) => Date.parse(right.finished_at_utc) - Date.parse(left.finished_at_utc) || left.unit_id - right.unit_id);
+  const excluded = Object.fromEntries([
+    'review_required', 'not_evaluated', 'failing_recovery_available', 'failing_needs_analysis',
+    'other_saved_result', 'run_in_progress', 'outside_period',
+  ].map((key, index) => [key, unitOutcomesWeeklyMode === 'empty' ? 0 : index === 0 ? 2 : index === 5 ? 1 : 0]));
+  return {
+    data_source: 'test_database', tls: 'encrypted_unverified', extracted_at_utc: '2026-11-17T20:00:00Z', timezone: 'America/Los_Angeles',
+    filters: { purpose: purposes }, weeks, units, excluded,
+    incomplete: unitOutcomesWeeklyMode === 'incomplete',
+  };
+};
 const channelFailuresFixture = url => {
   const period = url.searchParams.get('period') || 'last_30_days';
   const purposes = url.searchParams.getAll('purpose').length ? url.searchParams.getAll('purpose') : ['production'];
@@ -549,6 +587,15 @@ await page.route('**/api/v1/reporting/unit-test-time?*', async route => {
     body: JSON.stringify(runActivityMode === 'not_connected' ? { data_source: 'not_connected' } : unitTestTimeFixture(url)),
   });
 });
+await page.route('**/api/v1/reporting/unit-outcomes-weekly?*', async route => {
+  const url = new URL(route.request().url());
+  unitOutcomesWeeklyRequests.push(url);
+  await route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify(runActivityMode === 'not_connected' ? { data_source: 'not_connected' } : unitOutcomesWeeklyFixture(url)),
+  });
+});
 await page.route('**/api/v1/reporting/channel-failures?*', async route => {
   const url = new URL(route.request().url());
   channelFailuresRequests.push(url);
@@ -619,7 +666,7 @@ page.on('response', response => {
 });
 page.on('requestfailed', request => {
   const pathname = new URL(request.url()).pathname;
-  const expectedUnmountCancellation = ['/api/v1/reporting/run-activity', '/api/v1/reporting/test-time-by-configuration', '/api/v1/reporting/channel-activity', '/api/v1/reporting/failure-rate', '/api/v1/reporting/replacement-activity', '/api/v1/reporting/unit-status', '/api/v1/reporting/unit-test-time', '/api/v1/reporting/recommendation-usage', '/api/v1/reporting/channel-failures', '/api/v1/reporting/failure-concentration', '/api/v1/reporting/station-summary', '/api/v1/units/search', '/api/v1/query/schema', '/api/v1/query/execute'].includes(pathname) && request.failure()?.errorText === 'net::ERR_ABORTED';
+  const expectedUnmountCancellation = ['/api/v1/reporting/run-activity', '/api/v1/reporting/test-time-by-configuration', '/api/v1/reporting/channel-activity', '/api/v1/reporting/failure-rate', '/api/v1/reporting/replacement-activity', '/api/v1/reporting/unit-status', '/api/v1/reporting/unit-test-time', '/api/v1/reporting/unit-outcomes-weekly', '/api/v1/reporting/recommendation-usage', '/api/v1/reporting/channel-failures', '/api/v1/reporting/failure-concentration', '/api/v1/reporting/station-summary', '/api/v1/units/search', '/api/v1/query/schema', '/api/v1/query/execute'].includes(pathname) && request.failure()?.errorText === 'net::ERR_ABORTED';
   if (!expectedUnmountCancellation) errors.push(`Request failed: ${request.url()} ${request.failure()?.errorText}`);
 });
 const check = label => { checks.push(label); console.log(`PASS ${label}`); };
@@ -634,6 +681,7 @@ const channelFailuresPanel = () => page.getByRole('heading', { name: 'Failures b
 const stationPanel = () => page.getByRole('heading', { name: 'Stations, last 30 days', exact: true }).locator('..').locator('..').locator('..').locator('..');
 const unitOutcomesPanel = () => page.getByRole('heading', { name: 'Unit outcomes', exact: true }).locator('..').locator('..').locator('..').locator('..');
 const unitTestTimePanel = (target = page) => target.locator('#configuration-histogram').locator('..');
+const weeklyOutcomesPanel = (target = page) => target.getByRole('heading', { name: 'Unit outcomes by week', exact: true }).locator('..').locator('..').locator('..');
 const failureHistogramPanel = () => page.getByRole('heading', { name: 'Failed channels per unit', exact: true }).locator('..').locator('..').locator('..');
 const failureReasonsPanel = (target = page) => target.getByRole('region', { name: 'Failing unit reasons' });
 const assertFocusRing = async locator => {
@@ -722,6 +770,12 @@ try {
   await demoFailureReasons.getByText("27 units, from each run's latest replacement analysis.", { exact: true }).waitFor();
   assert.equal(await demoFailureReasons.locator('code').count(), 3);
   assert.equal(await demoFailureReasons.getByText('Live · test database', { exact: true }).count(), 0);
+  const demoWeeklyOutcomes = weeklyOutcomesPanel();
+  await demoWeeklyOutcomes.getByText('Passed first time', { exact: true }).waitFor();
+  assert.equal(await demoWeeklyOutcomes.getByText('Passed, no replacement', { exact: true }).count(), 0);
+  assert.equal(await demoWeeklyOutcomes.getByRole('button', { name: 'Refresh unit outcomes' }).count(), 0);
+  assert.equal(unitOutcomesWeeklyRequests.at(-1).searchParams.getAll('purpose').join(','), 'production');
+  assert.equal(unitOutcomesWeeklyRequests.at(-1).searchParams.has('period'), false);
   await demoFailureHistogram.getByRole('button', { name: '24 ch', exact: true }).click();
   assert.ok((await demoFailureHistogram.getByRole('img').getAttribute('aria-label')).includes('24-channel'));
   const demoConcentration = page.getByRole('region', { name: 'Failure concentration' });
@@ -747,6 +801,7 @@ try {
   await downPage.route('**/api/v1/reporting/replacement-activity*', route => route.abort('connectionrefused'));
   await downPage.route('**/api/v1/reporting/unit-status?*', route => route.abort('connectionrefused'));
   await downPage.route('**/api/v1/reporting/unit-test-time?*', route => route.abort('connectionrefused'));
+  await downPage.route('**/api/v1/reporting/unit-outcomes-weekly?*', route => route.abort('connectionrefused'));
   await downPage.route('**/api/v1/reporting/recommendation-usage?*', route => route.abort('connectionrefused'));
   await downPage.route('**/api/v1/reporting/channel-failures?*', route => route.abort('connectionrefused'));
   await downPage.route('**/api/v1/reporting/failure-concentration?*', route => route.abort('connectionrefused'));
@@ -761,6 +816,7 @@ try {
     await downPage.getByText('More failures than usable extras (4)', { exact: true }).waitFor();
     await downPage.getByText('failed channels in one unit, first pass', { exact: true }).waitFor();
     await failureReasonsPanel(downPage).getByText("27 units, from each run's latest replacement analysis.", { exact: true }).waitFor();
+    await weeklyOutcomesPanel(downPage).getByText('Passed first time', { exact: true }).waitFor();
     await downPage.getByText('Extra port 50 fails as a replacement candidate 31% of the time, about 3× the other extras.', { exact: true }).waitFor();
     check('Replacement activity and failure concentration backend-down states');
   } finally { await downPage.close(); }
@@ -775,6 +831,9 @@ try {
   await databaseFailurePage.route('**/api/v1/reporting/unit-test-time?*', route => route.fulfill({
     status: 503, contentType: 'application/json', body: JSON.stringify({ code: 'query_timeout' }),
   }));
+  await databaseFailurePage.route('**/api/v1/reporting/unit-outcomes-weekly?*', route => route.fulfill({
+    status: 503, contentType: 'application/json', body: JSON.stringify({ code: 'query_timeout' }),
+  }));
   try {
     await databaseFailurePage.goto(`${base}/#/`, { waitUntil: 'domcontentloaded' });
     await assertText(unitTestTimePanel(databaseFailurePage), 'OSX-150 · SM · 48 channels · 412 units, last 30 days');
@@ -782,6 +841,7 @@ try {
     await databaseFailurePage.getByRole('region', { name: 'Replacement activity' }).getByText('Database check failed').waitFor();
     await databaseFailurePage.getByText('query_timeout', { exact: true }).waitFor();
     await databaseFailurePage.getByText('Extra port 50 fails as a replacement candidate 31% of the time, about 3× the other extras.', { exact: true }).waitFor();
+    await weeklyOutcomesPanel(databaseFailurePage).getByText('Passed first time', { exact: true }).waitFor();
     check('Replacement activity sanitized database-failure state; failure concentration keeps demo fallback');
   } finally { await databaseFailurePage.close(); }
 
@@ -975,6 +1035,23 @@ try {
   check('Synthetic connected channel activity and Q02 tile/chart, null gaps, criteria note, labels, and refresh');
 
   await visit('/failures');
+  const liveWeeklyOutcomes = weeklyOutcomesPanel();
+  await liveWeeklyOutcomes.getByText('Passed, no replacement', { exact: true }).waitFor();
+  await liveWeeklyOutcomes.getByText('Units finished each week (Pacific, Monday start), last 8 weeks. The current week is partial.', { exact: true }).waitFor();
+  await liveWeeklyOutcomes.getByText('Live · test database', { exact: true }).waitFor();
+  const weeklyChart = liveWeeklyOutcomes.locator('svg[data-source="live-unit-outcomes"]');
+  assert.equal(await weeklyChart.getAttribute('data-y-maximum'), '8');
+  assert.equal(await weeklyChart.getAttribute('aria-label'), '35 units finished in the last 8 weeks: 18 passed with no replacement, 13 passed after replacement, 4 unrecoverable.');
+  await liveWeeklyOutcomes.getByText('Sep 28', { exact: true }).waitFor();
+  await liveWeeklyOutcomes.getByText('Nov 16 *', { exact: true }).waitFor();
+  assert.deepEqual(await liveWeeklyOutcomes.getByText(/unrec\.$/).allTextContents(), ['1 unrec.', '0 unrec.', '1 unrec.', '0 unrec.', '1 unrec.', '0 unrec.', '1 unrec.', '0 unrec.']);
+  assert.equal(await weeklyChart.locator('rect[data-week="0"][data-series="passed-no-replacement"]').getAttribute('height'), '42.5');
+  assert.equal(await weeklyChart.locator('rect[data-week="0"][data-series="passed-after-replacement"]').getAttribute('height'), '63.8');
+  assert.equal(await weeklyChart.locator('rect[data-week="0"][data-series="unrecoverable"]').getAttribute('height'), '21.3');
+  await assertText(liveWeeklyOutcomes, 'Not counted: 2 review required, 1 run in progress.');
+  assert.equal(unitOutcomesWeeklyRequests.at(-1).searchParams.getAll('purpose').join(','), 'production');
+  assert.equal(unitOutcomesWeeklyRequests.at(-1).searchParams.has('period'), false);
+  const weeklyRequestsBeforeRange = unitOutcomesWeeklyRequests.length;
   await replacementPanel.getByText('Channels replaced').waitFor();
   await assertText(replacementPanel, 'of which production: 24');
   await assertText(replacementPanel, '48 events / 24 units');
@@ -983,7 +1060,28 @@ try {
   await assertText(replacementPanel, 'Administrative-error exclusions: 0');
   assert.equal(await replacementPanel.getByRole('img', { name: /Daily replacement events/ }).locator('span').count(), 31);
   await replacementPanel.getByRole('button', { name: 'Today', exact: true }).click();
+  assert.equal(unitOutcomesWeeklyRequests.length, weeklyRequestsBeforeRange);
   await assertText(replacementPanel, '12 events / 6 units');
+  const weeklyRequestsBeforeRefresh = unitOutcomesWeeklyRequests.length;
+  await liveWeeklyOutcomes.getByRole('button', { name: 'Refresh unit outcomes' }).click();
+  assert.ok(unitOutcomesWeeklyRequests.length > weeklyRequestsBeforeRefresh);
+  assert.equal(unitOutcomesWeeklyRequests.at(-1).searchParams.getAll('purpose').join(','), 'production');
+  assert.equal(unitOutcomesWeeklyRequests.at(-1).searchParams.has('period'), false);
+  unitOutcomesWeeklyMode = 'singular';
+  await liveWeeklyOutcomes.getByRole('button', { name: 'Refresh unit outcomes' }).click();
+  assert.equal(await weeklyChart.getAttribute('aria-label'), '1 unit finished in the last 8 weeks: 1 passed with no replacement, 0 passed after replacement, 0 unrecoverable.');
+  unitOutcomesWeeklyMode = 'empty';
+  await liveWeeklyOutcomes.getByRole('button', { name: 'Refresh unit outcomes' }).click();
+  await liveWeeklyOutcomes.getByText('No finished units in the last 8 weeks.', { exact: true }).waitFor();
+  assert.equal(await weeklyChart.locator('rect').count(), 0);
+  unitOutcomesWeeklyMode = 'incomplete';
+  await liveWeeklyOutcomes.getByRole('button', { name: 'Refresh unit outcomes' }).click();
+  await liveWeeklyOutcomes.getByText('Bounded cohort is incomplete.', { exact: false }).waitFor();
+  await assertText(liveWeeklyOutcomes, 'Not counted: 2 review required, 1 run in progress.');
+  unitOutcomesWeeklyMode = 'values';
+  await liveWeeklyOutcomes.getByRole('button', { name: 'Refresh unit outcomes' }).click();
+  await liveWeeklyOutcomes.getByText('6', { exact: true }).first().waitFor();
+  check('Weekly unit outcomes covers demo fallback, connected geometry and labels, aria totals and singular wording, exclusions, incomplete, empty, refresh, and range independence');
   const concentrationPanel = page.getByRole('region', { name: 'Failure concentration' });
   await concentrationPanel.getByText('Failed first observations, today · 15 of 110 failed.', { exact: true }).waitFor();
   await concentrationPanel.getByText('Live · test database', { exact: true }).waitFor();

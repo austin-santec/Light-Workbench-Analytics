@@ -11,6 +11,7 @@ import { loadRecommendationUsage, type RecommendationUsageConnectedResponse } fr
 import { loadFailureConcentration, topConcentration, type FailureConcentrationConnectedResponse } from '../lib/api/failureConcentration';
 import { UNIT_STATUS_LABEL } from '../lib/unitStatusPresentation';
 import { groupFailingUnitReasons } from '../lib/failingUnitReasons';
+import { loadUnitOutcomesWeekly, unitOutcomeGeometry, UNIT_OUTCOMES_EXCLUDED_KEYS, type UnitOutcomesExcludedKey, type UnitOutcomesWeeklyConnectedResponse } from '../lib/api/unitOutcomesWeekly';
 
 const STATUS_PERIOD: Record<LiveReplacementRange, 'today' | 'yesterday' | 'this_week' | 'last_30_days'> = {
   today: 'today', yesterday: 'yesterday', week: 'this_week', month: 'last_30_days',
@@ -32,6 +33,15 @@ const STATUS_TONE: Record<UnitStatus, { bg: string; fg: string }> = {
   failing_needs_analysis: { bg: 'var(--warn-bg)', fg: 'var(--warn-fg)' },
   failing_no_measured_recovery: { bg: 'var(--bad-bg)', fg: 'var(--bad-fg)' },
 };
+const OUTCOME_EXCLUDED_LABEL: Record<UnitOutcomesExcludedKey, string> = {
+  review_required: 'review required',
+  not_evaluated: 'not evaluated',
+  failing_recovery_available: 'recovery available',
+  failing_needs_analysis: 'needs analysis',
+  other_saved_result: 'another saved analysis result',
+  run_in_progress: 'run in progress',
+  outside_period: 'finished outside the period',
+};
 
 export default function Failures() {
  const [state, setState] = useState<FailuresState>({ ch: 48 });
@@ -43,8 +53,10 @@ export default function Failures() {
  const [recommendationUsageRefresh, setRecommendationUsageRefresh] = useState(0);
  const [failureConcentration, setFailureConcentration] = useState<FailureConcentrationConnectedResponse | null>(null);
  const [failureConcentrationRefresh, setFailureConcentrationRefresh] = useState(0);
+ const [unitOutcomes, setUnitOutcomes] = useState<UnitOutcomesWeeklyConnectedResponse | null>(null);
+ const [unitOutcomesRefresh, setUnitOutcomesRefresh] = useState(0);
  const values = getFailuresValues(state);
- const { accent, kpis, weeks, wGrid, reasons, fbars, fp, topCh, topPort, units } = values;
+ const { accent, kpis, weeks: demoWeeks, wGrid: demoWeekGrid, reasons, fbars, fp, topCh, topPort, units } = values;
  useEffect(() => {
    const controller = new AbortController();
    loadUnitStatus(STATUS_PERIOD[liveRange], ['production'], controller.signal)
@@ -73,6 +85,13 @@ export default function Failures() {
      .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setFailureConcentration(null); });
    return () => controller.abort();
  }, [failureConcentrationRefresh, liveRange]);
+ useEffect(() => {
+   const controller = new AbortController();
+   loadUnitOutcomesWeekly(['production'], controller.signal)
+     .then(result => setUnitOutcomes(result.data_source === 'test_database' ? result : null))
+     .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setUnitOutcomes(null); });
+   return () => controller.abort();
+ }, [unitOutcomesRefresh]);
  const changeLiveRange = (range: LiveReplacementRange) => {
    setUnitStatus(null);
    setRecommendationUsage(null);
@@ -144,6 +163,19 @@ export default function Failures() {
    () => failureConcentration ? topConcentration(failureConcentration) : null,
    [failureConcentration],
  );
+ const liveOutcomeGeometry = useMemo(
+   () => unitOutcomes ? unitOutcomeGeometry(unitOutcomes.weeks) : null,
+   [unitOutcomes],
+ );
+ const outcomeWeeks = liveOutcomeGeometry?.bars ?? demoWeeks;
+ const outcomeGrid = liveOutcomeGeometry?.grid ?? demoWeekGrid;
+ const outcomeTotals = unitOutcomes ? unitOutcomes.weeks.reduce((totals, week) => ({
+   passedNoReplacement: totals.passedNoReplacement + week.passed_no_replacement,
+   passedAfterReplacement: totals.passedAfterReplacement + week.passed_after_replacement,
+   unrecoverable: totals.unrecoverable + week.unrecoverable,
+ }), { passedNoReplacement: 0, passedAfterReplacement: 0, unrecoverable: 0 }) : null;
+ const outcomeTotal = outcomeTotals ? outcomeTotals.passedNoReplacement + outcomeTotals.passedAfterReplacement + outcomeTotals.unrecoverable : 0;
+ const outcomeExcluded = unitOutcomes ? UNIT_OUTCOMES_EXCLUDED_KEYS.flatMap(key => unitOutcomes.excluded[key] > 0 ? [`${unitOutcomes.excluded[key].toLocaleString('en-US')} ${OUTCOME_EXCLUDED_LABEL[key]}`] : []) : [];
  return (<>
 
     <header style={css("display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:14px")}>
@@ -188,32 +220,37 @@ export default function Failures() {
         <div style={css("display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;gap:10px")}>
           <div style={css("display:flex;flex-direction:column;gap:3px")}>
             <h2 style={css("margin:0;font-size:16px;font-weight:600")}>Unit outcomes by week</h2>
-            <span style={css("font-size:12.5px;color:var(--muted)")}>Units finished each week, last 8 weeks. The current week is partial.</span>
+            <span style={css("font-size:12.5px;color:var(--muted)")}>{unitOutcomes ? 'Units finished each week (Pacific, Monday start), last 8 weeks. The current week is partial.' : 'Units finished each week, last 8 weeks. The current week is partial.'}</span>
           </div>
-          <div style={css("display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12px;color:var(--ink2)")}>
-            <span style={css("display:inline-flex;align-items:center;gap:6px")}><span style={css("width:10px;height:10px;border-radius:3px;background:var(--o1)")}></span>Passed first time</span>
-            <span style={css("display:inline-flex;align-items:center;gap:6px")}><span style={css("width:10px;height:10px;border-radius:3px;background:var(--o2)")}></span>Passed after replacement</span>
-            <span style={css("display:inline-flex;align-items:center;gap:6px")}><span style={css("width:10px;height:10px;border-radius:3px;background:var(--o3)")}></span>Unrecoverable</span>
+          <div style={css("display:flex;flex-direction:column;align-items:flex-end;gap:7px")}>
+            {unitOutcomes && <div style={css("display:flex;align-items:center;gap:8px")}><span className="live-unit-badge">Live · test database</span><button type="button" aria-label="Refresh unit outcomes" onClick={() => setUnitOutcomesRefresh(value => value + 1)} style={css("min-height:28px;padding:0 8px;border-radius:6px;border:1px solid var(--line);background:var(--panel);color:var(--ink2);font-size:10.5px;font-weight:600")}>Refresh</button></div>}
+            <div style={css("display:flex;flex-wrap:wrap;justify-content:flex-end;gap:6px 14px;font-size:12px;color:var(--ink2)")}>
+              <span style={css("display:inline-flex;align-items:center;gap:6px")}><span style={css("width:10px;height:10px;border-radius:3px;background:var(--o1)")}></span>{unitOutcomes ? 'Passed, no replacement' : 'Passed first time'}</span>
+              <span style={css("display:inline-flex;align-items:center;gap:6px")}><span style={css("width:10px;height:10px;border-radius:3px;background:var(--o2)")}></span>Passed after replacement</span>
+              <span style={css("display:inline-flex;align-items:center;gap:6px")}><span style={css("width:10px;height:10px;border-radius:3px;background:var(--o3)")}></span>Unrecoverable</span>
+            </div>
           </div>
         </div>
-        <svg viewBox="0 0 680 250" role="img" aria-label="Stacked bars of unit outcomes per week. About 270 to 310 units per full week, roughly a third passing first time and 2 percent unrecoverable." style={css("width:100%;height:auto;display:block")}>
-          {wGrid.map((g, index1) => <Fragment key={index1}>
+        <svg data-source={unitOutcomes ? 'live-unit-outcomes' : 'demo'} data-y-maximum={liveOutcomeGeometry?.maximum} viewBox="0 0 680 250" role="img" aria-label={unitOutcomes && outcomeTotals ? `${outcomeTotal} ${outcomeTotal === 1 ? 'unit' : 'units'} finished in the last 8 weeks: ${outcomeTotals.passedNoReplacement} passed with no replacement, ${outcomeTotals.passedAfterReplacement} passed after replacement, ${outcomeTotals.unrecoverable} unrecoverable.` : 'Stacked bars of unit outcomes per week. About 270 to 310 units per full week, roughly a third passing first time and 2 percent unrecoverable.'} style={css("width:100%;height:auto;display:block")}>
+          {outcomeGrid.map((g, index1) => <Fragment key={index1}>
             <g >
               <line x1="44" x2="664" y1={g.y} y2={g.y} style={css("stroke:var(--grid);stroke-width:1")}></line>
               <text x="36" y={g.ty} style={css("font-size:11px;fill:var(--muted);text-anchor:end;font-family:'Geist Mono',monospace")}>{g.label}</text>
             </g>
           </Fragment>)}
-          {weeks.map((w, index2) => <Fragment key={index2}>
+          {outcomeWeeks.map((w, index2) => <Fragment key={index2}>
             <g >
-              <rect x={w.x} y={w.y1} width="44" height={w.h1} style={css("fill:var(--o1)")}></rect>
-              <rect x={w.x} y={w.y2} width="44" height={w.h2} style={css("fill:var(--o2)")}></rect>
-              <rect x={w.x} y={w.y3} width="44" height={w.h3} style={css("fill:var(--o3)")}></rect>
+              {Number(w.h1) > 0 && <rect data-week={index2} data-series="passed-no-replacement" x={w.x} y={w.y1} width="44" height={w.h1} style={css("fill:var(--o1)")}></rect>}
+              {Number(w.h2) > 0 && <rect data-week={index2} data-series="passed-after-replacement" x={w.x} y={w.y2} width="44" height={w.h2} style={css("fill:var(--o2)")}></rect>}
+              {Number(w.h3) > 0 && <rect data-week={index2} data-series="unrecoverable" x={w.x} y={w.y3} width="44" height={w.h3} style={css("fill:var(--o3)")}></rect>}
               <text x={w.cx} y={w.ty} style={css("font-size:11.5px;font-weight:600;fill:var(--ink);text-anchor:middle;font-family:'Geist Mono',monospace")}>{w.total}</text>
               <text x={w.cx} y="222" style={css("font-size:11.5px;fill:var(--ink2);text-anchor:middle;font-weight:500")}>{w.label}</text>
               <text x={w.cx} y="242" style={css("font-size:11px;fill:var(--bad-fg);text-anchor:middle;font-family:'Geist Mono',monospace;font-weight:600")}>{w.unrec}</text>
             </g>
           </Fragment>)}
         </svg>
+        {unitOutcomes && outcomeTotal === 0 && <span style={css("font-size:12.5px;color:var(--muted)")}>No finished units in the last 8 weeks.</span>}
+        {unitOutcomes && <p style={css("margin:0;font-size:11.5px;color:var(--muted);line-height:1.5")}>Finished means passing, or failing with a current analysis that found no recovery; not a final manufacturing disposition. A unit counts once, in the week of its latest run end.{outcomeExcluded.length > 0 && ` Not counted: ${outcomeExcluded.join(', ')}.`}{unitOutcomes.incomplete && <span style={css("color:var(--warn-fg)")}> Bounded cohort is incomplete.</span>}</p>}
       </div>
 
       <div role="region" aria-label="Failing unit reasons" style={css("flex:1 1 340px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:12px")}>

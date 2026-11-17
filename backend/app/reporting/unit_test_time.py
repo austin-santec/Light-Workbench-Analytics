@@ -10,7 +10,7 @@ from typing import Literal
 
 from app.reporting.adapter import ReportingError
 from app.reporting.channel_activity import ActivityWindow
-from app.reporting.models import TimingQuality, UnitTestTimeQuery
+from app.reporting.models import TimingQuality, UnitOutcomesWeeklyQuery, UnitTestTimeQuery
 from app.reporting.unit_status import (
     UNIT_STATUS_COHORT_CAP,
     UNIT_STATUS_RUN_CAP,
@@ -131,6 +131,27 @@ class UnitTestTimeMetrics:
     incomplete: bool
 
 
+@dataclass(frozen=True)
+class FinishedUnitRecord:
+    unit_id: int
+    main_board_serial: str
+    outcome: FinishedOutcome | None
+    exclusion_reason: str | None
+    finished_at_utc: datetime | None
+    outside_period: bool
+    missing_duration: bool
+    total_ms: int
+    run_count: int
+    active_run_count: int
+    fallback_run_count: int
+
+
+@dataclass(frozen=True)
+class FinishedUnitCohort:
+    records: tuple[FinishedUnitRecord, ...]
+    incomplete: bool
+
+
 def finished_outcome(projection: UnitStatusProjection) -> FinishedOutcome | None:
     """Apply the reusable D17 working finished-unit rule to one D16 projection."""
     if projection.status == "passing":
@@ -146,7 +167,9 @@ def finished_outcome(projection: UnitStatusProjection) -> FinishedOutcome | None
     return None
 
 
-def _cohort_params(query: UnitTestTimeQuery, window: ActivityWindow) -> tuple:
+def _cohort_params(
+    query: UnitTestTimeQuery | UnitOutcomesWeeklyQuery, window: ActivityWindow
+) -> tuple:
     purposes = [purpose.value for purpose in query.purposes]
     purposes.extend([purposes[0]] * (_PURPOSE_SLOTS - len(purposes)))
     return *purposes, window.start_utc, window.end_utc
@@ -216,15 +239,13 @@ def _timing_runs(
     return parsed
 
 
-def summarize_unit_test_time(
+def summarize_finished_unit_cohort(
     cohorts: Sequence[CohortAssignment],
     projections: Sequence[UnitStatusProjection],
     run_rows: Sequence[Sequence[object]],
-    query: UnitTestTimeQuery,
+    query: UnitTestTimeQuery | UnitOutcomesWeeklyQuery,
     window: ActivityWindow,
-    *,
-    incomplete: bool,
-) -> UnitTestTimeMetrics:
+) -> tuple[FinishedUnitRecord, ...]:
     cohort_by_unit = {item.unit_id: item for item in cohorts}
     if len(cohort_by_unit) != len(cohorts):
         raise ReportingError("schema_incompatible")
@@ -236,8 +257,7 @@ def summarize_unit_test_time(
         runs_by_unit[run.unit_id].append(run)
 
     selected_purposes = set(query.purposes)
-    excluded = Counter()
-    units: list[UnitTestTimeItem] = []
+    records: list[FinishedUnitRecord] = []
     for unit_id, cohort in cohort_by_unit.items():
         projection = projection_by_unit[unit_id]
         outcome = finished_outcome(projection)
@@ -247,7 +267,11 @@ def summarize_unit_test_time(
                 if projection.status == "failing_no_measured_recovery"
                 else projection.status
             )
-            excluded[reason] += 1
+            records.append(
+                FinishedUnitRecord(
+                    unit_id, cohort.main_board_serial, None, reason, None, False, False, 0, 0, 0, 0
+                )
+            )
             continue
         qualifying = [
             run
@@ -257,10 +281,28 @@ def summarize_unit_test_time(
             and run.superseded_by_run_id is None
         ]
         if any(run.run_ended_at_utc is None for run in qualifying):
-            excluded["run_in_progress"] += 1
+            records.append(
+                FinishedUnitRecord(
+                    unit_id,
+                    cohort.main_board_serial,
+                    outcome,
+                    "run_in_progress",
+                    None,
+                    False,
+                    False,
+                    0,
+                    len(qualifying),
+                    0,
+                    0,
+                )
+            )
             continue
         if not qualifying:
-            excluded["missing_duration"] += 1
+            records.append(
+                FinishedUnitRecord(
+                    unit_id, cohort.main_board_serial, outcome, None, None, False, True, 0, 0, 0, 0
+                )
+            )
             continue
         total_ms = 0
         active_count = 0
@@ -276,29 +318,61 @@ def summarize_unit_test_time(
             else:
                 missing_duration = True
                 break
-        if missing_duration:
-            excluded["missing_duration"] += 1
-            continue
         finished_at = max(
             run.run_ended_at_utc for run in qualifying if run.run_ended_at_utc is not None
         )
         if outcome == "unrecoverable" and projection.latest_analysis is not None:
             finished_at = max(finished_at, projection.latest_analysis.analyzed_at_utc)
-        if not window.start_utc <= finished_at < window.end_utc:
-            excluded["outside_period"] += 1
-            continue
-        units.append(
-            UnitTestTimeItem(
+        records.append(
+            FinishedUnitRecord(
                 unit_id=unit_id,
                 main_board_serial=cohort.main_board_serial,
                 outcome=outcome,
+                exclusion_reason=None,
                 finished_at_utc=finished_at,
+                outside_period=not window.start_utc <= finished_at < window.end_utc,
+                missing_duration=missing_duration,
                 total_ms=total_ms,
                 run_count=len(qualifying),
                 active_run_count=active_count,
                 fallback_run_count=fallback_count,
             )
         )
+    return tuple(records)
+
+
+def summarize_unit_test_time(
+    cohorts: Sequence[CohortAssignment],
+    projections: Sequence[UnitStatusProjection],
+    run_rows: Sequence[Sequence[object]],
+    query: UnitTestTimeQuery,
+    window: ActivityWindow,
+    *,
+    incomplete: bool,
+) -> UnitTestTimeMetrics:
+    records = summarize_finished_unit_cohort(cohorts, projections, run_rows, query, window)
+    excluded = Counter()
+    units: list[UnitTestTimeItem] = []
+    for record in records:
+        if record.exclusion_reason is not None:
+            excluded[record.exclusion_reason] += 1
+        elif record.missing_duration:
+            excluded["missing_duration"] += 1
+        elif record.outside_period:
+            excluded["outside_period"] += 1
+        elif record.outcome is not None and record.finished_at_utc is not None:
+            units.append(
+                UnitTestTimeItem(
+                    unit_id=record.unit_id,
+                    main_board_serial=record.main_board_serial,
+                    outcome=record.outcome,
+                    finished_at_utc=record.finished_at_utc,
+                    total_ms=record.total_ms,
+                    run_count=record.run_count,
+                    active_run_count=record.active_run_count,
+                    fallback_run_count=record.fallback_run_count,
+                )
+            )
     ordered = tuple(
         sorted(units, key=lambda item: (-item.finished_at_utc.timestamp(), item.unit_id))
     )
@@ -309,9 +383,11 @@ def summarize_unit_test_time(
     )
 
 
-def read_unit_test_time(
-    cursor, query: UnitTestTimeQuery, window: ActivityWindow
-) -> UnitTestTimeMetrics:
+def read_finished_unit_cohort(
+    cursor,
+    query: UnitTestTimeQuery | UnitOutcomesWeeklyQuery,
+    window: ActivityWindow,
+) -> FinishedUnitCohort:
     cohort_rows = cursor.execute(
         UNIT_TEST_TIME_COHORT_SQL, _cohort_params(query, window)
     ).fetchmany(UNIT_STATUS_COHORT_CAP + 1)
@@ -339,18 +415,54 @@ def read_unit_test_time(
             )
         )
     if not cohorts:
-        return UnitTestTimeMetrics(
-            units=(), excluded=dict.fromkeys(EXCLUDED_KEYS, 0), incomplete=incomplete
-        )
+        return FinishedUnitCohort(records=(), incomplete=incomplete)
     projections, projection_incomplete = read_unit_status_projections(cursor, cohorts)
     timing_query = build_unit_timing_query(tuple(item.unit_id for item in cohorts))
     timing_rows = cursor.execute(*timing_query).fetchmany(UNIT_STATUS_RUN_CAP + 1)
     timing_incomplete = len(timing_rows) > UNIT_STATUS_RUN_CAP
-    return summarize_unit_test_time(
-        cohorts,
-        projections,
-        timing_rows[:UNIT_STATUS_RUN_CAP],
-        query,
-        window,
+    records = summarize_finished_unit_cohort(
+        cohorts, projections, timing_rows[:UNIT_STATUS_RUN_CAP], query, window
+    )
+    return FinishedUnitCohort(
+        records=records,
         incomplete=incomplete or projection_incomplete or timing_incomplete,
+    )
+
+
+def read_unit_test_time(
+    cursor, query: UnitTestTimeQuery, window: ActivityWindow
+) -> UnitTestTimeMetrics:
+    cohort = read_finished_unit_cohort(cursor, query, window)
+    if not cohort.records:
+        return UnitTestTimeMetrics(
+            units=(), excluded=dict.fromkeys(EXCLUDED_KEYS, 0), incomplete=cohort.incomplete
+        )
+    excluded = Counter()
+    units: list[UnitTestTimeItem] = []
+    for record in cohort.records:
+        if record.exclusion_reason is not None:
+            excluded[record.exclusion_reason] += 1
+        elif record.missing_duration:
+            excluded["missing_duration"] += 1
+        elif record.outside_period:
+            excluded["outside_period"] += 1
+        elif record.outcome is not None and record.finished_at_utc is not None:
+            units.append(
+                UnitTestTimeItem(
+                    record.unit_id,
+                    record.main_board_serial,
+                    record.outcome,
+                    record.finished_at_utc,
+                    record.total_ms,
+                    record.run_count,
+                    record.active_run_count,
+                    record.fallback_run_count,
+                )
+            )
+    return UnitTestTimeMetrics(
+        units=tuple(
+            sorted(units, key=lambda item: (-item.finished_at_utc.timestamp(), item.unit_id))
+        ),
+        excluded={key: excluded[key] for key in EXCLUDED_KEYS},
+        incomplete=cohort.incomplete,
     )

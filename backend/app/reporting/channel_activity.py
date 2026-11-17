@@ -24,6 +24,12 @@ class ChannelActivityBoundaries:
     daily: tuple[ActivityWindow, ...]
 
 
+@dataclass(frozen=True)
+class WeeklyOutcomeBoundaries:
+    extracted_at_utc: datetime
+    weeks: tuple[ActivityWindow, ...]
+
+
 def _local_midnight_utc(value: date) -> datetime:
     return datetime.combine(value, time.min, tzinfo=PACIFIC_TIMEZONE).astimezone(UTC)
 
@@ -68,3 +74,30 @@ def compute_channel_activity_boundaries(extracted_at: datetime) -> ChannelActivi
         periods=periods,
         daily=daily,
     )
+
+
+def compute_weekly_outcome_boundaries(extracted_at: datetime) -> WeeklyOutcomeBoundaries:
+    """Return the current and seven prior Pacific Monday-start weeks, oldest first."""
+    if extracted_at.tzinfo is None or extracted_at.utcoffset() is None:
+        raise ValueError("An aware extraction time is required")
+    extracted_at_utc = extracted_at.astimezone(UTC).replace(
+        microsecond=(extracted_at.microsecond // 1000) * 1000
+    )
+    local_today = extracted_at_utc.astimezone(PACIFIC_TIMEZONE).date()
+    current_monday = local_today - timedelta(days=local_today.weekday())
+    oldest_monday = current_monday - timedelta(weeks=7)
+    weeks = tuple(
+        ActivityWindow(
+            start_utc=_local_midnight_utc(start_date),
+            end_utc=(
+                extracted_at_utc
+                if index == 7
+                else _local_midnight_utc(start_date + timedelta(days=7))
+            ),
+            partial=index == 7,
+            local_date=start_date,
+        )
+        for index in range(8)
+        for start_date in (oldest_monday + timedelta(weeks=index),)
+    )
+    return WeeklyOutcomeBoundaries(extracted_at_utc=extracted_at_utc, weeks=weeks)

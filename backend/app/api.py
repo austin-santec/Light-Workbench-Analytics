@@ -13,6 +13,7 @@ from app.reporting.channel_activity import (
     PACIFIC_TIMEZONE_NAME,
     PERIOD_KEYS,
     compute_channel_activity_boundaries,
+    compute_weekly_outcome_boundaries,
 )
 from app.reporting.config import ReportingSettings
 from app.reporting.console_guard import StatementRejected
@@ -24,6 +25,7 @@ from app.reporting.models import (
     ReplacementActivityQuery,
     RunQuery,
     StationSummaryQuery,
+    UnitOutcomesWeeklyQuery,
     UnitStatusQuery,
     UnitTestTimeQuery,
 )
@@ -90,6 +92,9 @@ from app.schemas import (
     TestTimeByConfigurationFilters,
     TestTimeByConfigurationQueryParams,
     UnitDetailConnectedResponse,
+    UnitOutcomesWeeklyConnectedResponse,
+    UnitOutcomesWeeklyFilters,
+    UnitOutcomesWeeklyQueryParams,
     UnitSearchConnectedResponse,
     UnitSearchQueryParams,
     UnitStatusConnectedResponse,
@@ -212,6 +217,19 @@ def validated_unit_test_time_query(
 ) -> UnitTestTimeQuery:
     try:
         return UnitTestTimeQuery(period=params.period, purposes=tuple(params.purpose))
+    except ValidationError as exc:
+        errors = [
+            item | {"loc": ("query", *item["loc"])}
+            for item in exc.errors(include_url=False, include_input=False, include_context=False)
+        ]
+        raise RequestValidationError(errors) from None
+
+
+def validated_unit_outcomes_weekly_query(
+    params: Annotated[UnitOutcomesWeeklyQueryParams, Query()],
+) -> UnitOutcomesWeeklyQuery:
+    try:
+        return UnitOutcomesWeeklyQuery(purposes=tuple(params.purpose))
     except ValidationError as exc:
         errors = [
             item | {"loc": ("query", *item["loc"])}
@@ -793,6 +811,37 @@ def unit_test_time(
             partial=window.partial,
         ),
         filters=UnitTestTimeFilters(purpose=list(query.purposes)),
+        units=[asdict(unit) for unit in metrics.units],
+        excluded=metrics.excluded,
+        incomplete=metrics.incomplete,
+    )
+
+
+@router.get(
+    "/reporting/unit-outcomes-weekly",
+    response_model=UnitOutcomesWeeklyConnectedResponse | RunActivityNotConnectedResponse,
+    responses={503: {"model": ReportingFailureResponse}},
+    tags=["reporting"],
+)
+def unit_outcomes_weekly(
+    query: Annotated[UnitOutcomesWeeklyQuery, Depends(validated_unit_outcomes_weekly_query)],
+    access: Annotated[ReportingAccess | None, Depends(get_reporting_access)],
+    extracted_at: Annotated[datetime, Depends(get_extracted_at_utc)],
+) -> UnitOutcomesWeeklyConnectedResponse | RunActivityNotConnectedResponse | JSONResponse:
+    """Finished-unit outcomes over the current and seven prior Pacific weeks."""
+    if access is None:
+        return RunActivityNotConnectedResponse()
+    boundaries = compute_weekly_outcome_boundaries(extracted_at)
+    try:
+        metrics = access.repository.get_unit_outcomes_weekly(query, boundaries)
+    except ReportingError as exc:
+        return JSONResponse(status_code=503, content={"code": exc.code})
+    return UnitOutcomesWeeklyConnectedResponse(
+        tls=access.tls,
+        extracted_at_utc=boundaries.extracted_at_utc,
+        timezone=PACIFIC_TIMEZONE_NAME,
+        filters=UnitOutcomesWeeklyFilters(purpose=list(query.purposes)),
+        weeks=[asdict(week) for week in metrics.weeks],
         units=[asdict(unit) for unit in metrics.units],
         excluded=metrics.excluded,
         incomplete=metrics.incomplete,
