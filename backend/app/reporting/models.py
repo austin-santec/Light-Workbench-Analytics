@@ -246,6 +246,20 @@ class ChannelFailuresQuery(BaseModel):
         return value
 
 
+class FailureConcentrationQuery(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
+
+    period: Literal["today", "yesterday", "this_week", "last_30_days"] = "last_30_days"
+    purposes: tuple[RunPurpose, ...] = (RunPurpose.PRODUCTION,)
+
+    @field_validator("purposes")
+    @classmethod
+    def selected_purposes(cls, value: tuple[RunPurpose, ...]) -> tuple[RunPurpose, ...]:
+        if not 1 <= len(value) <= len(RunPurpose) or len(set(value)) != len(value):
+            raise ValueError("One to four unique purposes are required")
+        return value
+
+
 class StationSummaryQuery(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
 
@@ -301,6 +315,25 @@ class ChannelFailuresMetrics(BaseModel):
     runs: int = Field(ge=0)
     max_channel: int | None = Field(default=None, gt=0)
     channels: tuple[ChannelFailureCounts, ...]
+    incomplete: bool
+
+
+class FailureConcentrationChannel(FailureRateCounts):
+    logical_channel: int = Field(gt=0)
+
+
+class FailureConcentrationPort(FailureRateCounts):
+    physical_port: int = Field(gt=0)
+    extra: bool
+
+
+class FailureConcentrationMetrics(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    totals: FailureRateCounts
+    runs: int = Field(ge=0)
+    channels: tuple[FailureConcentrationChannel, ...]
+    ports: tuple[FailureConcentrationPort, ...]
     incomplete: bool
 
 

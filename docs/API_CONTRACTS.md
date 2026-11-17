@@ -168,6 +168,14 @@ The population, first-observation ranking, strict `>` rule at either wavelength,
 
 The Overview **Failures by logical channel** heatmap uses the selected range and purposes (mode/model unset), colors each channel by rate relative to the highest channel rate, rings up to three highest-rate failing channels, shows `—` for channels with no observations, and keeps the original demo heatmap in every unavailable state.
 
+### Failure concentration by logical channel and measured port
+
+`GET /api/v1/reporting/failure-concentration?period=today|yesterday|this_week|last_30_days&purpose=<purpose>[&purpose=...]` returns the same Q02 first-observation population for one shared Pacific period, split both by logical channel and by the physical port recorded on that first measurement. Defaults are `last_30_days` and `production`; one to four unique purposes are allowed. There are no wavelength-mode or switch-model filters. Period/filter echo, `not_connected`, validation and sanitized 503 behavior match channel failures.
+
+`channels` lists each observed logical channel in numeric order. `ports` lists each `(physical_port,extra)` key by port number with non-extra before extra; a number can therefore appear twice when it is above one run's front-panel count but within another's. Every item reports `failed`, `observed`, nullable `rate` and `unknown_criteria`. `extra` means the measured port is greater than that row's saved run front-panel count. Unknown/invalid saved limits are excluded from N/D and counted as unknown; a non-null SQL-parsed limit that disagrees with the valid Python snapshot fails closed as `schema_incompatible`. Channel sums and port sums each equal `totals`; `runs` counts contributing candidate runs and `incomplete` reports the shared run cap. When neither response is incomplete or rejected for a limit disagreement, totals and per-channel counts equal channel failures for the same period and purposes.
+
+The Failures **Where failures concentrate** panel ranks nonzero-failure channels and ports by failures, rate and number, shows up to five of each, and labels per-run extra ports without making the demo's unsupported port-50 candidate claim. Unavailable states retain the original synthetic panel.
+
 ### Recommendation usage
 
 `GET /api/v1/reporting/recommendation-usage?period=today|yesterday|this_week|last_30_days&purpose=<purpose>[&purpose=...]` returns R06 saved-recommendation linkage for analyses saved in the selected Pacific period. Defaults are `last_30_days` and `production`; purposes are one to four unique values. The response echoes the period and purpose filters, reports extraction time T, and uses the same `not_connected`, validation and sanitized 503 behavior as current unit status.

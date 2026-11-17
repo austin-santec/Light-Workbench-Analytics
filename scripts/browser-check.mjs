@@ -14,6 +14,7 @@ let unitStatusMode = 'values';
 let queryResponseMode = 'success';
 let recommendationUsageMode = 'values';
 let channelFailuresMode = 'values';
+let failureConcentrationMode = 'values';
 let stationMode = 'values';
 const runActivityRequests = [];
 const configurationTimingRequests = [];
@@ -23,6 +24,7 @@ const replacementActivityRequests = [];
 const unitStatusRequests = [];
 const recommendationUsageRequests = [];
 const channelFailuresRequests = [];
+const failureConcentrationRequests = [];
 const stationSummaryRequests = [];
 const unitSearchRequests = [];
 const purposeTotals = { production: 2, engineering: 3, training: 1, calibration: 4 };
@@ -314,6 +316,50 @@ const channelFailuresFixture = url => {
     incomplete: channelFailuresMode === 'incomplete',
   };
 };
+const failureConcentrationFixture = url => {
+  const period = url.searchParams.get('period') || 'last_30_days';
+  const purposes = url.searchParams.getAll('purpose').length ? url.searchParams.getAll('purpose') : ['production'];
+  const windows = {
+    today: ['2026-11-13T08:00:00Z', '2026-11-13T20:00:00Z', true],
+    yesterday: ['2026-11-12T08:00:00Z', '2026-11-13T08:00:00Z', false],
+    this_week: ['2026-11-09T08:00:00Z', '2026-11-13T20:00:00Z', true],
+    last_30_days: ['2026-10-14T07:00:00Z', '2026-11-13T08:00:00Z', false],
+  };
+  const [start_utc, end_utc, partial] = windows[period];
+  const counts = (failed, observed, unknown_criteria = 0) => ({
+    failed, observed, rate: observed ? failed / observed : null, unknown_criteria,
+  });
+  const empty = failureConcentrationMode === 'empty';
+  const channels = empty ? [] : [
+    { logical_channel: 1, ...counts(2, 20) },
+    { logical_channel: 2, ...counts(4, 40) },
+    { logical_channel: 3, ...counts(4, 20) },
+    { logical_channel: 4, ...counts(4, 20) },
+    { logical_channel: 5, ...counts(1, 5) },
+    { logical_channel: 6, ...counts(0, 5) },
+    { logical_channel: 7, ...counts(0, 0, 2) },
+  ];
+  const ports = empty ? [] : [
+    { physical_port: 1, extra: false, ...counts(4, 20) },
+    { physical_port: 2, extra: false, ...counts(4, 40) },
+    { physical_port: 5, extra: false, ...counts(2, 20) },
+    { physical_port: 50, extra: false, ...counts(4, 20) },
+    { physical_port: 50, extra: true, ...counts(1, 10, 2) },
+  ];
+  const sum = (items, key) => items.reduce((total, item) => total + item[key], 0);
+  const failed = sum(channels, 'failed');
+  const observed = sum(channels, 'observed');
+  return {
+    data_source: 'test_database', tls: 'encrypted_unverified', extracted_at_utc: '2026-11-13T20:00:00Z', timezone: 'America/Los_Angeles',
+    period: { key: period, start_utc, end_utc, partial }, filters: { purpose: purposes },
+    classification_rule: 'strict >, run limit snapshot',
+    totals: { failed, observed, rate: observed ? failed / observed : null, unknown_criteria: sum(channels, 'unknown_criteria') },
+    runs: empty ? 0 : 4,
+    channels,
+    ports,
+    incomplete: failureConcentrationMode === 'incomplete',
+  };
+};
 const stationSummaryFixture = url => {
   const purposes = url.searchParams.getAll('purpose').length ? url.searchParams.getAll('purpose') : ['production'];
   const counts = (runs, units, failed, observed, unknown, active, retested, median, n) => ({
@@ -452,6 +498,15 @@ await page.route('**/api/v1/reporting/channel-failures?*', async route => {
     body: JSON.stringify(runActivityMode === 'not_connected' ? { data_source: 'not_connected' } : channelFailuresFixture(url)),
   });
 });
+await page.route('**/api/v1/reporting/failure-concentration?*', async route => {
+  const url = new URL(route.request().url());
+  failureConcentrationRequests.push(url);
+  await route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify(runActivityMode === 'not_connected' ? { data_source: 'not_connected' } : failureConcentrationFixture(url)),
+  });
+});
 await page.route('**/api/v1/reporting/station-summary*', async route => {
   const url = new URL(route.request().url());
   stationSummaryRequests.push(url);
@@ -504,7 +559,7 @@ page.on('response', response => {
 });
 page.on('requestfailed', request => {
   const pathname = new URL(request.url()).pathname;
-  const expectedUnmountCancellation = ['/api/v1/reporting/run-activity', '/api/v1/reporting/test-time-by-configuration', '/api/v1/reporting/channel-activity', '/api/v1/reporting/failure-rate', '/api/v1/reporting/replacement-activity', '/api/v1/reporting/unit-status', '/api/v1/reporting/recommendation-usage', '/api/v1/reporting/channel-failures', '/api/v1/reporting/station-summary', '/api/v1/units/search', '/api/v1/query/schema', '/api/v1/query/execute'].includes(pathname) && request.failure()?.errorText === 'net::ERR_ABORTED';
+  const expectedUnmountCancellation = ['/api/v1/reporting/run-activity', '/api/v1/reporting/test-time-by-configuration', '/api/v1/reporting/channel-activity', '/api/v1/reporting/failure-rate', '/api/v1/reporting/replacement-activity', '/api/v1/reporting/unit-status', '/api/v1/reporting/recommendation-usage', '/api/v1/reporting/channel-failures', '/api/v1/reporting/failure-concentration', '/api/v1/reporting/station-summary', '/api/v1/units/search', '/api/v1/query/schema', '/api/v1/query/execute'].includes(pathname) && request.failure()?.errorText === 'net::ERR_ABORTED';
   if (!expectedUnmountCancellation) errors.push(`Request failed: ${request.url()} ${request.failure()?.errorText}`);
 });
 const check = label => { checks.push(label); console.log(`PASS ${label}`); };
@@ -596,7 +651,12 @@ try {
   assert.equal(await demoFailureHistogram.getByText('Live · test database', { exact: true }).count(), 0);
   await demoFailureHistogram.getByRole('button', { name: '24 ch', exact: true }).click();
   assert.ok((await demoFailureHistogram.getByRole('img').getAttribute('aria-label')).includes('24-channel'));
-  check('Replacement activity is honestly off; recommendation usage and failure histogram keep the unchanged demo path');
+  const demoConcentration = page.getByRole('region', { name: 'Failure concentration' });
+  await demoConcentration.getByText('Extra port 50 fails as a replacement candidate 31% of the time, about 3× the other extras.', { exact: true }).waitFor();
+  assert.equal(await demoConcentration.getByText('Live · test database', { exact: true }).count(), 0);
+  assert.equal(failureConcentrationRequests.at(-1).searchParams.get('period'), 'last_30_days');
+  assert.equal(failureConcentrationRequests.at(-1).searchParams.getAll('purpose').join(','), 'production');
+  check('Replacement activity is honestly off; recommendation usage, failure histogram, and concentration keep the unchanged demo path');
   await visit('/queries');
   await page.getByText('Synthetic query design preview. Schema and SQL are illustrative. No SQL is executed or sent to a server.').waitFor();
   await page.getByRole('button', { name: 'Chart', exact: true }).click();
@@ -615,6 +675,7 @@ try {
   await downPage.route('**/api/v1/reporting/unit-status?*', route => route.abort('connectionrefused'));
   await downPage.route('**/api/v1/reporting/recommendation-usage?*', route => route.abort('connectionrefused'));
   await downPage.route('**/api/v1/reporting/channel-failures?*', route => route.abort('connectionrefused'));
+  await downPage.route('**/api/v1/reporting/failure-concentration?*', route => route.abort('connectionrefused'));
   await downPage.route('**/api/v1/reporting/station-summary*', route => route.abort('connectionrefused'));
   try {
     await downPage.goto(`${base}/#/`, { waitUntil: 'domcontentloaded' });
@@ -624,18 +685,23 @@ try {
     await downPage.getByRole('region', { name: 'Replacement activity' }).getByText('Backend not reachable on 127.0.0.1:8000').waitFor();
     await downPage.getByText('More failures than usable extras (4)', { exact: true }).waitFor();
     await downPage.getByText('failed channels in one unit, first pass', { exact: true }).waitFor();
-    check('Replacement activity backend-down state');
+    await downPage.getByText('Extra port 50 fails as a replacement candidate 31% of the time, about 3× the other extras.', { exact: true }).waitFor();
+    check('Replacement activity and failure concentration backend-down states');
   } finally { await downPage.close(); }
 
   const databaseFailurePage = await browser.newPage({ viewport: { width: 900, height: 800 } });
   await databaseFailurePage.route('**/api/v1/reporting/replacement-activity*', route => route.fulfill({
     status: 503, contentType: 'application/json', body: JSON.stringify({ code: 'query_timeout' }),
   }));
+  await databaseFailurePage.route('**/api/v1/reporting/failure-concentration?*', route => route.fulfill({
+    status: 503, contentType: 'application/json', body: JSON.stringify({ code: 'query_timeout' }),
+  }));
   try {
     await databaseFailurePage.goto(`${base}/#/failures`, { waitUntil: 'domcontentloaded' });
     await databaseFailurePage.getByRole('region', { name: 'Replacement activity' }).getByText('Database check failed').waitFor();
     await databaseFailurePage.getByText('query_timeout', { exact: true }).waitFor();
-    check('Replacement activity sanitized database-failure state');
+    await databaseFailurePage.getByText('Extra port 50 fails as a replacement candidate 31% of the time, about 3× the other extras.', { exact: true }).waitFor();
+    check('Replacement activity sanitized database-failure state; failure concentration keeps demo fallback');
   } finally { await databaseFailurePage.close(); }
 
   runActivityMode = 'connected';
@@ -792,6 +858,42 @@ try {
   assert.equal(await replacementPanel.getByRole('img', { name: /Daily replacement events/ }).locator('span').count(), 31);
   await replacementPanel.getByRole('button', { name: 'Today', exact: true }).click();
   await assertText(replacementPanel, '12 events / 6 units');
+  const concentrationPanel = page.getByRole('region', { name: 'Failure concentration' });
+  await concentrationPanel.getByText('Failed first observations, today · 15 of 110 failed.', { exact: true }).waitFor();
+  await concentrationPanel.getByText('Live · test database', { exact: true }).waitFor();
+  const logicalColumn = concentrationPanel.getByText('Logical channel', { exact: true }).locator('..');
+  const portColumn = concentrationPanel.getByText('Physical port', { exact: true }).locator('..');
+  assert.deepEqual(await logicalColumn.locator('[title*="first observations failed"]').allInnerTexts(), [
+    'Ch 3\n4', 'Ch 4\n4', 'Ch 2\n4', 'Ch 1\n2', 'Ch 5\n1',
+  ]);
+  assert.deepEqual(await portColumn.locator('[title*="first observations failed"]').allInnerTexts(), [
+    'Port 1\n4', 'Port 50\n4', 'Port 2\n4', 'Port 5\n2', 'Port 50 EXTRA\n1',
+  ]);
+  assert.equal(await logicalColumn.locator('[title="4 of 20 first observations failed (20.0%)"]').first().count(), 1);
+  assert.equal(await portColumn.getByText('EXTRA', { exact: true }).count(), 1);
+  const logicalRows = logicalColumn.locator('[title*="first observations failed"]');
+  const portRows = portColumn.locator('[title*="first observations failed"]');
+  assert.equal(await logicalRows.first().locator('div').last().evaluate(element => element.style.width), '100%');
+  assert.equal(await logicalRows.last().locator('div').last().evaluate(element => element.style.width), '25%');
+  assert.equal(await portRows.last().locator('div').last().evaluate(element => element.style.background), 'var(--o3)');
+  await concentrationPanel.getByText('2 observations with unknown limits not counted.', { exact: false }).waitFor();
+  assert.equal(failureConcentrationRequests.at(-1).searchParams.get('period'), 'today');
+  assert.equal(failureConcentrationRequests.at(-1).searchParams.getAll('purpose').join(','), 'production');
+  const concentrationRequestsBeforeRefresh = failureConcentrationRequests.length;
+  await concentrationPanel.getByRole('button', { name: 'Refresh failure concentration' }).click();
+  await concentrationPanel.getByText('Failed first observations, today · 15 of 110 failed.', { exact: true }).waitFor();
+  assert.ok(failureConcentrationRequests.length > concentrationRequestsBeforeRefresh);
+  failureConcentrationMode = 'incomplete';
+  await concentrationPanel.getByRole('button', { name: 'Refresh failure concentration' }).click();
+  await concentrationPanel.getByText('Run cap reached; results are incomplete.', { exact: true }).waitFor();
+  failureConcentrationMode = 'empty';
+  await concentrationPanel.getByRole('button', { name: 'Refresh failure concentration' }).click();
+  await concentrationPanel.getByText('Failed first observations, today · 0 of 0 failed.', { exact: true }).waitFor();
+  assert.equal(await concentrationPanel.getByText('No failed first observations in this range.', { exact: true }).count(), 2);
+  failureConcentrationMode = 'values';
+  await concentrationPanel.getByRole('button', { name: 'Refresh failure concentration' }).click();
+  await concentrationPanel.getByText('Failed first observations, today · 15 of 110 failed.', { exact: true }).waitFor();
+  check('Failure concentration covers connected ranking, ties, counts, titles, relative bars, same-number extra ports, notes, empty state, range, and refresh');
   const liveFailureHistogram = failureHistogramPanel();
   await liveFailureHistogram.getByText('4 evaluated units tested today · 3 currently failing.', { exact: true }).waitFor();
   await liveFailureHistogram.getByText('Live · test database', { exact: true }).waitFor();
@@ -811,6 +913,9 @@ try {
   await channelCountControl.getByRole('button', { name: '8', exact: true }).click();
   await replacementPanel.getByRole('button', { name: 'This week', exact: true }).click();
   await liveFailureHistogram.getByText('7 evaluated units tested this week · 3 currently failing.', { exact: true }).waitFor();
+  await concentrationPanel.getByText('Failed first observations, this week · 15 of 110 failed.', { exact: true }).waitFor();
+  assert.equal(failureConcentrationRequests.at(-1).searchParams.get('period'), 'this_week');
+  assert.equal(failureConcentrationRequests.at(-1).searchParams.getAll('purpose').join(','), 'production');
   assert.equal(await channelCountControl.getByRole('button', { name: 'All', exact: true }).getAttribute('aria-pressed'), 'true');
   assert.deepEqual(await channelCountControl.getByRole('button').allTextContents(), ['All', '36', '48', '49']);
   await replacementPanel.getByRole('button', { name: 'Today', exact: true }).click();

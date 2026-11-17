@@ -19,6 +19,7 @@ from app.reporting.console_guard import StatementRejected
 from app.reporting.models import (
     ChannelActivityQuery,
     ChannelFailuresQuery,
+    FailureConcentrationQuery,
     RecommendationUsageQuery,
     ReplacementActivityQuery,
     RunQuery,
@@ -44,6 +45,10 @@ from app.schemas import (
     DemoRunQuery,
     DemoRunsResponse,
     ErrorResponse,
+    FailureConcentrationChannelResponse,
+    FailureConcentrationConnectedResponse,
+    FailureConcentrationPortResponse,
+    FailureConcentrationQueryParams,
     FailureRateConnectedResponse,
     FailureRateCountsResponse,
     FailureRateDayResponse,
@@ -207,6 +212,19 @@ def validated_channel_failures_query(
             wavelength_mode=params.wavelength_mode,
             switch_model=params.switch_model,
         )
+    except ValidationError as exc:
+        errors = [
+            item | {"loc": ("query", *item["loc"])}
+            for item in exc.errors(include_url=False, include_input=False, include_context=False)
+        ]
+        raise RequestValidationError(errors) from None
+
+
+def validated_failure_concentration_query(
+    params: Annotated[FailureConcentrationQueryParams, Query()],
+) -> FailureConcentrationQuery:
+    try:
+        return FailureConcentrationQuery(period=params.period, purposes=tuple(params.purpose))
     except ValidationError as exc:
         errors = [
             item | {"loc": ("query", *item["loc"])}
@@ -558,6 +576,47 @@ def channel_failures(
         runs=metrics.runs,
         max_channel=metrics.max_channel,
         channels=[ChannelFailureResponse(**channel.model_dump()) for channel in metrics.channels],
+        incomplete=metrics.incomplete,
+    )
+
+
+@router.get(
+    "/reporting/failure-concentration",
+    response_model=FailureConcentrationConnectedResponse | RunActivityNotConnectedResponse,
+    responses={503: {"model": ReportingFailureResponse}},
+    tags=["reporting"],
+)
+def failure_concentration(
+    query: Annotated[FailureConcentrationQuery, Depends(validated_failure_concentration_query)],
+    access: Annotated[ReportingAccess | None, Depends(get_reporting_access)],
+    extracted_at: Annotated[datetime, Depends(get_extracted_at_utc)],
+) -> FailureConcentrationConnectedResponse | RunActivityNotConnectedResponse | JSONResponse:
+    """First-observation failures in one Pacific period, by logical channel and port."""
+    if access is None:
+        return RunActivityNotConnectedResponse()
+    boundaries = compute_channel_activity_boundaries(extracted_at)
+    try:
+        metrics = access.repository.get_failure_concentration(query, boundaries)
+    except ReportingError as exc:
+        return JSONResponse(status_code=503, content={"code": exc.code})
+    window = boundaries.periods[query.period]
+    return FailureConcentrationConnectedResponse(
+        tls=access.tls,
+        extracted_at_utc=boundaries.extracted_at_utc,
+        period=UnitStatusPeriodResponse(
+            key=query.period,
+            start_utc=window.start_utc,
+            end_utc=window.end_utc,
+            partial=window.partial,
+        ),
+        filters=UnitStatusFilters(purpose=list(query.purposes)),
+        totals=FailureRateCountsResponse(**metrics.totals.model_dump()),
+        runs=metrics.runs,
+        channels=[
+            FailureConcentrationChannelResponse(**channel.model_dump())
+            for channel in metrics.channels
+        ],
+        ports=[FailureConcentrationPortResponse(**port.model_dump()) for port in metrics.ports],
         incomplete=metrics.incomplete,
     )
 

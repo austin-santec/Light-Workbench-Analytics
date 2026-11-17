@@ -22,6 +22,10 @@ from app.reporting.models import (
     CompletionStatus,
     ConfigurationTestTime,
     DurationStatistics,
+    FailureConcentrationChannel,
+    FailureConcentrationMetrics,
+    FailureConcentrationPort,
+    FailureConcentrationQuery,
     FailureRateCounts,
     FailureRateMetrics,
     RecommendationUsageMetrics,
@@ -408,6 +412,27 @@ SELECT logical_channel, run_id, front_panel_channel_count, COUNT_BIG(*) AS obser
 FROM windowed_observations
 GROUP BY logical_channel, run_id, front_panel_channel_count, sql_fail_limit
 ORDER BY logical_channel, run_id
+"""
+
+FAILURE_CONCENTRATION_SQL = f"""
+WITH {_failure_rate_candidate_runs_sql(FAILURE_RATE_RUN_CAP).strip()},
+{FIRST_OBSERVATION_CTES}windowed_observations AS (
+    SELECT f.logical_channel, m.physical_port, f.run_id, c.front_panel_channel_count,
+        CASE WHEN p.sql_fail_limit IS NOT NULL AND (
+                f.wavelength_1_il_db > p.sql_fail_limit
+                OR f.wavelength_2_il_db > p.sql_fail_limit
+            ) THEN CONVERT(INT, 1) ELSE CONVERT(INT, 0) END AS failed_sql,
+        p.sql_fail_limit
+    FROM first_observations AS f
+    JOIN parsed_runs AS p ON p.run_id = f.run_id
+    JOIN candidate_runs AS c ON c.run_id = f.run_id
+    JOIN dbo.IL_MEASUREMENTS AS m ON m.measurement_id = f.measurement_id
+    WHERE f.written_at_utc >= ? AND f.written_at_utc < ?
+)
+SELECT logical_channel, physical_port, run_id, front_panel_channel_count,
+    failed_sql, sql_fail_limit
+FROM windowed_observations
+ORDER BY run_id, logical_channel
 """
 
 STATION_SUMMARY_SQL = f"""
@@ -925,6 +950,15 @@ def build_channel_failures_queries(
     )
 
 
+def _failure_counts(failed: int, observed: int, unknown: int) -> FailureRateCounts:
+    return FailureRateCounts(
+        failed=failed,
+        observed=observed,
+        rate=failed / observed if observed else None,
+        unknown_criteria=unknown,
+    )
+
+
 def summarize_channel_failures(
     rows: list[tuple], limit_rows: list[tuple]
 ) -> ChannelFailuresMetrics:
@@ -968,23 +1002,15 @@ def summarize_channel_failures(
         total["failed"] += failed_sql
         total["observed"] += observed
 
-    def counts(failed: int, observed: int, unknown: int) -> FailureRateCounts:
-        return FailureRateCounts(
-            failed=failed,
-            observed=observed,
-            rate=failed / observed if observed else None,
-            unknown_criteria=unknown,
-        )
-
     per_channel = tuple(
         ChannelFailureCounts(
             logical_channel=channel,
-            **counts(t["failed"], t["observed"], t["unknown_criteria"]).model_dump(),
+            **_failure_counts(t["failed"], t["observed"], t["unknown_criteria"]).model_dump(),
         )
         for channel, t in sorted(channels.items())
     )
     return ChannelFailuresMetrics(
-        totals=counts(
+        totals=_failure_counts(
             sum(c.failed for c in per_channel),
             sum(c.observed for c in per_channel),
             sum(c.unknown_criteria for c in per_channel),
@@ -992,6 +1018,101 @@ def summarize_channel_failures(
         runs=len(runs),
         max_channel=max_channel,
         channels=per_channel,
+        incomplete=incomplete,
+    )
+
+
+def build_failure_concentration_queries(
+    query: FailureConcentrationQuery, boundaries: ChannelActivityBoundaries
+) -> tuple[tuple[str, tuple], tuple[str, tuple]]:
+    query = FailureConcentrationQuery.model_validate(query.model_dump())
+    window = boundaries.periods[query.period]
+    candidate_query = ChannelFailuresQuery(period=query.period, purposes=query.purposes)
+    filters = _candidate_run_parameters(candidate_query, window.start_utc, window.end_utc)
+    bounds = (window.start_utc.replace(tzinfo=None), window.end_utc.replace(tzinfo=None))
+    return (FAILURE_CONCENTRATION_SQL, (*filters, *bounds)), (FAILURE_RATE_LIMITS_SQL, filters)
+
+
+def summarize_failure_concentration(
+    rows: list[tuple], limit_rows: list[tuple]
+) -> FailureConcentrationMetrics:
+    validated_limits, incomplete = _validated_failure_limits(limit_rows)
+    channels: dict[int, dict[str, int]] = {}
+    ports: dict[tuple[int, bool], dict[str, int]] = {}
+    runs: set[int] = set()
+    seen: set[tuple[int, int]] = set()
+
+    for row in rows:
+        if len(row) != 6:
+            raise ReportingError("schema_incompatible")
+        channel, physical_port, run_id, front_panel, failed_sql, raw_sql_limit = row
+        if (
+            type(channel) is not int
+            or type(physical_port) is not int
+            or type(run_id) is not int
+            or type(front_panel) is not int
+            or not 1 <= channel <= front_panel
+            or physical_port < 1
+            or run_id <= 0
+            or type(failed_sql) is not int
+            or failed_sql not in {0, 1}
+            or (run_id, channel) in seen
+            or run_id not in validated_limits
+        ):
+            raise ReportingError("schema_incompatible")
+        seen.add((run_id, channel))
+        runs.add(run_id)
+        extra = physical_port > front_panel
+        channel_counts = channels.setdefault(
+            channel, {"failed": 0, "observed": 0, "unknown_criteria": 0}
+        )
+        port_counts = ports.setdefault(
+            (physical_port, extra), {"failed": 0, "observed": 0, "unknown_criteria": 0}
+        )
+        sql_limit = _normalized_sql_limit(raw_sql_limit)
+        python_limit = validated_limits[run_id]
+        if python_limit is None:
+            channel_counts["unknown_criteria"] += 1
+            port_counts["unknown_criteria"] += 1
+            continue
+        if sql_limit != python_limit:
+            raise ReportingError("schema_incompatible")
+        channel_counts["failed"] += failed_sql
+        channel_counts["observed"] += 1
+        port_counts["failed"] += failed_sql
+        port_counts["observed"] += 1
+
+    per_channel = tuple(
+        FailureConcentrationChannel(
+            logical_channel=channel,
+            **_failure_counts(t["failed"], t["observed"], t["unknown_criteria"]).model_dump(),
+        )
+        for channel, t in sorted(channels.items())
+    )
+    per_port = tuple(
+        FailureConcentrationPort(
+            physical_port=physical_port,
+            extra=extra,
+            **_failure_counts(t["failed"], t["observed"], t["unknown_criteria"]).model_dump(),
+        )
+        for (physical_port, extra), t in sorted(ports.items())
+    )
+    totals = _failure_counts(
+        sum(item.failed for item in per_channel),
+        sum(item.observed for item in per_channel),
+        sum(item.unknown_criteria for item in per_channel),
+    )
+    if (
+        sum(item.failed for item in per_port) != totals.failed
+        or sum(item.observed for item in per_port) != totals.observed
+        or sum(item.unknown_criteria for item in per_port) != totals.unknown_criteria
+    ):
+        raise ReportingError("schema_incompatible")
+    return FailureConcentrationMetrics(
+        totals=totals,
+        runs=len(runs),
+        channels=per_channel,
+        ports=per_port,
         incomplete=incomplete,
     )
 
@@ -1379,6 +1500,9 @@ class ReportingRepository(Protocol):
     def get_channel_failures(
         self, query: ChannelFailuresQuery, boundaries: ChannelActivityBoundaries
     ) -> ChannelFailuresMetrics: ...
+    def get_failure_concentration(
+        self, query: FailureConcentrationQuery, boundaries: ChannelActivityBoundaries
+    ) -> FailureConcentrationMetrics: ...
     def get_station_summary(
         self, query: StationSummaryQuery, boundaries: ChannelActivityBoundaries
     ) -> StationSummaryMetrics: ...
@@ -1534,6 +1658,19 @@ class SqlServerReportingRepository:
             if len(rows) > CHANNEL_FAILURES_ROW_CAP:
                 raise ReportingError("schema_incompatible")
             return summarize_channel_failures(rows, limit_rows)
+
+    def get_failure_concentration(
+        self, query: FailureConcentrationQuery, boundaries: ChannelActivityBoundaries
+    ) -> FailureConcentrationMetrics:
+        query = FailureConcentrationQuery.model_validate(query.model_dump())
+        concentration_query, limits_query = build_failure_concentration_queries(query, boundaries)
+        with self._adapter.cursor() as cursor:
+            self._preflight(cursor)
+            rows = cursor.execute(*concentration_query).fetchmany(CHANNEL_FAILURES_ROW_CAP + 1)
+            limit_rows = cursor.execute(*limits_query).fetchmany(FAILURE_RATE_RUN_CAP + 1)
+            if len(rows) > CHANNEL_FAILURES_ROW_CAP:
+                raise ReportingError("schema_incompatible")
+            return summarize_failure_concentration(rows, limit_rows)
 
     def get_station_summary(
         self, query: StationSummaryQuery, boundaries: ChannelActivityBoundaries

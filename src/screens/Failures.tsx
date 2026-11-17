@@ -8,6 +8,7 @@ import type { FailuresState } from '../types';
 import { LiveReplacementActivityPanel, type LiveReplacementRange } from '../components/LiveReplacementActivityPanel';
 import { loadUnitStatus, type UnitStatus, type UnitStatusConnectedResponse } from '../lib/api/unitStatus';
 import { loadRecommendationUsage, type RecommendationUsageConnectedResponse } from '../lib/api/recommendationUsage';
+import { loadFailureConcentration, topConcentration, type FailureConcentrationConnectedResponse } from '../lib/api/failureConcentration';
 import { UNIT_STATUS_LABEL } from '../lib/unitStatusPresentation';
 
 const STATUS_PERIOD: Record<LiveReplacementRange, 'today' | 'yesterday' | 'this_week' | 'last_30_days'> = {
@@ -39,6 +40,8 @@ export default function Failures() {
  const [liveChannelCount, setLiveChannelCount] = useState<LiveChannelCount>('all');
  const [recommendationUsage, setRecommendationUsage] = useState<RecommendationUsageConnectedResponse | null>(null);
  const [recommendationUsageRefresh, setRecommendationUsageRefresh] = useState(0);
+ const [failureConcentration, setFailureConcentration] = useState<FailureConcentrationConnectedResponse | null>(null);
+ const [failureConcentrationRefresh, setFailureConcentrationRefresh] = useState(0);
  const values = getFailuresValues(state);
  const { accent, kpis, weeks, wGrid, reasons, fbars, fp, topCh, topPort, units } = values;
  useEffect(() => {
@@ -62,9 +65,17 @@ export default function Failures() {
      .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setRecommendationUsage(null); });
    return () => controller.abort();
  }, [liveRange, recommendationUsageRefresh]);
+ useEffect(() => {
+   const controller = new AbortController();
+   loadFailureConcentration(STATUS_PERIOD[liveRange], ['production'], controller.signal)
+     .then(result => setFailureConcentration(result.data_source === 'test_database' ? result : null))
+     .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setFailureConcentration(null); });
+   return () => controller.abort();
+ }, [failureConcentrationRefresh, liveRange]);
  const changeLiveRange = (range: LiveReplacementRange) => {
    setUnitStatus(null);
    setRecommendationUsage(null);
+   setFailureConcentration(null);
    setLiveRange(range);
  };
  const refreshUnitStatus = () => {
@@ -74,6 +85,10 @@ export default function Failures() {
  const refreshRecommendationUsage = () => {
    setRecommendationUsage(null);
    setRecommendationUsageRefresh(value => value + 1);
+ };
+ const refreshFailureConcentration = () => {
+   setFailureConcentration(null);
+   setFailureConcentrationRefresh(value => value + 1);
  };
  const liveFailingUnits = useMemo(() => {
    if (!unitStatus) return [];
@@ -120,6 +135,10 @@ export default function Failures() {
    };
  }, [liveChannelCount, liveChannelCountOptions, liveRange, unitStatus]);
  const histogramBars = liveHistogram?.bars ?? fbars;
+ const liveConcentration = useMemo(
+   () => failureConcentration ? topConcentration(failureConcentration) : null,
+   [failureConcentration],
+ );
  return (<>
 
     <header style={css("display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:14px")}>
@@ -247,15 +266,25 @@ export default function Failures() {
         </p>}
       </div>
 
-      <div style={css("flex:1 1 340px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:12px")}>
-        <div style={css("display:flex;flex-direction:column;gap:3px")}>
-          <h2 style={css("margin:0;font-size:16px;font-weight:600")}>Where failures concentrate</h2>
-          <span style={css("font-size:12.5px;color:var(--muted)")}>Logical channel is the front-panel position; physical port is the switch output behind it.</span>
+      <div role="region" aria-label="Failure concentration" style={css("flex:1 1 340px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:12px")}>
+        <div style={css("display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;gap:8px")}>
+          <div style={css("display:flex;flex-direction:column;gap:3px")}>
+            <h2 style={css("margin:0;font-size:16px;font-weight:600")}>Where failures concentrate</h2>
+            <span style={css("font-size:12.5px;color:var(--muted)")}>Logical channel is the front-panel position; physical port is the switch output behind it.</span>
+            {failureConcentration && <span style={css("font-size:11.5px;color:var(--muted)")}>Failed first observations, {HISTOGRAM_RANGE_LABEL[liveRange]} · {failureConcentration.totals.failed.toLocaleString('en-US')} of {failureConcentration.totals.observed.toLocaleString('en-US')} failed.</span>}
+          </div>
+          {failureConcentration && <div style={css("display:flex;align-items:center;gap:8px")}>
+            <span style={css("font-size:10px;font-weight:650;letter-spacing:.05em;text-transform:uppercase;padding:3px 8px;border-radius:999px;background:color-mix(in srgb,var(--accent) 10%,var(--panel));color:var(--accent-ink)")}>Live · test database</span>
+            <button type="button" aria-label="Refresh failure concentration" onClick={refreshFailureConcentration} className="lnk" style={css("min-height:28px;border:0;background:transparent;padding:0;font-size:12px")}>Refresh</button>
+          </div>}
         </div>
         <div style={css("display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px")}>
           <div style={css("display:flex;flex-direction:column")}>
             <span style={css("font-size:12px;font-weight:600;color:var(--muted);padding-bottom:6px")}>Logical channel</span>
-            {topCh.map((c, index6) => <Fragment key={index6}>
+            {failureConcentration ? (liveConcentration && liveConcentration.channels.length > 0 ? liveConcentration.channels.map(channel => <div key={channel.logical_channel} title={`${channel.failed} of ${channel.observed} first observations failed (${((channel.rate ?? 0) * 100).toFixed(1)}%)`} style={css("display:flex;flex-direction:column;gap:4px;padding:7px 0;border-top:1px solid var(--line2)")}>
+              <div style={css("display:flex;justify-content:space-between;font-variant-numeric:tabular-nums")}><span style={css("font-weight:500")}>Ch {channel.logical_channel}</span><span style={css("font-weight:650")}>{channel.failed.toLocaleString('en-US')}</span></div>
+              <div style={css("height:5px;border-radius:3px;background:var(--line2)")}><div style={css(`height:5px;border-radius:3px;width:${channel.failed / liveConcentration.channels[0].failed * 100}%;background:${accent}`)}></div></div>
+            </div>) : <span style={css("padding:7px 0;border-top:1px solid var(--line2);font-size:12px;color:var(--muted);line-height:1.45")}>No failed first observations in this range.</span>) : topCh.map((c, index6) => <Fragment key={index6}>
               <div style={css("display:flex;flex-direction:column;gap:4px;padding:7px 0;border-top:1px solid var(--line2)")}>
                 <div style={css("display:flex;justify-content:space-between;font-variant-numeric:tabular-nums")}><span style={css("font-weight:500")}>Ch {c.n}</span><span style={css("font-weight:650")}>{c.count}</span></div>
                 <div style={css("height:5px;border-radius:3px;background:var(--line2)")}><div style={css("height:5px;border-radius:3px;width:" + String(c.w) + "%;background:" + String(accent))}></div></div>
@@ -264,7 +293,10 @@ export default function Failures() {
           </div>
           <div style={css("display:flex;flex-direction:column")}>
             <span style={css("font-size:12px;font-weight:600;color:var(--muted);padding-bottom:6px")}>Physical port</span>
-            {topPort.map((c, index7) => <Fragment key={index7}>
+            {failureConcentration ? (liveConcentration && liveConcentration.ports.length > 0 ? liveConcentration.ports.map(port => <div key={`${port.physical_port}-${port.extra}`} title={`${port.failed} of ${port.observed} first observations failed (${((port.rate ?? 0) * 100).toFixed(1)}%)`} style={css("display:flex;flex-direction:column;gap:4px;padding:7px 0;border-top:1px solid var(--line2)")}>
+              <div style={css("display:flex;justify-content:space-between;gap:6px;font-variant-numeric:tabular-nums")}><span style={css("font-weight:500")}>Port {port.physical_port} {port.extra && <span style={css("font-size:11px;font-weight:600;color:var(--warn-fg)")}>EXTRA</span>}</span><span style={css("font-weight:650")}>{port.failed.toLocaleString('en-US')}</span></div>
+              <div style={css("height:5px;border-radius:3px;background:var(--line2)")}><div style={css(`height:5px;border-radius:3px;width:${port.failed / liveConcentration.ports[0].failed * 100}%;background:${port.extra ? 'var(--o3)' : accent}`)}></div></div>
+            </div>) : <span style={css("padding:7px 0;border-top:1px solid var(--line2);font-size:12px;color:var(--muted);line-height:1.45")}>No failed first observations in this range.</span>) : topPort.map((c, index7) => <Fragment key={index7}>
               <div style={css("display:flex;flex-direction:column;gap:4px;padding:7px 0;border-top:1px solid var(--line2)")}>
                 <div style={css("display:flex;justify-content:space-between;gap:6px;font-variant-numeric:tabular-nums")}><span style={css("font-weight:500")}>Port {c.n} <span style={css("font-size:11px;font-weight:600;color:" + String(c.tagFg))}>{c.tag}</span></span><span style={css("font-weight:650")}>{c.count}</span></div>
                 <div style={css("height:5px;border-radius:3px;background:var(--line2)")}><div style={css("height:5px;border-radius:3px;width:" + String(c.w) + "%;background:" + String(c.bar))}></div></div>
@@ -272,10 +304,10 @@ export default function Failures() {
             </Fragment>)}
           </div>
         </div>
-        <div style={css("display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-radius:10px;background:var(--warn-bg);color:var(--warn-fg);font-size:12.5px")}>
+        {failureConcentration ? <p style={css("margin:0;font-size:11.5px;color:var(--muted);line-height:1.5")}>First observation per run-channel; a port's count follows the channel it was measured for. EXTRA marks a port above the run's front panel.{failureConcentration.totals.unknown_criteria > 0 && ` ${failureConcentration.totals.unknown_criteria.toLocaleString('en-US')} observations with unknown limits not counted.`}{failureConcentration.incomplete && <span style={css("color:var(--warn-fg)")}> Run cap reached; results are incomplete.</span>}</p> : <div style={css("display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-radius:10px;background:var(--warn-bg);color:var(--warn-fg);font-size:12.5px")}>
           <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" style={css("flex:0 0 auto;margin-top:1px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round")}><path d="M12 3l9.5 17h-19z"></path><path d="M12 10v4M12 17.5v.01"></path></svg>
           <span >Extra port 50 fails as a replacement candidate 31% of the time, about 3× the other extras.</span>
-        </div>
+        </div>}
       </div>
     </section>
 

@@ -153,6 +153,13 @@ class ChannelFailuresQueryParams(BaseModel):
     switch_model: str | None = None
 
 
+class FailureConcentrationQueryParams(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    period: Literal["today", "yesterday", "this_week", "last_30_days"] = "last_30_days"
+    purpose: list[RunPurpose] = Field(default_factory=lambda: [RunPurpose.PRODUCTION])
+
+
 class RunActivityWindow(BaseModel):
     started_from: AwareDatetime
     started_before: AwareDatetime
@@ -575,6 +582,36 @@ class ChannelFailuresConnectedResponse(BaseModel):
     runs: int = Field(ge=0)
     max_channel: int | None = Field(default=None, gt=0)
     channels: list[ChannelFailureResponse]
+    incomplete: bool
+
+
+class FailureConcentrationChannelResponse(FailureRateCountsResponse):
+    model_config = ConfigDict(extra="forbid")
+
+    logical_channel: int = Field(gt=0)
+
+
+class FailureConcentrationPortResponse(FailureRateCountsResponse):
+    model_config = ConfigDict(extra="forbid")
+
+    physical_port: int = Field(gt=0)
+    extra: bool
+
+
+class FailureConcentrationConnectedResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    data_source: Literal["test_database"] = "test_database"
+    tls: Literal["verified", "encrypted_unverified"]
+    extracted_at_utc: AwareDatetime
+    timezone: Literal["America/Los_Angeles"] = "America/Los_Angeles"
+    period: UnitStatusPeriodResponse
+    filters: UnitStatusFilters
+    classification_rule: Literal["strict >, run limit snapshot"] = "strict >, run limit snapshot"
+    totals: FailureRateCountsResponse
+    runs: int = Field(ge=0)
+    channels: list[FailureConcentrationChannelResponse]
+    ports: list[FailureConcentrationPortResponse]
     incomplete: bool
 
 
