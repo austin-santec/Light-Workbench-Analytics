@@ -16,7 +16,12 @@ const STATUS_PERIOD: Record<LiveReplacementRange, 'today' | 'yesterday' | 'this_
 const RANGE_LABEL: Record<LiveReplacementRange, string> = {
   today: 'Today', yesterday: 'Yesterday', week: 'This week', month: 'Last 30 days',
 };
+const HISTOGRAM_RANGE_LABEL: Record<LiveReplacementRange, string> = {
+  today: 'today', yesterday: 'yesterday', week: 'this week', month: 'in the last 30 days',
+};
 const FAILING_STATUS: UnitStatus[] = ['failing_no_measured_recovery', 'failing_needs_analysis', 'failing_recovery_available'];
+const EVALUATED_STATUS: UnitStatus[] = ['passing', ...FAILING_STATUS];
+type LiveChannelCount = 'all' | number;
 const STATUS_TONE: Record<UnitStatus, { bg: string; fg: string }> = {
   review_required: { bg: 'var(--warn-bg)', fg: 'var(--warn-fg)' },
   not_evaluated: { bg: 'var(--panel2)', fg: 'var(--muted)' },
@@ -31,6 +36,7 @@ export default function Failures() {
  const [liveRange, setLiveRange] = useState<LiveReplacementRange>('month');
  const [unitStatus, setUnitStatus] = useState<UnitStatusConnectedResponse | null>(null);
  const [unitStatusRefresh, setUnitStatusRefresh] = useState(0);
+ const [liveChannelCount, setLiveChannelCount] = useState<LiveChannelCount>('all');
  const [recommendationUsage, setRecommendationUsage] = useState<RecommendationUsageConnectedResponse | null>(null);
  const [recommendationUsageRefresh, setRecommendationUsageRefresh] = useState(0);
  const values = getFailuresValues(state);
@@ -38,7 +44,14 @@ export default function Failures() {
  useEffect(() => {
    const controller = new AbortController();
    loadUnitStatus(STATUS_PERIOD[liveRange], ['production'], controller.signal)
-     .then(result => setUnitStatus(result.data_source === 'test_database' ? result : null))
+     .then(result => {
+       if (result.data_source !== 'test_database') {
+         setUnitStatus(null);
+         return;
+       }
+       setUnitStatus(result);
+       setLiveChannelCount(selected => selected === 'all' || result.units.some(unit => unit.channel_count === selected) ? selected : 'all');
+     })
      .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setUnitStatus(null); });
    return () => controller.abort();
  }, [liveRange, unitStatusRefresh]);
@@ -50,8 +63,13 @@ export default function Failures() {
    return () => controller.abort();
  }, [liveRange, recommendationUsageRefresh]);
  const changeLiveRange = (range: LiveReplacementRange) => {
+   setUnitStatus(null);
    setRecommendationUsage(null);
    setLiveRange(range);
+ };
+ const refreshUnitStatus = () => {
+   setUnitStatus(null);
+   setUnitStatusRefresh(value => value + 1);
  };
  const refreshRecommendationUsage = () => {
    setRecommendationUsage(null);
@@ -64,6 +82,44 @@ export default function Failures() {
      .filter(unit => FAILING_STATUS.includes(unit.status))
      .sort((left, right) => (priority.get(left.status) ?? 9) - (priority.get(right.status) ?? 9) || left.unit_id - right.unit_id);
  }, [unitStatus]);
+ const liveChannelCountOptions = useMemo(() => {
+   const counts = unitStatus
+     ? [...new Set(unitStatus.units.flatMap(unit => unit.channel_count === null ? [] : [unit.channel_count]))].sort((left, right) => left - right)
+     : [];
+   return [{ value: 'all' as const, label: 'All' }, ...counts.map(count => ({ value: count, label: String(count) }))];
+ }, [unitStatus]);
+ const liveHistogram = useMemo(() => {
+   if (!unitStatus) return null;
+   const selectedCount = liveChannelCountOptions.some(option => option.value === liveChannelCount) ? liveChannelCount : 'all';
+   const selectedUnits = unitStatus.units.filter(unit => selectedCount === 'all' || unit.channel_count === selectedCount);
+   const evaluated = selectedUnits.filter(unit => EVALUATED_STATUS.includes(unit.status));
+   const counts = Array.from({ length: 8 }, () => 0);
+   evaluated.forEach(unit => { counts[Math.min(unit.failing_channels.length, 7)] += 1; });
+   const FX0 = 40, FX1 = 664, FY1 = 180, FH = 130;
+   const fmax = Math.max(...counts, 1);
+   const fstep = (FX1 - FX0) / counts.length;
+   const bars = counts.map((count, index) => {
+     const height = Math.max(FH * count / fmax, 1.5);
+     const x = FX0 + index * fstep + (fstep - 52) / 2;
+     return {
+       x: x.toFixed(1), cx: (x + 26).toFixed(1), y: (FY1 - height).toFixed(1), h: height.toFixed(1),
+       vy: (FY1 - height - 6).toFixed(1), count: String(count), label: index === 7 ? '7+' : String(index),
+       fill: index === 0 ? 'color-mix(in srgb,var(--accent) 35%,var(--panel))' : 'var(--accent)',
+     };
+   });
+   const failing = evaluated.filter(unit => FAILING_STATUS.includes(unit.status)).length;
+   return {
+     bars,
+     evaluated: evaluated.length,
+     failing,
+     excluded: selectedUnits.filter(unit => unit.status === 'review_required' || unit.status === 'not_evaluated').length,
+     caption: evaluated.length === 0
+       ? 'No evaluated units in this range.'
+       : `${evaluated.length.toLocaleString('en-US')} evaluated ${evaluated.length === 1 ? 'unit' : 'units'} tested ${HISTOGRAM_RANGE_LABEL[liveRange]} · ${failing.toLocaleString('en-US')} currently failing.`,
+     aria: `Histogram of currently failing channels per unit: ${counts[0]} ${counts[0] === 1 ? 'unit' : 'units'} with none, ${counts[1]} with 1, ${counts[2]} with 2, ${counts[3]} with 3, ${counts[4]} with 4, ${counts[5]} with 5, ${counts[6]} with 6, ${counts[7]} with 7 or more.`,
+   };
+ }, [liveChannelCount, liveChannelCountOptions, liveRange, unitStatus]);
+ const histogramBars = liveHistogram?.bars ?? fbars;
  return (<>
 
     <header style={css("display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:14px")}>
@@ -160,25 +216,35 @@ export default function Failures() {
         <div style={css("display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;gap:10px")}>
           <div style={css("display:flex;flex-direction:column;gap:3px")}>
             <h2 style={css("margin:0;font-size:16px;font-weight:600")}>Failed channels per unit</h2>
-            <p id="failure-scope" className="preview-note">Channel count changes this histogram only.</p>
-            <span style={css("font-size:12.5px;color:var(--muted)")}>{fp.caption}</span>
+            {unitStatus && <span className="live-unit-badge" style={css("align-self:flex-start;font-size:10px;font-weight:650;letter-spacing:.05em;text-transform:uppercase;padding:3px 8px;border-radius:999px;background:color-mix(in srgb,var(--accent) 10%,var(--panel));color:var(--accent-ink)")}>Live · test database</span>}
+            <p id="failure-scope" className="preview-note">{unitStatus ? 'Channel count filters this histogram only.' : 'Channel count changes this histogram only.'}</p>
+            <span style={css("font-size:12.5px;color:var(--muted)")}>{liveHistogram?.caption ?? fp.caption}</span>
           </div>
-          <SegmentedControl label="Channel count" options={CHANNEL_OPTIONS} value={state.ch} onChange={ch => setState({ ch })} describedBy="failure-scope" />
+          {unitStatus
+            ? <SegmentedControl label="Channel count" options={liveChannelCountOptions} value={liveChannelCount} onChange={setLiveChannelCount} describedBy="failure-scope" />
+            : <SegmentedControl label="Channel count" options={CHANNEL_OPTIONS} value={state.ch} onChange={ch => setState({ ch })} describedBy="failure-scope" />}
         </div>
-        <svg viewBox="0 0 680 230" role="img" aria-label={fp.aria} style={css("width:100%;height:auto;display:block")}>
+        <svg viewBox="0 0 680 230" role="img" aria-label={liveHistogram?.aria ?? fp.aria} style={css("width:100%;height:auto;display:block")}>
           <line x1="40" x2="664" y1="180" y2="180" style={css("stroke:var(--line);stroke-width:1")}></line>
-          <rect x={fp.zoneX} y="16" width={fp.zoneW} height="164" style={css("fill:var(--o3);fill-opacity:0.07")}></rect>
-          <line x1={fp.zoneX} x2={fp.zoneX} y1="16" y2="180" style={css("stroke:var(--o3);stroke-width:1.5;stroke-dasharray:4 3")}></line>
-          <text x={fp.zoneLX} y="30" style={css("font-size:11.5px;font-weight:600;fill:var(--warn-fg)")}>More failures than usable extras ({fp.extras})</text>
-          {fbars.map((b, index5) => <Fragment key={index5}>
+          {!unitStatus && <>
+            <rect x={fp.zoneX} y="16" width={fp.zoneW} height="164" style={css("fill:var(--o3);fill-opacity:0.07")}></rect>
+            <line x1={fp.zoneX} x2={fp.zoneX} y1="16" y2="180" style={css("stroke:var(--o3);stroke-width:1.5;stroke-dasharray:4 3")}></line>
+            <text x={fp.zoneLX} y="30" style={css("font-size:11.5px;font-weight:600;fill:var(--warn-fg)")}>More failures than usable extras ({fp.extras})</text>
+          </>}
+          {histogramBars.map((b, index5) => <Fragment key={index5}>
             <g >
               <rect x={b.x} y={b.y} width="52" height={b.h} rx="4" style={css("fill:" + String(b.fill))}></rect>
               <text x={b.cx} y={b.vy} style={css("font-size:12px;font-weight:600;fill:var(--ink);text-anchor:middle;font-family:'Geist Mono',monospace")}>{b.count}</text>
               <text x={b.cx} y="198" style={css("font-size:12px;fill:var(--ink2);text-anchor:middle;font-weight:500")}>{b.label}</text>
             </g>
           </Fragment>)}
-          <text x="352" y="222" style={css("font-size:11.5px;fill:var(--muted);text-anchor:middle")}>failed channels in one unit, first pass</text>
+          <text x="352" y="222" style={css("font-size:11.5px;fill:var(--muted);text-anchor:middle")}>{unitStatus ? 'currently failing channels in one unit' : 'failed channels in one unit, first pass'}</text>
         </svg>
+        {unitStatus && liveHistogram && <p style={css("margin:0;font-size:11.5px;color:var(--muted);line-height:1.5")}>
+          Current measured status at extraction time, not first-pass results.
+          {liveHistogram.excluded > 0 && ` ${liveHistogram.excluded.toLocaleString('en-US')} review-required or not-evaluated ${liveHistogram.excluded === 1 ? 'unit' : 'units'} not shown.`}
+          {unitStatus.incomplete && <span style={css("color:var(--warn-fg)")}> Bounded cohort is incomplete.</span>}
+        </p>}
       </div>
 
       <div style={css("flex:1 1 340px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:12px")}>
@@ -244,7 +310,7 @@ export default function Failures() {
           {unitStatus && <span style={css("align-self:flex-start;font-size:10px;font-weight:650;letter-spacing:.05em;text-transform:uppercase;padding:3px 8px;border-radius:999px;background:color-mix(in srgb,var(--accent) 10%,var(--panel));color:var(--accent-ink)")}>Live · test database</span>}
           {unitStatus && <span style={css("font-size:11.5px;color:var(--muted)")}>{unitStatus.counts.review_required.toLocaleString('en-US')} review required · {unitStatus.counts.not_evaluated.toLocaleString('en-US')} not evaluated{unitStatus.incomplete ? ' · bounded result incomplete' : ''}</span>}
         </div>
-        {unitStatus ? <button type="button" onClick={() => setUnitStatusRefresh(value => value + 1)} className="lnk" style={css("font-size:13px;display:inline-flex;align-items:center;min-height:32px;border:0;background:transparent;padding:0")}>Refresh unit status</button> : <PreviewButton className="lnk" style={css("font-size:13px;display:inline-flex;align-items:center;min-height:32px;border:0;background:transparent;padding:0")}>Open all in console</PreviewButton>}
+        {unitStatus ? <button type="button" onClick={refreshUnitStatus} className="lnk" style={css("font-size:13px;display:inline-flex;align-items:center;min-height:32px;border:0;background:transparent;padding:0")}>Refresh unit status</button> : <PreviewButton className="lnk" style={css("font-size:13px;display:inline-flex;align-items:center;min-height:32px;border:0;background:transparent;padding:0")}>Open all in console</PreviewButton>}
       </div>
       <div className="table-scroll" role="region" tabIndex={0} aria-label="Unrecoverable units table, scroll horizontally on narrow screens">
         <div role="table" aria-label="Unrecoverable units" style={css("min-width:900px")}>

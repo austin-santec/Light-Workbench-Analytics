@@ -465,6 +465,7 @@ class UnitStatusItem(BaseModel):
     switch_serial: str
     switch_model: str
     context_run_id: int | None = Field(default=None, gt=0)
+    channel_count: int | None = Field(default=None, gt=0)
     status: Literal[
         "review_required",
         "not_evaluated",

@@ -142,6 +142,11 @@ def test_each_status_and_strict_exact_limit():
     assert project(rows=failing, analysis=used).status == "failing_no_measured_recovery"
 
 
+def test_projection_exposes_valid_context_channel_count_or_null():
+    assert project().channel_count == 2
+    assert project(runs=(run(channels=None),)).channel_count is None
+
+
 def test_review_missing_channel_newest_measurement_and_tie_breaks():
     mismatch = project(
         rows=(
@@ -373,6 +378,7 @@ def test_disabled_connected_and_sanitized_503_contracts(client, application):
     assert result.filters.purpose == ["production"]
     assert result.counts.failing_no_measured_recovery == 1
     assert result.units[0].main_board_serial == "DEMO-UNIT-020"
+    assert result.units[0].channel_count == 2
 
     failure = FakeRepository(error=ReportingError("query_timeout"))
     application.dependency_overrides[get_reporting_access] = lambda: ReportingAccess(

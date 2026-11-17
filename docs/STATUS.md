@@ -1,3 +1,24 @@
+# Live Failures failed channels per unit
+
+Updated November 17, 2026. The existing Failures **Failed channels per unit** panel now switches from its unchanged synthetic first-pass example to the already-loaded D16 `unit-status` response when reporting is connected. It includes only evaluated passing/failing statuses, bins units by 0 through 7+ current failing channels, reports current-filter evaluated/failing totals, and explicitly excludes review-required/not-evaluated units. Live mode removes the unsupported usable-extras zone, changes the axis and interpretation note to current measured status, and shows incomplete/empty states. Its separate **All**/context-run channel-count control is derived from response values; null-count units appear only under All and a vanished selection resets to All after refreshed/range-changed data arrives. Unavailable states preserve the demo caption, 24/36/48 control, zone, bars and first-pass axis.
+
+The unit-status item contract adds nullable positive `channel_count`, projected from the already-read context run's `front_panel_channel_count`; absent/invalid context counts remain null. No SQL, query, grant, gate, endpoint, dependency or database access changed.
+
+Offline verification:
+
+- From `backend/`, `.venv\Scripts\python.exe -m pytest -q` passed **334 tests**; `.venv\Scripts\ruff.exe check .`, `.venv\Scripts\ruff.exe format --check .`, and `.venv\Scripts\python.exe -m pip check` passed. Tests cover both a projected value and null plus the HTTP response contract.
+- `npm.cmd run typecheck` and `npm.cmd run lint` passed. The exact `npm.cmd run build` reached Vite after TypeScript and hit the known managed-filesystem/esbuild config-loader restriction; `npm.cmd run build -- --configLoader runner` passed with Vite 7.3.7 and 468 modules transformed.
+- `npm.cmd run test:browser` passed **33 checks** against an owned loopback Vite server started with `npm.cmd run dev -- --configLoader runner --port 5173 --strictPort` and stopped afterward. Synthetic interception covered unchanged demo/off/down behavior; connected bins/counts/caption/ARIA; removal of the extras zone; dynamic filters and null-only-under-All behavior; excluded, incomplete and empty states; range update/reset; and the both-theme 1440/768/390px matrix. Light 1440px and dark 390px connected Failures captures were visually inspected.
+- `git diff --check`, strict UTF-8 decoding of changed text files and the mojibake-marker scan passed.
+
+No database connection, backend start, reporting-enabled process, real record, credential, target detail, AGENTS.md change, commit or push occurred. Not verified here: live histogram totals against the authorized test database, per-unit counts against the live Unrecoverable table, or context-run counts against `IL_RUNS.front_panel_channel_count`; those remain reviewer live acceptance.
+
+Reviewer live check, November 17, 2026, against the authorized test database (production, last 30 days), after the owner restarted the backend:
+
+- The response had 10 cohort units: 5 passing, 2 failing (recovery available, needs analysis), 2 review required and 1 not evaluated; not incomplete. The histogram showed 7 evaluated units (5 with none, 1 with 1, 1 with 7+), 2 currently failing and 3 excluded, matching the counts exactly.
+- Per-unit failing-channel counts (7 and 1) matched the live Unrecoverable units table. A Query console read of `IL_RUNS.front_panel_channel_count` for all 10 context runs matched every returned `channel_count` (36, 48 and 49).
+- The All, 36, 48 and 49 filters gave 7/2, 4/1, 1/0 and 2/1 evaluated/failing units. Review found "1 units" and "1 evaluated units" wording; caption, ARIA and excluded note now use the singular for one, and the browser check was updated. The panel was inspected in both themes. Live 503 rendering remains unverified.
+
 # Live Overview station summary
 
 Updated November 16, 2026. Implemented directly by Claude (Codex was at its usage limit). `GET /api/v1/reporting/station-summary` returns last-30-day station-level runs, distinct units, Q02 first-observation failures, V08/V10 within-run retests and median elapsed seconds per channel, with pooled totals and `incomplete`. It reuses the failure-rate candidate-run and first-observation CTE text; the failure-rate and channel-failures SQL were verified byte-identical before and after. The Overview **Stations, last 30 days** table shows it for the selected purposes with a live badge, refresh, an All stations row, relative bars, `—` for nulls and a neutral station-level note instead of the demo callout. No operator data is read.

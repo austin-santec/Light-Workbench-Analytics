@@ -219,6 +219,7 @@ class UnitStatusProjection:
     switch_serial: str
     switch_model: str
     context_run_id: int | None
+    channel_count: int | None
     status: UnitStatus
     failing_channels: tuple[FailingChannel, ...]
     latest_analysis: AnalysisSummary | None
@@ -389,24 +390,27 @@ def project_unit_status(
     context = max(eligible_contexts, key=_run_key, default=None)
     if context is None:
         return UnitStatusProjection(
-            assignment.unit_id,
-            assignment.main_board_serial,
-            assignment.assignment_id,
-            assignment.switch_serial,
-            assignment.switch_model,
-            None,
-            "review_required",
-            (),
-            _analysis_summary(latest_analysis, (), replacements),
-            ("No eligible context run is available.",),
+            unit_id=assignment.unit_id,
+            main_board_serial=assignment.main_board_serial,
+            assignment_id=assignment.assignment_id,
+            switch_serial=assignment.switch_serial,
+            switch_model=assignment.switch_model,
+            context_run_id=None,
+            channel_count=None,
+            status="review_required",
+            failing_channels=(),
+            latest_analysis=_analysis_summary(latest_analysis, (), replacements),
+            review_reasons=("No eligible context run is available.",),
         )
 
     review: list[str] = []
     if context.front_panel_channel_count is None or context.front_panel_channel_count <= 0:
         review.append("The context run has no valid front-panel channel count.")
+        context_channel_count = None
         channel_count = 0
     else:
-        channel_count = context.front_panel_channel_count
+        context_channel_count = context.front_panel_channel_count
+        channel_count = context_channel_count
     if context.limits is None:
         review.append("The context run has invalid or missing saved limits.")
 
@@ -522,6 +526,7 @@ def project_unit_status(
         switch_serial=assignment.switch_serial,
         switch_model=assignment.switch_model,
         context_run_id=context.run_id,
+        channel_count=context_channel_count,
         status=status,
         failing_channels=tuple(sorted(failing_channels, key=lambda item: item.logical_channel)),
         latest_analysis=analysis,

@@ -230,23 +230,24 @@ const unitStatusFixture = url => {
   };
   const [start_utc, end_utc, partial] = windows[period];
   const analysis = (id, current, unused, result_status = 'fail_no_viable_recovery') => ({ analysis_id: id, result_status, analyzed_at_utc: '2026-11-13T18:00:00Z', current, unused_recommendations: unused });
-  const base = (id, status) => ({
+  const base = (id, status, channel_count = null) => ({
     unit_id: id, main_board_serial: `DEMO-STATUS-${id}`, assignment_id: id + 100,
     switch_serial: `DEMO-SW-${id}`, switch_model: 'OSX-150', context_run_id: id + 200,
+    channel_count,
     status, failing_channels: [], latest_analysis: null, review_reasons: [],
   });
-  const failing = (id, status, latest) => ({
-    ...base(id, status), latest_analysis: latest,
-    failing_channels: [{ logical_channel: id, effective_port: id + 48, wavelength_1_il_db: 2.6001, wavelength_2_il_db: 1.1 }],
+  const failing = (id, status, latest, channelCount, failingCount) => ({
+    ...base(id, status, channelCount), latest_analysis: latest,
+    failing_channels: Array.from({ length: failingCount }, (_, index) => ({ logical_channel: id + index, effective_port: id + index + 48, wavelength_1_il_db: 2.6001, wavelength_2_il_db: 1.1 })),
   });
   const units = unitStatusMode === 'zero' ? [] : [
-    failing(1, 'failing_no_measured_recovery', analysis(301, true, 0)),
-    failing(2, 'failing_needs_analysis', analysis(302, false, 0)),
-    failing(3, 'failing_recovery_available', analysis(303, true, 2, 'recommendations_available')),
-    { ...base(4, 'review_required'), review_reasons: ['DEMO incompatible wavelength evidence.'] },
-    base(5, 'not_evaluated'),
-    base(6, 'passing'),
-    ...(period === 'this_week' ? [base(7, 'passing'), base(8, 'passing'), base(9, 'passing')] : []),
+    failing(1, 'failing_no_measured_recovery', analysis(301, true, 0), 48, 1),
+    failing(2, 'failing_needs_analysis', analysis(302, false, 0), 36, 2),
+    failing(3, 'failing_recovery_available', analysis(303, true, 2, 'recommendations_available'), 48, 7),
+    { ...base(4, 'review_required', period === 'this_week' ? 49 : 8), review_reasons: ['DEMO incompatible wavelength evidence.'] },
+    base(5, 'not_evaluated', 49),
+    base(6, 'passing', null),
+    ...(period === 'this_week' ? [base(7, 'passing', 36), base(8, 'passing', 48), base(9, 'passing', null)] : []),
   ];
   const counts = {
     cohort_units: units.length,
@@ -517,6 +518,7 @@ const assertFocus = async locator => assert.ok(await locator.evaluate(element =>
 const channelFailuresPanel = () => page.getByRole('heading', { name: 'Failures by logical channel', exact: true }).locator('..').locator('..').locator('..').locator('..');
 const stationPanel = () => page.getByRole('heading', { name: 'Stations, last 30 days', exact: true }).locator('..').locator('..').locator('..').locator('..');
 const unitOutcomesPanel = () => page.getByRole('heading', { name: 'Unit outcomes', exact: true }).locator('..').locator('..').locator('..').locator('..');
+const failureHistogramPanel = () => page.getByRole('heading', { name: 'Failed channels per unit', exact: true }).locator('..').locator('..').locator('..');
 const assertFocusRing = async locator => {
   const ring = await locator.evaluate(element => { const s = getComputedStyle(element); return { style: s.outlineStyle, width: parseFloat(s.outlineWidth) }; });
   assert.ok(ring.style !== 'none' && ring.width >= 2, 'Expected a visible focus outline');
@@ -588,7 +590,13 @@ try {
   await recommendationPanel.getByText('2,036', { exact: true }).waitFor();
   await recommendationPanel.getByText('Used as recommended', { exact: true }).waitFor();
   assert.equal(await recommendationPanel.getByText('Live · test database', { exact: true }).count(), 0);
-  check('Replacement activity is honestly off and recommendation usage keeps the unchanged demo path');
+  const demoFailureHistogram = failureHistogramPanel();
+  await demoFailureHistogram.getByText('More failures than usable extras (4)', { exact: true }).waitFor();
+  await demoFailureHistogram.getByText('failed channels in one unit, first pass', { exact: true }).waitFor();
+  assert.equal(await demoFailureHistogram.getByText('Live · test database', { exact: true }).count(), 0);
+  await demoFailureHistogram.getByRole('button', { name: '24 ch', exact: true }).click();
+  assert.ok((await demoFailureHistogram.getByRole('img').getAttribute('aria-label')).includes('24-channel'));
+  check('Replacement activity is honestly off; recommendation usage and failure histogram keep the unchanged demo path');
   await visit('/queries');
   await page.getByText('Synthetic query design preview. Schema and SQL are illustrative. No SQL is executed or sent to a server.').waitFor();
   await page.getByRole('button', { name: 'Chart', exact: true }).click();
@@ -614,6 +622,8 @@ try {
     check('Live card backend-down state');
     await downPage.goto(`${base}/#/failures`, { waitUntil: 'domcontentloaded' });
     await downPage.getByRole('region', { name: 'Replacement activity' }).getByText('Backend not reachable on 127.0.0.1:8000').waitFor();
+    await downPage.getByText('More failures than usable extras (4)', { exact: true }).waitFor();
+    await downPage.getByText('failed channels in one unit, first pass', { exact: true }).waitFor();
     check('Replacement activity backend-down state');
   } finally { await downPage.close(); }
 
@@ -782,6 +792,30 @@ try {
   assert.equal(await replacementPanel.getByRole('img', { name: /Daily replacement events/ }).locator('span').count(), 31);
   await replacementPanel.getByRole('button', { name: 'Today', exact: true }).click();
   await assertText(replacementPanel, '12 events / 6 units');
+  const liveFailureHistogram = failureHistogramPanel();
+  await liveFailureHistogram.getByText('4 evaluated units tested today · 3 currently failing.', { exact: true }).waitFor();
+  await liveFailureHistogram.getByText('Live · test database', { exact: true }).waitFor();
+  await liveFailureHistogram.getByText('currently failing channels in one unit', { exact: true }).waitFor();
+  await liveFailureHistogram.getByText('Current measured status at extraction time, not first-pass results.', { exact: false }).waitFor();
+  await liveFailureHistogram.getByText('2 review-required or not-evaluated units not shown.', { exact: false }).waitFor();
+  assert.equal(await liveFailureHistogram.getByText(/^More failures than usable extras/).count(), 0);
+  const liveHistogramChart = liveFailureHistogram.getByRole('img');
+  assert.equal(await liveHistogramChart.getAttribute('aria-label'), 'Histogram of currently failing channels per unit: 1 unit with none, 1 with 1, 1 with 2, 0 with 3, 0 with 4, 0 with 5, 0 with 6, 1 with 7 or more.');
+  const channelCountControl = liveFailureHistogram.getByRole('group', { name: 'Channel count' });
+  assert.deepEqual(await channelCountControl.getByRole('button').allTextContents(), ['All', '8', '36', '48', '49']);
+  await channelCountControl.getByRole('button', { name: '48', exact: true }).click();
+  await liveFailureHistogram.getByText('2 evaluated units tested today · 2 currently failing.', { exact: true }).waitFor();
+  assert.equal(await liveHistogramChart.getAttribute('aria-label'), 'Histogram of currently failing channels per unit: 0 units with none, 1 with 1, 0 with 2, 0 with 3, 0 with 4, 0 with 5, 0 with 6, 1 with 7 or more.');
+  await channelCountControl.getByRole('button', { name: 'All', exact: true }).click();
+  assert.equal(await liveHistogramChart.getAttribute('aria-label'), 'Histogram of currently failing channels per unit: 1 unit with none, 1 with 1, 1 with 2, 0 with 3, 0 with 4, 0 with 5, 0 with 6, 1 with 7 or more.');
+  await channelCountControl.getByRole('button', { name: '8', exact: true }).click();
+  await replacementPanel.getByRole('button', { name: 'This week', exact: true }).click();
+  await liveFailureHistogram.getByText('7 evaluated units tested this week · 3 currently failing.', { exact: true }).waitFor();
+  assert.equal(await channelCountControl.getByRole('button', { name: 'All', exact: true }).getAttribute('aria-pressed'), 'true');
+  assert.deepEqual(await channelCountControl.getByRole('button').allTextContents(), ['All', '36', '48', '49']);
+  await replacementPanel.getByRole('button', { name: 'Today', exact: true }).click();
+  await liveFailureHistogram.getByText('4 evaluated units tested today · 3 currently failing.', { exact: true }).waitFor();
+  check('Live failed-channels histogram covers bars, caption, aria, dynamic filters, null-count All behavior, exclusions, and range reset');
   const liveUnitTable = page.getByRole('table', { name: 'Unrecoverable units' });
   await liveUnitTable.getByText('DEMO-STATUS-1').waitFor();
   await assertText(liveUnitTable, 'No measured recovery');
@@ -803,7 +837,16 @@ try {
   assert.equal(recommendationUsageRequests.at(-1).searchParams.get('period'), 'today');
   assert.equal(recommendationUsageRequests.at(-1).searchParams.getAll('purpose').join(','), 'production');
   await assertText(page.getByText(/review required ·/), '1 review required · 1 not evaluated');
+  unitStatusMode = 'incomplete';
   await page.getByRole('button', { name: 'Refresh unit status' }).click();
+  await liveFailureHistogram.getByText('Bounded cohort is incomplete.', { exact: false }).waitFor();
+  unitStatusMode = 'zero';
+  await page.getByRole('button', { name: 'Refresh unit status' }).click();
+  await liveFailureHistogram.getByText('No evaluated units in this range.', { exact: true }).waitFor();
+  assert.equal(await liveFailureHistogram.getByRole('img').getAttribute('aria-label'), 'Histogram of currently failing channels per unit: 0 units with none, 0 with 1, 0 with 2, 0 with 3, 0 with 4, 0 with 5, 0 with 6, 0 with 7 or more.');
+  unitStatusMode = 'values';
+  await page.getByRole('button', { name: 'Refresh unit status' }).click();
+  await liveFailureHistogram.getByText('4 evaluated units tested today · 3 currently failing.', { exact: true }).waitFor();
   await replacementPanel.getByRole('button', { name: 'Refresh replacement activity' }).click();
   const recommendationRequestsBeforeRefresh = recommendationUsageRequests.length;
   await recommendationPanel.getByRole('button', { name: 'Refresh', exact: true }).click();
@@ -901,10 +944,11 @@ try {
   check('Unit demo fallback, wavelength control, lookup empty state, and example recovery');
 
   await page.getByRole('navigation', { name: 'Main', exact: true }).getByRole('link', { name: 'Failures & replacements' }).click();
-  await page.getByRole('button', { name: '24 ch', exact: true }).click();
-  assert.equal(await page.getByRole('button', { name: '24 ch', exact: true }).getAttribute('aria-pressed'), 'true');
-  assert.ok((await page.getByRole('img', { name: /^Histogram of failed/ }).getAttribute('aria-label')).includes('24-channel'));
-  check('Failures navigation and channel-count histogram');
+  const restoredLiveHistogram = failureHistogramPanel();
+  await restoredLiveHistogram.getByRole('group', { name: 'Channel count' }).getByRole('button', { name: '36', exact: true }).click();
+  assert.equal(await restoredLiveHistogram.getByRole('group', { name: 'Channel count' }).getByRole('button', { name: '36', exact: true }).getAttribute('aria-pressed'), 'true');
+  assert.ok((await restoredLiveHistogram.getByRole('img').getAttribute('aria-label')).includes('1 with 2'));
+  check('Failures navigation and live channel-count histogram');
   await page.getByRole('button', { name: 'Refresh unit status', exact: true }).waitFor();
 
   const unitLink = page.getByRole('navigation', { name: 'Main', exact: true }).getByRole('link', { name: 'Unit lookup' });
@@ -1012,7 +1056,7 @@ try {
         assert.ok(dimensions.content <= dimensions.width + 1, `Page overflow ${route} at ${width}: ${dimensions.content}`);
         await page.screenshot({ path: `${output}/${theme}-${width}-${route.slice(1) || 'overview'}.png`, fullPage: true });
         const control = route === '/' ? page.getByRole('button', { name: 'This week', exact: true })
-          : route === '/failures' ? page.getByRole('button', { name: '24 ch', exact: true })
+          : route === '/failures' ? page.getByRole('group', { name: 'Channel count' }).getByRole('button', { name: 'All', exact: true })
           : route === '/unit' ? page.getByRole('searchbox', { name: 'Look up a unit' })
           : page.getByRole('searchbox', { name: 'Search queries' });
         await page.keyboard.press('Tab');

@@ -34,6 +34,7 @@ export interface UnitStatusItem {
   switch_serial: string;
   switch_model: string;
   context_run_id: number | null;
+  channel_count: number | null;
   status: UnitStatus;
   failing_channels: UnitStatusFailingChannel[];
   latest_analysis: UnitStatusLatestAnalysis | null;
@@ -100,8 +101,8 @@ function isFailingChannel(value: unknown): value is UnitStatusFailingChannel {
 }
 
 function isUnit(value: unknown): value is UnitStatusItem {
-  if (!isRecord(value) || !exactKeys(value, ['unit_id', 'main_board_serial', 'assignment_id', 'switch_serial', 'switch_model', 'context_run_id', 'status', 'failing_channels', 'latest_analysis', 'review_reasons'])) return false;
-  if (!positiveInteger(value.unit_id) || !positiveInteger(value.assignment_id) || !(value.context_run_id === null || positiveInteger(value.context_run_id))) return false;
+  if (!isRecord(value) || !exactKeys(value, ['unit_id', 'main_board_serial', 'assignment_id', 'switch_serial', 'switch_model', 'context_run_id', 'channel_count', 'status', 'failing_channels', 'latest_analysis', 'review_reasons'])) return false;
+  if (!positiveInteger(value.unit_id) || !positiveInteger(value.assignment_id) || !(value.context_run_id === null || positiveInteger(value.context_run_id)) || !(value.channel_count === null || positiveInteger(value.channel_count))) return false;
   if (![value.main_board_serial, value.switch_serial, value.switch_model].every(item => typeof item === 'string' && item.length > 0)) return false;
   if (typeof value.status !== 'string' || !UNIT_STATUSES.includes(value.status as UnitStatus)) return false;
   if (!Array.isArray(value.failing_channels) || !value.failing_channels.every(isFailingChannel)) return false;
