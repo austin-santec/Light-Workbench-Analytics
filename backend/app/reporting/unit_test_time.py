@@ -6,6 +6,7 @@ from collections import Counter, defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from typing import Literal
 
 from app.reporting.adapter import ReportingError
@@ -20,6 +21,7 @@ from app.reporting.unit_status import (
     UNIT_STATUS_COHORT_CAP,
     UNIT_STATUS_RUN_CAP,
     CohortAssignment,
+    ProjectionMeasurement,
     UnitStatusProjection,
     _optional_positive_int,
     _positive_int,
@@ -150,6 +152,11 @@ class FinishedUnitRecord:
     run_count: int
     active_run_count: int
     fallback_run_count: int
+    switch_model: str | None = None
+    wavelength_mode: str | None = None
+    channel_count: int | None = None
+    effective_readings: tuple[ProjectionMeasurement, ...] = ()
+    fail_limit: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -342,6 +349,11 @@ def summarize_finished_unit_cohort(
                 run_count=len(qualifying),
                 active_run_count=active_count,
                 fallback_run_count=fallback_count,
+                switch_model=cohort.switch_model,
+                wavelength_mode=projection.wavelength_mode,
+                channel_count=projection.channel_count,
+                effective_readings=projection.effective_readings,
+                fail_limit=projection.fail_limit,
             )
         )
     return tuple(records)

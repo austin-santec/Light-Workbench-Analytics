@@ -203,11 +203,14 @@ export default function Failures() {
 
     <LiveReplacementActivityPanel range={liveRange} onRangeChange={changeLiveRange} />
 
-    <p className="preview-note">Fixed synthetic periods: the header filters and export are disabled previews.</p>
+    <p className="preview-note">The tiles below marked Demo are synthetic examples with fixed periods; the header filters and export are disabled previews.</p>
     <section aria-label="Key metrics" style={css("display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px")}>
       {kpis.map((k, index0) => <Fragment key={index0}>
         <div style={css("background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;display:flex;flex-direction:column;gap:6px")}>
-          <span style={css("font-size:12.5px;color:var(--muted);font-weight:500")}>{k.label}</span>
+          <span style={css("display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:4px 8px;font-size:12.5px;color:var(--muted);font-weight:500")}>
+            <span>{k.label}</span>
+            <span style={css("white-space:nowrap;font-size:10px;font-weight:650;letter-spacing:.04em;text-transform:uppercase;padding:3px 7px;border-radius:999px;background:var(--panel2);color:var(--muted)")}>Demo</span>
+          </span>
           <span style={css("font-size:30px;line-height:1.05;font-weight:650;letter-spacing:-0.025em;font-variant-numeric:tabular-nums;color:" + String(k.color))}>{k.value}</span>
           <span style={css("font-size:12.5px;color:var(--ink2)")}>{k.sub}</span>
           <div style={css("height:5px;border-radius:3px;background:var(--line2);overflow:hidden;margin-top:4px")}><div style={css("height:5px;border-radius:3px;width:" + String(k.pct) + "%;background:" + String(k.bar))}></div></div>

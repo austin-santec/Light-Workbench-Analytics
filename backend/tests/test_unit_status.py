@@ -190,6 +190,9 @@ def test_replacement_port_retest_recovers_and_mismatch_requires_review():
         replacements=(replacement,),
     )
     assert recovered.status == "passing"
+    assert [item.measurement_id for item in recovered.effective_readings] == [1, 3]
+    assert recovered.wavelength_mode == "SM"
+    assert recovered.fail_limit == Decimal("2.5000")
 
     wrong_port = project(
         rows=(

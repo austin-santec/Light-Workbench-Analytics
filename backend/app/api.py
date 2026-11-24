@@ -21,6 +21,7 @@ from app.reporting.models import (
     ChannelActivityQuery,
     ChannelFailuresQuery,
     FailureConcentrationQuery,
+    RecentFinishedUnitsQuery,
     RecommendationUsageQuery,
     ReplacementActivityQuery,
     RunQuery,
@@ -63,6 +64,8 @@ from app.schemas import (
     QueryResultColumnResponse,
     QuerySchemaConnectedResponse,
     QuerySchemaObjectResponse,
+    RecentFinishedUnitsConnectedResponse,
+    RecentFinishedUnitsQueryParams,
     RecommendationUsageAnalyses,
     RecommendationUsageAverageResponse,
     RecommendationUsageConnectedResponse,
@@ -217,6 +220,19 @@ def validated_unit_test_time_query(
 ) -> UnitTestTimeQuery:
     try:
         return UnitTestTimeQuery(period=params.period, purposes=tuple(params.purpose))
+    except ValidationError as exc:
+        errors = [
+            item | {"loc": ("query", *item["loc"])}
+            for item in exc.errors(include_url=False, include_input=False, include_context=False)
+        ]
+        raise RequestValidationError(errors) from None
+
+
+def validated_recent_finished_units_query(
+    params: Annotated[RecentFinishedUnitsQueryParams, Query()],
+) -> RecentFinishedUnitsQuery:
+    try:
+        return RecentFinishedUnitsQuery(period=params.period, purposes=tuple(params.purpose))
     except ValidationError as exc:
         errors = [
             item | {"loc": ("query", *item["loc"])}
@@ -776,7 +792,14 @@ def unit_status(
         ),
         filters=UnitStatusFilters(purpose=list(query.purposes)),
         counts=metrics.counts,
-        units=[asdict(unit) for unit in metrics.units],
+        units=[
+            {
+                key: value
+                for key, value in asdict(unit).items()
+                if key not in {"wavelength_mode", "effective_readings", "fail_limit"}
+            }
+            for unit in metrics.units
+        ],
         incomplete=metrics.incomplete,
     )
 
@@ -814,6 +837,43 @@ def unit_test_time(
         units=[asdict(unit) for unit in metrics.units],
         finished=metrics.finished.model_dump(),
         excluded=metrics.excluded,
+        incomplete=metrics.incomplete,
+    )
+
+
+@router.get(
+    "/reporting/recent-finished-units",
+    response_model=RecentFinishedUnitsConnectedResponse | RunActivityNotConnectedResponse,
+    responses={503: {"model": ReportingFailureResponse}},
+    tags=["reporting"],
+)
+def recent_finished_units(
+    query: Annotated[RecentFinishedUnitsQuery, Depends(validated_recent_finished_units_query)],
+    access: Annotated[ReportingAccess | None, Depends(get_reporting_access)],
+    extracted_at: Annotated[datetime, Depends(get_extracted_at_utc)],
+) -> RecentFinishedUnitsConnectedResponse | RunActivityNotConnectedResponse | JSONResponse:
+    """Newest D17-finished units for the selected Pacific summary period."""
+    if access is None:
+        return RunActivityNotConnectedResponse()
+    boundaries = compute_channel_activity_boundaries(extracted_at)
+    try:
+        metrics = access.repository.get_recent_finished_units(query, boundaries)
+    except ReportingError as exc:
+        return JSONResponse(status_code=503, content={"code": exc.code})
+    window = boundaries.periods[query.period]
+    return RecentFinishedUnitsConnectedResponse(
+        tls=access.tls,
+        extracted_at_utc=boundaries.extracted_at_utc,
+        timezone=PACIFIC_TIMEZONE_NAME,
+        period=UnitTestTimePeriodResponse(
+            key=query.period,
+            start_utc=window.start_utc,
+            end_utc=window.end_utc,
+            partial=window.partial,
+        ),
+        filters=UnitTestTimeFilters(purpose=list(query.purposes)),
+        units=[asdict(unit) for unit in metrics.units],
+        truncated=metrics.truncated,
         incomplete=metrics.incomplete,
     )
 

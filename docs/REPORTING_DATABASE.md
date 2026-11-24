@@ -184,6 +184,10 @@ The weekly D17 outcomes operation reuses those exact cohort and all-assignment t
 
 Migration review at source commit `5d4972830e74cc1b1e718fb577916d132e58faf7` found **no index led by `IL_MEASUREMENTS.written_at_utc`**. Existing measurement indexes are led by `run_id` (`IX_IL_MEASUREMENTS_run_channel`, the role-filtered unique attempt indexes, and `IX_IL_MEASUREMENTS_run_role_port`), so they do not directly support this time-range predicate. This implementation adds no index. Query-plan/cost verification on realistic test-database volume is still required before wider use.
 
+### Recent finished units reads
+
+The recent-finished-units operation reuses the D17 cohort and timing statements unchanged, then runs exactly three bounded reads for the newest 100 eligible unit IDs: latest qualifying-run `station_number`; first logical-channel observations across qualifying runs using the shared saved-limit parser and strict `>` agreement check; and `COUNT(DISTINCT logical_channel)` replacements across every historical assignment. All identifiers and purposes are bound parameters, explicit projections and `TOP`/`fetchmany(cap + 1)` bounds are retained, empty cohorts skip every follow-up, and overflow is surfaced as incomplete. These reads use only already gated objects and columns and require no new grant.
+
 ## Tests, local diagnostic and Stage B acceptance
 
 From `backend/`:

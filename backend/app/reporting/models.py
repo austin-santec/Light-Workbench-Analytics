@@ -106,6 +106,10 @@ class UnitTestTimeQuery(BaseModel):
         return value
 
 
+class RecentFinishedUnitsQuery(UnitTestTimeQuery):
+    """Filters for the bounded D17 recent-finished-unit table."""
+
+
 class FinishedUnitCounts(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 

@@ -3,6 +3,21 @@ import { TIME_RANGES, PRODUCTION_ONLY, PURPOSES, formatDuration, sparkline, togg
 import { PreviewButton, PreviewSelect } from '../components/PreviewControl';
 import { SegmentedControl } from '../components/SegmentedControl';
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+
+// Measures an element's content width; the element is attached through the returned callback ref.
+function useMeasuredWidth(fallback: number): [(element: HTMLElement | null) => void, number] {
+  const [element, setElement] = useState<HTMLElement | null>(null);
+  const [width, setWidth] = useState(fallback);
+  useEffect(() => {
+    if (!element) return;
+    const update = () => setWidth(Math.max(240, Math.round(element.getBoundingClientRect().width)));
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [element]);
+  return [setElement, width];
+}
 import { RecentActivity } from '../components/RecentActivity';
 import { css } from '../lib/css';
 import { getOverviewValues } from '../mock/overview';
@@ -15,6 +30,7 @@ import { channelHeatmap, loadChannelFailures, type ChannelFailuresConnectedRespo
 import { loadStationSummary, stationTableRows, type StationSummaryConnectedResponse } from '../lib/api/stationSummary';
 import { UNIT_STATUS_LABEL, UNIT_STATUS_OUTCOME_COLOR, UNIT_STATUS_OUTCOME_ORDER } from '../lib/unitStatusPresentation';
 import { loadUnitTestTime, summarizeUnitTestTime, UNIT_TEST_TIME_EXCLUDED_KEYS, type UnitTestTimeConnectedResponse, type UnitTestTimeOutcomeFilter } from '../lib/api/unitTestTime';
+import { loadRecentFinishedUnits, type RecentFinishedUnitsConnectedResponse } from '../lib/api/recentFinishedUnits';
 
 type ChannelActivityState =
   | { kind: 'loading' | 'demo' | 'error' }
@@ -39,6 +55,10 @@ type StationSummaryState =
 type ChannelFailuresState =
   | { kind: 'loading' | 'demo' | 'error' }
   | { kind: 'connected'; data: ChannelFailuresConnectedResponse };
+
+type RecentFinishedUnitsState =
+  | { kind: 'loading' | 'demo' | 'error' }
+  | { kind: 'connected'; data: RecentFinishedUnitsConnectedResponse };
 
 // Live heatmap steps use theme tokens; each text/background pair measured >= 4.5:1 in both themes.
 // The demo keeps its fixed ramp.
@@ -142,32 +162,45 @@ function liveFailureRateChart(data: FailureRateConnectedResponse) {
   return { segments: lineSegments(values, x, y), points, labels, grid };
 }
 
-function liveUnitTestTimeHistogram(data: ReturnType<typeof summarizeUnitTestTime>) {
+// Live histogram is drawn in real pixels (viewBox = measured width) so text stays 11-12px at any card width.
+const UNIT_TIME_CHART = { height: 190, inset: 24, baseline: 150, barArea: 110 } as const;
+
+function liveUnitTestTimeHistogram(data: ReturnType<typeof summarizeUnitTestTime>, chartWidth: number) {
   if (data.bins.length === 0 || data.meanMs === null) return null;
-  const x0 = 12, x1 = 388, y1 = 160, height = 120;
+  const { inset, baseline, barArea } = UNIT_TIME_CHART;
+  const x0 = inset, x1 = chartWidth - inset;
   const maximum = Math.max(1, ...data.bins.map(bin => bin.count));
-  const width = (x1 - x0) / data.bins.length;
+  const step = (x1 - x0) / data.bins.length;
+  const gap = Math.min(10, step * 0.18);
+  const first = data.bins[0].startMinute;
+  const last = data.bins.at(-1)?.endMinute ?? first + 8;
+  const meanX = x0 + (data.meanMs / 60_000 - first) / (last - first) * (x1 - x0);
+  const clampedMean = Math.max(x0, Math.min(x1, meanX));
   const bars = data.bins.map((bin, index) => {
-    const barHeight = bin.count ? height * bin.count / maximum : 1;
-    const x = x0 + index * width + 3;
+    const barHeight = bin.count ? Math.max(3, barArea * bin.count / maximum) : 0;
+    const x = x0 + index * step + gap / 2;
+    const center = x + (step - gap) / 2;
+    // Nudge a count label off the dashed mean line so the line never strikes through it.
+    const clash = Math.abs(center - clampedMean) < 10;
+    const valueAnchor = !clash ? 'middle' : clampedMean > x1 - 30 ? 'end' : 'start';
+    const valueX = !clash ? center : valueAnchor === 'end' ? clampedMean - 5 : clampedMean + 5;
     return {
       x: x.toFixed(1),
-      width: (width - 6).toFixed(1),
-      center: (x + (width - 6) / 2).toFixed(1),
-      labelX: (x0 + index * width).toFixed(1),
-      y: (y1 - barHeight).toFixed(1),
+      width: (step - gap).toFixed(1),
+      valueX: valueX.toFixed(1),
+      valueAnchor,
+      y: (baseline - barHeight).toFixed(1),
       height: barHeight.toFixed(1),
-      valueY: (y1 - barHeight - 5).toFixed(1),
+      valueY: (baseline - barHeight - 6).toFixed(1),
       count: bin.count,
-      label: bin.startMinute,
       holdsMean: bin.holdsMean,
     };
   });
-  const start = data.bins[0].startMinute;
-  const end = data.bins.at(-1)?.endMinute ?? start + 8;
-  const meanMinute = data.meanMs / 60_000;
-  const meanX = x0 + (meanMinute - start) / (end - start) * (x1 - x0);
-  return { bars, meanX: Math.max(x0, Math.min(x1, meanX)) };
+  const ticks = [...data.bins.map((bin, index) => ({ x: (x0 + index * step).toFixed(1), label: bin.startMinute })),
+    { x: x1.toFixed(1), label: data.bins.at(-1)?.endMinute ?? data.bins[0].startMinute }];
+  // Keep the "avg" label inside the frame near either edge.
+  const labelAnchor = clampedMean < x0 + 60 ? 'start' : clampedMean > x1 - 60 ? 'end' : 'middle';
+  return { bars, ticks, meanX: clampedMean, labelAnchor, width: chartWidth };
 }
 
 function pacificHeader(extractedAtUtc: string) {
@@ -199,6 +232,7 @@ export default function Overview() {
  const [channelFailuresRefresh, setChannelFailuresRefresh] = useState(0);
  const [stationSummary, setStationSummary] = useState<StationSummaryState>({ kind: 'loading' });
  const [stationRefresh, setStationRefresh] = useState(0);
+ const [recentFinishedUnits, setRecentFinishedUnits] = useState<RecentFinishedUnitsState>({ kind: 'loading' });
  const updateLivePurposeCounts = useCallback((counts: Record<Purpose, number> | null) => setLivePurposeCounts(counts), []);
  const resetPurpose = () => setState(current => ({ ...current, purp: { ...PRODUCTION_ONLY } }));
  const values = getOverviewValues(state);
@@ -242,6 +276,13 @@ export default function Overview() {
  }, [purposeKey, selectedPurposes, state.range]);
  useEffect(() => {
    const controller = new AbortController();
+   loadRecentFinishedUnits(PERIOD_FOR_RANGE[state.range], selectedPurposes, controller.signal)
+     .then(result => setRecentFinishedUnits(result.data_source === 'test_database' ? { kind: 'connected', data: result } : { kind: 'demo' }))
+     .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setRecentFinishedUnits({ kind: 'error' }); });
+   return () => controller.abort();
+ }, [purposeKey, selectedPurposes, state.range]);
+ useEffect(() => {
+   const controller = new AbortController();
    loadChannelFailures(PERIOD_FOR_RANGE[state.range], selectedPurposes, controller.signal)
      .then(result => setChannelFailures(result.data_source === 'test_database' ? { kind: 'connected', data: result } : { kind: 'demo' }))
      .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setChannelFailures({ kind: 'error' }); });
@@ -276,9 +317,10 @@ export default function Overview() {
    () => liveUnitTestTime ? summarizeUnitTestTime(liveUnitTestTime.units, unitTestTimeOutcome) : null,
    [liveUnitTestTime, unitTestTimeOutcome],
  );
+ const [unitTimeChartRef, unitTimeChartWidth] = useMeasuredWidth(560);
  const liveUnitTestTimeChart = useMemo(
-   () => liveUnitTestTimeSummary ? liveUnitTestTimeHistogram(liveUnitTestTimeSummary) : null,
-   [liveUnitTestTimeSummary],
+   () => liveUnitTestTimeSummary ? liveUnitTestTimeHistogram(liveUnitTestTimeSummary, unitTimeChartWidth) : null,
+   [liveUnitTestTimeSummary, unitTimeChartWidth],
  );
  const liveUnitTestTimeExcluded = useMemo(() => liveUnitTestTime
    ? UNIT_TEST_TIME_EXCLUDED_KEYS.flatMap(key => liveUnitTestTime.excluded[key] > 0
@@ -434,11 +476,11 @@ export default function Overview() {
         const lastPoint = isLiveChannel ? k.line.split(' ').at(-1)?.split(',') : null;
         return <Fragment key={index2}>
         <div style={css("background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 16px 12px;display:flex;flex-direction:column;gap:6px;min-width:0")}>
-          <span style={css("display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12.5px;color:var(--muted);font-weight:500")}>
+          <span style={css("display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:4px 8px;font-size:12.5px;color:var(--muted);font-weight:500")}>
             <span title={isLiveUnit ? 'Current measured status; this is not a scrap or reject record.' : undefined}>{k.label}</span>
             <span title={isLiveUnit ? 'Current measured status; this is not a scrap or reject record.' : undefined} style={css(isLiveTile
-              ? "font-size:10px;font-weight:650;letter-spacing:.04em;text-transform:uppercase;padding:3px 7px;border-radius:999px;background:color-mix(in srgb,var(--accent) 10%,var(--panel));color:var(--accent-ink)"
-              : "font-size:10px;font-weight:650;letter-spacing:.04em;text-transform:uppercase;padding:3px 7px;border-radius:999px;background:var(--panel2);color:var(--muted)")}>{isLiveTile ? 'Live · test database' : 'Demo'}</span>
+              ? "white-space:nowrap;font-size:10px;font-weight:650;letter-spacing:.04em;text-transform:uppercase;padding:3px 7px;border-radius:999px;background:color-mix(in srgb,var(--accent) 10%,var(--panel));color:var(--accent-ink)"
+              : "white-space:nowrap;font-size:10px;font-weight:650;letter-spacing:.04em;text-transform:uppercase;padding:3px 7px;border-radius:999px;background:var(--panel2);color:var(--muted)")}>{isLiveTile ? 'Live · test database' : 'Demo'}</span>
           </span>
           {isLiveChannel && <span style={css("font-size:10.5px;color:var(--muted)")}>Channels with test activity · {includedPurposes}</span>}
           {(isLiveCompleted || isLiveAverage) && <span style={css("font-size:10.5px;color:var(--muted)")}>Finished units · {includedPurposes}</span>}
@@ -478,7 +520,7 @@ export default function Overview() {
         <ConfigurationTable rows={cfgRows} onSelect={cfg => setState(current => ({ ...current, cfg }))} />
       </div>}
 
-      <div style={css((liveUnitTestTime ? "flex:1 1 100%;" : "flex:2 1 380px;") + "min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:10px")}>
+      <div id="unit-test-time-panel" style={css((liveUnitTestTime ? "flex:1 1 100%;" : "flex:2 1 380px;") + "min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:12px")}>
         {liveUnitTestTime && liveUnitTestTimeSummary ? <>
           <div style={css("display:flex;justify-content:space-between;align-items:flex-start;gap:10px")}>
             <div style={css("display:flex;flex-direction:column;gap:3px")}>
@@ -493,24 +535,28 @@ export default function Overview() {
           <div role="group" aria-label="Unit test time outcome" style={css("display:flex;flex-wrap:wrap;gap:5px")}>
             {([['all', 'All'], ['passed', 'Passed'], ['unrecoverable', 'Unrecoverable']] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={unitTestTimeOutcome === value} onClick={() => setUnitTestTimeOutcome(value)} style={css("min-height:30px;padding:0 9px;border-radius:7px;border:1px solid " + (unitTestTimeOutcome === value ? 'color-mix(in srgb,var(--accent) 45%,var(--line))' : 'var(--line)') + ";background:" + (unitTestTimeOutcome === value ? 'color-mix(in srgb,var(--accent) 8%,var(--panel))' : 'var(--panel)') + ";color:var(--ink2);font-size:11.5px;font-weight:600")}>{label}</button>)}
           </div>
-          <div style={css("display:flex;flex-wrap:wrap;gap:8px")}>
-            <div style={css("flex:1 1 80px;padding:8px 10px;border-radius:9px;background:var(--panel2)")}><div style={css("font-size:11.5px;color:var(--muted)")}>Average</div><div style={css("font-size:17px;font-weight:650;font-variant-numeric:tabular-nums")}>{liveUnitTestTimeSummary.meanMs === null ? '—' : formatDuration(liveUnitTestTimeSummary.meanMs / 1000)}</div></div>
-            <div style={css("flex:1 1 80px;padding:8px 10px;border-radius:9px;background:var(--panel2)")}><div style={css("font-size:11.5px;color:var(--muted)")}>Median</div><div style={css("font-size:17px;font-weight:650;font-variant-numeric:tabular-nums")}>{liveUnitTestTimeSummary.medianMs === null ? '—' : formatDuration(liveUnitTestTimeSummary.medianMs / 1000)}</div></div>
-            <div style={css("flex:1 1 80px;padding:8px 10px;border-radius:9px;background:var(--panel2)")}><div style={css("font-size:11.5px;color:var(--muted)")}>Slowest 10%</div><div style={css("font-size:17px;font-weight:650;font-variant-numeric:tabular-nums")}>{liveUnitTestTimeSummary.p90Ms === null ? '—' : `${formatDuration(liveUnitTestTimeSummary.p90Ms / 1000)}+`}</div></div>
+          <div style={css("display:flex;flex-wrap:wrap;gap:16px;align-items:stretch")}>
+            <div style={css("flex:1 1 220px;max-width:320px;display:flex;flex-direction:column;gap:8px")}>
+              <div style={css("padding:9px 12px;border-radius:9px;background:var(--panel2);display:flex;justify-content:space-between;align-items:baseline;gap:10px")}><span style={css("font-size:12px;color:var(--muted)")}>Average</span><span style={css("font-size:18px;font-weight:650;font-variant-numeric:tabular-nums")}>{liveUnitTestTimeSummary.meanMs === null ? '—' : formatDuration(liveUnitTestTimeSummary.meanMs / 1000)}</span></div>
+              <div style={css("padding:9px 12px;border-radius:9px;background:var(--panel2);display:flex;justify-content:space-between;align-items:baseline;gap:10px")}><span style={css("font-size:12px;color:var(--muted)")}>Median</span><span style={css("font-size:18px;font-weight:650;font-variant-numeric:tabular-nums")}>{liveUnitTestTimeSummary.medianMs === null ? '—' : formatDuration(liveUnitTestTimeSummary.medianMs / 1000)}</span></div>
+              <div style={css("padding:9px 12px;border-radius:9px;background:var(--panel2);display:flex;justify-content:space-between;align-items:baseline;gap:10px")}><span style={css("font-size:12px;color:var(--muted)")}>Slowest 10%</span><span style={css("font-size:18px;font-weight:650;font-variant-numeric:tabular-nums")}>{liveUnitTestTimeSummary.p90Ms === null ? '—' : `${formatDuration(liveUnitTestTimeSummary.p90Ms / 1000)}+`}</span></div>
+            </div>
+            <div ref={unitTimeChartRef} style={css("flex:3 1 360px;min-width:0;display:flex;align-items:center")}>
+              <svg id="configuration-histogram" data-source="live-unit-test-time" width={unitTimeChartWidth} height={UNIT_TIME_CHART.height} viewBox={`0 0 ${unitTimeChartWidth} ${UNIT_TIME_CHART.height}`} role="img" aria-label={`Histogram of ${liveUnitTestTimeSummary.n} finished units, ${unitTestTimeOutcome} outcomes, last 30 days${liveUnitTestTimeSummary.meanMs === null ? '' : `, average ${formatDuration(liveUnitTestTimeSummary.meanMs / 1000)}`}`} style={css("display:block;max-width:100%")}>
+                <line x1={UNIT_TIME_CHART.inset} x2={unitTimeChartWidth - UNIT_TIME_CHART.inset} y1={UNIT_TIME_CHART.baseline} y2={UNIT_TIME_CHART.baseline} style={css("stroke:var(--line);stroke-width:1")}></line>
+                {liveUnitTestTimeChart?.bars.map((bar, index4) => <g key={index4} data-mean-bin={bar.holdsMean ? 'true' : undefined}>
+                  <rect x={bar.x} y={bar.y} width={bar.width} height={bar.height} rx="3" style={css("fill:" + (bar.holdsMean ? String(accent) : 'color-mix(in srgb,var(--accent) 38%,var(--panel))'))}></rect>
+                  {bar.count > 0 && <text x={bar.valueX} y={bar.valueY} style={css("font-size:12px;font-weight:600;fill:var(--ink2);text-anchor:" + bar.valueAnchor + ";font-family:'Geist Mono',monospace")}>{bar.count}</text>}
+                </g>)}
+                {liveUnitTestTimeChart?.ticks.map((tick, index4) => <text key={index4} x={tick.x} y={UNIT_TIME_CHART.baseline + 16} style={css("font-size:11.5px;fill:var(--muted);text-anchor:middle;font-family:'Geist Mono',monospace")}>{tick.label}</text>)}
+                {liveUnitTestTimeChart && liveUnitTestTimeSummary.meanMs !== null && <>
+                  <line data-mean-line="true" x1={liveUnitTestTimeChart.meanX} x2={liveUnitTestTimeChart.meanX} y1="22" y2={UNIT_TIME_CHART.baseline} style={css("stroke:var(--ink);stroke-width:1.4;stroke-dasharray:4 3")}></line>
+                  <text x={liveUnitTestTimeChart.meanX} y="15" style={css("font-size:12px;font-weight:600;fill:var(--ink);text-anchor:" + liveUnitTestTimeChart.labelAnchor)}>avg {formatDuration(liveUnitTestTimeSummary.meanMs / 1000)}</text>
+                </>}
+                <text x={unitTimeChartWidth / 2} y="186" style={css("font-size:11.5px;fill:var(--muted);text-anchor:middle")}>minutes per unit</text>
+              </svg>
+            </div>
           </div>
-          <svg id="configuration-histogram" data-source="live-unit-test-time" viewBox="0 0 400 200" role="img" aria-label={`Histogram of ${liveUnitTestTimeSummary.n} finished units, ${unitTestTimeOutcome} outcomes, last 30 days${liveUnitTestTimeSummary.meanMs === null ? '' : `, average ${formatDuration(liveUnitTestTimeSummary.meanMs / 1000)}`}`} style={css("width:100%;height:auto;display:block")}>
-            <line x1="12" x2="388" y1="160" y2="160" style={css("stroke:var(--line);stroke-width:1")}></line>
-            {liveUnitTestTimeChart?.bars.map((bar, index4) => <g key={index4} data-mean-bin={bar.holdsMean ? 'true' : undefined}>
-              <rect x={bar.x} y={bar.y} width={bar.width} height={bar.height} rx="3" style={css("fill:" + (bar.holdsMean ? String(accent) : 'color-mix(in srgb,var(--accent) 38%,var(--panel))'))}></rect>
-              <text x={bar.center} y={bar.valueY} style={css("font-size:11px;font-weight:600;fill:var(--ink2);text-anchor:middle;font-family:'Geist Mono',monospace")}>{bar.count}</text>
-              <text x={bar.labelX} y="176" style={css("font-size:11px;fill:var(--muted);text-anchor:middle;font-family:'Geist Mono',monospace")}>{bar.label}</text>
-            </g>)}
-            {liveUnitTestTimeChart && liveUnitTestTimeSummary.meanMs !== null && <>
-              <line data-mean-line="true" x1={liveUnitTestTimeChart.meanX} x2={liveUnitTestTimeChart.meanX} y1="26" y2="160" style={css("stroke:var(--ink);stroke-width:1.4;stroke-dasharray:4 3")}></line>
-              <text x={liveUnitTestTimeChart.meanX} y="20" style={css("font-size:11.5px;font-weight:600;fill:var(--ink);text-anchor:middle")}>avg {formatDuration(liveUnitTestTimeSummary.meanMs / 1000)}</text>
-            </>}
-            <text x="200" y="196" style={css("font-size:11px;fill:var(--muted);text-anchor:middle")}>minutes per unit</text>
-          </svg>
           {liveUnitTestTimeSummary.n === 0 && <span style={css("font-size:12.5px;color:var(--muted)")}>No finished units in this range.</span>}
           <div style={css("display:flex;flex-direction:column;gap:4px;font-size:11.5px;color:var(--muted);line-height:1.45")}>
             <span>Sum of each unit&apos;s production runs: idle-excluded time where session timing is confirmed, otherwise run start to end. Finished means passing, or failing with a current analysis that found no recovery; not a final manufacturing disposition.</span>
@@ -759,9 +805,9 @@ export default function Overview() {
       </div>
     </section>
 
-    <RecentActivity data={runs} />
+    <RecentActivity data={runs} live={recentFinishedUnits.kind === 'connected' ? recentFinishedUnits.data : null} />
 
-    <footer style={css("font-size:12px;color:var(--muted);line-height:1.55;max-width:900px")}>Entirely synthetic demonstration. Metric definitions and manufacturing disposition require review before production use.</footer>
+    <footer style={css("font-size:12px;color:var(--muted);line-height:1.55;max-width:900px")}>{recentFinishedUnits.kind === 'connected' ? 'Panels marked Live use the connected test database; remaining examples are synthetic. Manufacturing disposition is not established.' : 'Entirely synthetic demonstration. Metric definitions and manufacturing disposition require review before production use.'}</footer>
 
 </>);
 }

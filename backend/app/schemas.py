@@ -139,6 +139,10 @@ class UnitTestTimeQueryParams(BaseModel):
     purpose: list[RunPurpose] = Field(default_factory=lambda: [RunPurpose.PRODUCTION])
 
 
+class RecentFinishedUnitsQueryParams(UnitTestTimeQueryParams):
+    pass
+
+
 class UnitOutcomesWeeklyQueryParams(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
@@ -586,6 +590,40 @@ class UnitTestTimeConnectedResponse(BaseModel):
         ):
             raise ValueError("Finished counts must include every timed unit")
         return self
+
+
+class RecentFinishedUnitResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    unit_id: int = Field(gt=0)
+    main_board_serial: str = Field(min_length=1)
+    switch_model: str = Field(min_length=1)
+    wavelength_mode: Literal["SM", "MM"]
+    channel_count: int | None = Field(default=None, gt=0)
+    station_number: int | None = Field(default=None, gt=0)
+    finished_at_utc: AwareDatetime
+    outcome: Literal["passed_no_replacement", "passed_after_replacement", "unrecoverable"]
+    replaced_channels: int = Field(ge=0)
+    failed_channels: int | None = Field(default=None, ge=0)
+    failed_unknown: bool
+    total_ms: int | None = Field(default=None, ge=0)
+    worst_il_db: Decimal | None = None
+    worst_il_wavelength_nm: int | None = Field(default=None, gt=0)
+    worst_il_over_limit: bool | None = None
+
+
+class RecentFinishedUnitsConnectedResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    data_source: Literal["test_database"] = "test_database"
+    tls: Literal["verified", "encrypted_unverified"]
+    extracted_at_utc: AwareDatetime
+    timezone: Literal["America/Los_Angeles"] = "America/Los_Angeles"
+    period: UnitTestTimePeriodResponse
+    filters: UnitTestTimeFilters
+    units: list[RecentFinishedUnitResponse] = Field(max_length=100)
+    truncated: bool
+    incomplete: bool
 
 
 class UnitOutcomesWeeklyWeekResponse(BaseModel):

@@ -234,6 +234,10 @@ Transport DTO guards validate every documented key, nested object, enum, timesta
 
 While live mode is connected, the Unit sidebar reads and writes at most five recently opened units in `localStorage`. The stored records contain only positive unit IDs and serial strings; parsing and writes are guarded with `try/catch`. Demo mode retains the three synthetic example links.
 
+### Recent finished units
+
+`GET /api/v1/reporting/recent-finished-units?period=today|yesterday|this_week|last_30_days&purpose=<purpose>[&purpose=...]` lists at most 100 newest D17-finished units for the selected Pacific summary period. Defaults, validation, period/filter echo, `not_connected`, and sanitized 503 behavior match unit test time. Missing-duration units remain listed with `total_ms: null`; an open qualifying run excludes the unit. Each exact-key row carries the D16 context configuration, latest qualifying-run station, distinct historical replacement channels, distinct first-observation failed channels (or null plus `failed_unknown`), and the worst current effective insertion-loss reading with wavelength and saved-limit verdict. `truncated` reports more than 100 eligible rows; `incomplete` reports any bounded source or follow-up overflow.
+
 ## Errors
 
 `ErrorResponse` wraps `{error: {code: string, message: string, details: ErrorDetail[]}}`; details contain only `{field: string, code: string}`. Example invalid `limit=0`:

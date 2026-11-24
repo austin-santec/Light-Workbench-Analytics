@@ -16,6 +16,7 @@ from app.reporting.channel_activity import (
     WeeklyOutcomeBoundaries,
 )
 from app.reporting.console_guard import StatementRejected, validate_console_statement
+from app.reporting.first_observations import FIRST_OBSERVATION_CTES
 from app.reporting.models import (
     ChannelActivityCounts,
     ChannelActivityMetrics,
@@ -32,6 +33,7 @@ from app.reporting.models import (
     FailureConcentrationQuery,
     FailureRateCounts,
     FailureRateMetrics,
+    RecentFinishedUnitsQuery,
     RecommendationUsageMetrics,
     RecommendationUsageQuery,
     ReplacementActivityCounts,
@@ -53,6 +55,10 @@ from app.reporting.models import (
     UnitOutcomesWeeklyQuery,
     UnitStatusQuery,
     UnitTestTimeQuery,
+)
+from app.reporting.recent_finished_units import (
+    RecentFinishedUnitsMetrics,
+    read_recent_finished_units,
 )
 from app.reporting.recommendation_usage import read_recommendation_usage
 from app.reporting.schema import (
@@ -331,37 +337,6 @@ candidate_runs AS (
         r.limit_snapshot_json, r.front_panel_channel_count
     ORDER BY r.run_id
 )
-"""
-
-
-FIRST_OBSERVATION_CTES = """ranked_observations AS (
-    SELECT m.run_id, m.logical_channel, m.measurement_id,
-        m.wavelength_1_il_db, m.wavelength_2_il_db, m.written_at_utc,
-        ROW_NUMBER() OVER (
-            PARTITION BY m.run_id, m.logical_channel
-            ORDER BY m.written_at_utc, m.measurement_id
-        ) AS observation_rank
-    FROM candidate_runs AS r
-    JOIN dbo.IL_MEASUREMENTS AS m ON m.run_id = r.run_id
-    WHERE m.measurement_role = 'logical_channel'
-        AND m.logical_channel >= 1
-        AND m.logical_channel <= r.front_panel_channel_count
-),
-first_observations AS (
-    SELECT run_id, logical_channel, measurement_id,
-        wavelength_1_il_db, wavelength_2_il_db, written_at_utc
-    FROM ranked_observations
-    WHERE observation_rank = 1
-),
-parsed_runs AS (
-    SELECT r.run_id,
-        TRY_CONVERT(DECIMAL(9,4), JSON_VALUE(
-            CASE WHEN ISJSON(r.limit_snapshot_json) = 1
-                THEN r.limit_snapshot_json ELSE NULL END,
-            '$.fail_above_db'
-        )) AS sql_fail_limit
-    FROM candidate_runs AS r
-),
 """
 
 
@@ -1526,6 +1501,9 @@ class ReportingRepository(Protocol):
     def get_unit_test_time(
         self, query: UnitTestTimeQuery, boundaries: ChannelActivityBoundaries
     ) -> UnitTestTimeMetrics: ...
+    def get_recent_finished_units(
+        self, query: RecentFinishedUnitsQuery, boundaries: ChannelActivityBoundaries
+    ) -> RecentFinishedUnitsMetrics: ...
     def get_unit_outcomes_weekly(
         self, query: UnitOutcomesWeeklyQuery, boundaries: WeeklyOutcomeBoundaries
     ) -> UnitOutcomesWeeklyMetrics: ...
@@ -1729,6 +1707,20 @@ class SqlServerReportingRepository:
         with self._adapter.cursor() as cursor:
             self._preflight(cursor)
             return read_unit_test_time(cursor, query, boundaries.periods[query.period])
+
+    def get_recent_finished_units(
+        self, query: RecentFinishedUnitsQuery, boundaries: ChannelActivityBoundaries
+    ) -> RecentFinishedUnitsMetrics:
+        query = RecentFinishedUnitsQuery.model_validate(query.model_dump())
+        with self._adapter.cursor() as cursor:
+            self._preflight(cursor)
+            return read_recent_finished_units(
+                cursor,
+                query,
+                boundaries.periods[query.period],
+                validated_failure_limits=_validated_failure_limits,
+                normalized_sql_limit=_normalized_sql_limit,
+            )
 
     def get_unit_outcomes_weekly(
         self, query: UnitOutcomesWeeklyQuery, boundaries: WeeklyOutcomeBoundaries

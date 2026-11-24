@@ -471,6 +471,7 @@ def test_openapi_matches_error_and_query_contracts(client):
         "/api/v1/reporting/failure-concentration",
         "/api/v1/reporting/failure-rate",
         "/api/v1/reporting/recommendation-usage",
+        "/api/v1/reporting/recent-finished-units",
         "/api/v1/reporting/replacement-activity",
         "/api/v1/reporting/station-summary",
         "/api/v1/reporting/test-time-by-configuration",
@@ -538,6 +539,14 @@ def test_openapi_matches_error_and_query_contracts(client):
         "purpose",
     }
     assert unit_test_time["responses"]["503"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/ReportingFailureResponse"
+    }
+    recent_finished = spec["paths"]["/api/v1/reporting/recent-finished-units"]["get"]
+    assert {parameter["name"] for parameter in recent_finished["parameters"]} == {
+        "period",
+        "purpose",
+    }
+    assert recent_finished["responses"]["503"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/ReportingFailureResponse"
     }
     unit_outcomes = spec["paths"]["/api/v1/reporting/unit-outcomes-weekly"]["get"]

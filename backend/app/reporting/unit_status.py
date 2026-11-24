@@ -224,6 +224,9 @@ class UnitStatusProjection:
     failing_channels: tuple[FailingChannel, ...]
     latest_analysis: AnalysisSummary | None
     review_reasons: tuple[str, ...]
+    wavelength_mode: str | None = None
+    effective_readings: tuple[ProjectionMeasurement, ...] = ()
+    fail_limit: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -531,6 +534,9 @@ def project_unit_status(
         failing_channels=tuple(sorted(failing_channels, key=lambda item: item.logical_channel)),
         latest_analysis=analysis,
         review_reasons=tuple(dict.fromkeys(review)),
+        wavelength_mode=context.wavelength_mode,
+        effective_readings=tuple(effective_readings),
+        fail_limit=None if context.limits is None else context.limits["fail_above_db"],
     )
 
 
