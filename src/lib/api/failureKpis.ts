@@ -9,6 +9,8 @@ export interface FailureKpiUnits {
   unrecoverable: number;
   replacement_units: number;
   replaced_channels: number;
+  first_pass: number;
+  first_pass_unknown: number;
 }
 
 export interface FailureKpisConnectedResponse {
@@ -39,7 +41,7 @@ const nonnegativeInteger = (value: unknown): value is number => Number.isInteger
 const utcTimestamp = (value: unknown): value is string => typeof value === 'string'
   && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/.test(value)
   && Number.isFinite(Date.parse(value));
-const UNIT_KEYS = ['finished', 'passed_no_replacement', 'passed_after_replacement', 'unrecoverable', 'replacement_units', 'replaced_channels'] as const;
+const UNIT_KEYS = ['finished', 'passed_no_replacement', 'passed_after_replacement', 'unrecoverable', 'replacement_units', 'replaced_channels', 'first_pass', 'first_pass_unknown'] as const;
 
 function validPurposes(value: unknown): value is Purpose[] {
   return Array.isArray(value) && value.length >= 1 && value.length <= RUN_PURPOSES.length
@@ -54,7 +56,9 @@ function validUnits(value: unknown): value is FailureKpiUnits {
     && units.replacement_units >= units.passed_after_replacement
     && units.replacement_units <= units.passed_after_replacement + units.unrecoverable
     && units.replaced_channels >= units.replacement_units
-    && (units.replaced_channels === 0) === (units.replacement_units === 0);
+    && (units.replaced_channels === 0) === (units.replacement_units === 0)
+    && units.first_pass + units.first_pass_unknown <= units.finished - units.replacement_units
+    && units.first_pass <= units.passed_no_replacement + units.unrecoverable;
 }
 
 export function isFailureKpisConnectedResponse(value: unknown): value is FailureKpisConnectedResponse {
@@ -128,6 +132,12 @@ export interface FailureKpiTile {
   pct: number;
   bar: string;
   color: string;
+}
+
+// First-pass proxy: no failed first reading and no replacement; unknown-criteria units are left out of N and D.
+export function firstPassYield(units: FailureKpiUnits): number | null {
+  const denominator = units.finished - units.first_pass_unknown;
+  return denominator === 0 ? null : units.first_pass / denominator;
 }
 
 const count = (value: number) => value.toLocaleString('en-US');

@@ -1858,7 +1858,13 @@ class SqlServerReportingRepository:
         query = FailureKpisQuery.model_validate(query.model_dump())
         with self._adapter.cursor() as cursor:
             self._preflight(cursor)
-            return read_failure_kpis(cursor, query, boundaries.periods[query.period])
+            return read_failure_kpis(
+                cursor,
+                query,
+                boundaries.periods[query.period],
+                validated_failure_limits=_validated_failure_limits,
+                normalized_sql_limit=_normalized_sql_limit,
+            )
 
     def get_replacement_activity(
         self, query: ReplacementActivityQuery, boundaries: ChannelActivityBoundaries

@@ -16,6 +16,7 @@ from app.reporting.recent_finished_units import (
     RecentFinishedUnit,
     RecentFinishedUnitsMetrics,
     build_recent_finished_unit_queries,
+    read_first_observation_failure_counts,
     read_recent_finished_units,
     summarize_recent_finished_units,
 )
@@ -145,6 +146,42 @@ def test_unknown_criteria_sets_null_and_flag_and_bad_rows_fail_closed():
     assert result.units[0].failed_unknown is True
     with pytest.raises(ReportingError, match="schema_incompatible"):
         summarize((record(1),), failures=((1, 10),))
+
+
+class FailureRowsCursor:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def execute(self, *_args):
+        return self
+
+    def fetchmany(self, _size):
+        return self.rows
+
+
+def test_shared_failure_follow_up_marks_row_and_criteria_caps_incomplete(monkeypatch):
+    rows = (
+        failure(1, 10, 1, "1", "1"),
+        failure(2, 20, 1, "1", "1"),
+    )
+    monkeypatch.setattr("app.reporting.recent_finished_units.RECENT_FAILURE_ROW_CAP", 1)
+    counts, incomplete = read_first_observation_failure_counts(
+        FailureRowsCursor(rows),
+        (1, 2),
+        ("production",),
+        validated_failure_limits=_validated_failure_limits,
+        normalized_sql_limit=_normalized_sql_limit,
+    )
+    assert counts == {1: 0, 2: 0} and incomplete is True
+
+    counts, incomplete = read_first_observation_failure_counts(
+        FailureRowsCursor(rows[:1]),
+        (1,),
+        ("production",),
+        validated_failure_limits=lambda _rows: ({}, True),
+        normalized_sql_limit=_normalized_sql_limit,
+    )
+    assert counts == {1: None} and incomplete is True
 
 
 def test_unfinished_open_and_outside_period_records_are_not_listed():

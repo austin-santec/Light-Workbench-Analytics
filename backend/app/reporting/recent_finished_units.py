@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -158,6 +158,12 @@ def build_replacement_query(unit_ids: Sequence[int]) -> tuple[str, tuple]:
     return _id_query(_REPLACEMENTS_SQL, unit_ids)
 
 
+def build_first_observation_failure_query(
+    unit_ids: Sequence[int], purposes: Sequence[str]
+) -> tuple[str, tuple]:
+    return _id_query(_FAILURES_SQL, unit_ids, purposes)
+
+
 def _failure_counts(
     rows: Sequence[Sequence[object]],
     unit_ids: set[int],
@@ -184,7 +190,7 @@ def _failure_counts(
     failures: dict[int, set[int]] = {unit_id: set() for unit_id in unit_ids}
     for unit_id, run_id, raw_sql_limit, _snapshot, logical, loss_1, loss_2 in parsed:
         sql_limit = normalized_sql_limit(raw_sql_limit)
-        limit = limits[run_id]
+        limit = limits.get(run_id)
         if limit is None or sql_limit != limit:
             unknown_units.add(unit_id)
             continue
@@ -207,6 +213,26 @@ def _failure_counts(
     )
 
 
+def read_first_observation_failure_counts(
+    cursor,
+    unit_ids: Sequence[int],
+    purposes: Sequence[str],
+    *,
+    validated_failure_limits: Callable[[list[tuple]], tuple[dict[int, Decimal | None], bool]],
+    normalized_sql_limit: Callable[[object], Decimal | None],
+) -> tuple[dict[int, int | None], bool]:
+    failure_query = build_first_observation_failure_query(unit_ids, purposes)
+    rows = cursor.execute(*failure_query).fetchmany(RECENT_FAILURE_ROW_CAP + 1)
+    overflow = len(rows) > RECENT_FAILURE_ROW_CAP
+    counts, limits_incomplete = _failure_counts(
+        rows[:RECENT_FAILURE_ROW_CAP],
+        set(unit_ids),
+        validated_failure_limits,
+        normalized_sql_limit,
+    )
+    return counts, overflow or limits_incomplete
+
+
 def summarize_recent_finished_units(
     records: Sequence[FinishedUnitRecord],
     station_rows: Sequence[Sequence[object]],
@@ -217,6 +243,7 @@ def summarize_recent_finished_units(
     failure_overflow: bool,
     validated_failure_limits: Callable[[list[tuple]], tuple[dict[int, Decimal | None], bool]],
     normalized_sql_limit: Callable[[object], Decimal | None],
+    failure_counts: Mapping[int, int | None] | None = None,
 ) -> RecentFinishedUnitsMetrics:
     eligible = eligible_finished_records(records)
     ordered = sorted(eligible, key=lambda item: (-item.finished_at_utc.timestamp(), item.unit_id))
@@ -232,9 +259,15 @@ def summarize_recent_finished_units(
             raise ReportingError("schema_incompatible")
         stations[unit_id] = _optional_station(row[1])
     replacements = replacement_counts(replacement_rows, unit_ids)
-    failures, limits_incomplete = _failure_counts(
-        failure_rows, unit_ids, validated_failure_limits, normalized_sql_limit
-    )
+    if failure_counts is None:
+        failures, limits_incomplete = _failure_counts(
+            failure_rows, unit_ids, validated_failure_limits, normalized_sql_limit
+        )
+    else:
+        if set(failure_counts) != unit_ids:
+            raise ReportingError("schema_incompatible")
+        failures = dict(failure_counts)
+        limits_incomplete = False
     units: list[RecentFinishedUnit] = []
     for record in listed:
         if record.switch_model is None or record.wavelength_mode not in {"SM", "MM"}:
@@ -302,11 +335,17 @@ def read_recent_finished_units(
     if not listed:
         return RecentFinishedUnitsMetrics((), False, cohort.incomplete)
     unit_ids = tuple(record.unit_id for record in listed)
-    station_query, failure_query, replacement_query = build_recent_finished_unit_queries(
+    station_query, _failure_query, replacement_query = build_recent_finished_unit_queries(
         unit_ids, tuple(purpose.value for purpose in query.purposes)
     )
     station_rows = cursor.execute(*station_query).fetchmany(UNIT_STATUS_COHORT_CAP + 1)
-    failure_rows = cursor.execute(*failure_query).fetchmany(RECENT_FAILURE_ROW_CAP + 1)
+    failures, failure_incomplete = read_first_observation_failure_counts(
+        cursor,
+        unit_ids,
+        tuple(purpose.value for purpose in query.purposes),
+        validated_failure_limits=validated_failure_limits,
+        normalized_sql_limit=normalized_sql_limit,
+    )
     replacement_rows = cursor.execute(*replacement_query).fetchmany(UNIT_STATUS_COHORT_CAP + 1)
     follow_up_incomplete = (
         len(station_rows) > UNIT_STATUS_COHORT_CAP or len(replacement_rows) > UNIT_STATUS_COHORT_CAP
@@ -314,10 +353,11 @@ def read_recent_finished_units(
     return summarize_recent_finished_units(
         cohort.records,
         station_rows[:UNIT_STATUS_COHORT_CAP],
-        failure_rows[:RECENT_FAILURE_ROW_CAP],
+        (),
         replacement_rows[:UNIT_STATUS_COHORT_CAP],
         incomplete=cohort.incomplete or follow_up_incomplete,
-        failure_overflow=len(failure_rows) > RECENT_FAILURE_ROW_CAP,
+        failure_overflow=failure_incomplete,
         validated_failure_limits=validated_failure_limits,
         normalized_sql_limit=normalized_sql_limit,
+        failure_counts=failures,
     )

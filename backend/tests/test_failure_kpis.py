@@ -24,14 +24,22 @@ from app.reporting.models import (
     FailureKpisQuery,
     FailureKpiUnitCounts,
 )
-from app.reporting.recent_finished_units import build_replacement_query
-from app.reporting.repository import STATION_SUMMARY_SQL, summarize_station_summary
+from app.reporting.recent_finished_units import (
+    build_first_observation_failure_query,
+    build_replacement_query,
+)
+from app.reporting.repository import (
+    STATION_SUMMARY_SQL,
+    _normalized_sql_limit,
+    _validated_failure_limits,
+    summarize_station_summary,
+)
 from app.reporting.unit_test_time import (
     UNIT_TEST_TIME_COHORT_SQL,
     FinishedUnitCohort,
     FinishedUnitRecord,
 )
-from app.schemas import FailureKpisConnectedResponse
+from app.schemas import FailureKpisConnectedResponse, FailureKpiUnitsResponse
 
 EXTRACTED_AT = datetime(2026, 11, 24, 17, tzinfo=UTC)
 
@@ -101,15 +109,27 @@ def test_sql_is_bound_read_only_and_preserves_shared_statement_hashes():
     assert hashlib.sha256(replacement_sql.encode()).hexdigest() == (
         "25061e9ba764d6e1cd35d29a38f552d5cc27f1a5c3a5c42d3153021a2dd9d948"
     )
+    failure_sql, failure_params = build_first_observation_failure_query(
+        (10, 11), ("production", "engineering")
+    )
+    assert failure_params == (10, 11, "production", "engineering", "production", "production")
+    assert hashlib.sha256(failure_sql.encode()).hexdigest() == (
+        "bbe08f6996a77735951a6d7abe577a1b33e95623ceaf21c1f93f6f8225239cd1"
+    )
 
 
 def test_outcomes_include_missing_duration_exclude_open_and_count_all_over_100():
     records = [record(index, missing=index == 1) for index in range(1, 103)]
     records += [record(200, outcome="unrecoverable"), record(201, outcome="unrecoverable")]
     records += [record(300, exclusion="run_in_progress"), record(301, outside=True)]
+    failures = {item.unit_id: 0 for item in records if item.unit_id not in {300, 301}}
+    failures[1] = None  # A replacement means unknown criteria does not enter either proxy count.
+    failures[3] = 1  # A later passing retest does not erase a failed first reading.
+    failures[4] = None
     result = summarize_failure_kpis(
         records,
         ((1, 3), (2, 2), (200, 1)),
+        failures,
         (7, 560, 41),
         incomplete=False,
     )
@@ -120,6 +140,8 @@ def test_outcomes_include_missing_duration_exclude_open_and_count_all_over_100()
         "unrecoverable": 2,
         "replacement_units": 3,
         "replaced_channels": 6,
+        "first_pass": 99,
+        "first_pass_unknown": 1,
     }
     assert result.retest.model_dump() == {
         "active_run_channels": 560,
@@ -128,22 +150,57 @@ def test_outcomes_include_missing_duration_exclude_open_and_count_all_over_100()
     assert result.incomplete is False
 
 
+@pytest.mark.parametrize(
+    ("outcome", "replacement_rows", "failed", "expected"),
+    (
+        ("passed", (), 0, (1, 0)),
+        ("passed", (), 1, (0, 0)),
+        ("passed", ((1, 1),), 0, (0, 0)),
+        ("passed", (), None, (0, 1)),
+        ("passed", ((1, 1),), None, (0, 0)),
+        ("unrecoverable", (), 0, (1, 0)),
+    ),
+)
+def test_first_pass_proxy_classification(outcome, replacement_rows, failed, expected):
+    result = summarize_failure_kpis(
+        (record(1, outcome=outcome),),
+        replacement_rows,
+        {1: failed},
+        (0, 0, 0),
+        incomplete=False,
+    )
+    assert (result.units.first_pass, result.units.first_pass_unknown) == expected
+
+
 def test_empty_overflow_and_invalid_invariants_fail_closed():
-    empty = summarize_failure_kpis((), (), (0, 0, 0), incomplete=False)
+    empty = summarize_failure_kpis((), (), {}, (0, 0, 0), incomplete=False)
     assert empty.units.finished == 0 and empty.retest.active_run_channels == 0
-    overflow = summarize_failure_kpis((), (), (FAILURE_KPI_RUN_CAP + 1, 0, 0), incomplete=True)
+    overflow = summarize_failure_kpis((), (), {}, (FAILURE_KPI_RUN_CAP + 1, 0, 0), incomplete=True)
     assert overflow.incomplete is True
     with pytest.raises(ReportingError, match="schema_incompatible"):
-        summarize_failure_kpis((), (), (0, 1, 2), incomplete=False)
-    with pytest.raises(ValidationError):
-        FailureKpiUnitCounts(
-            finished=1,
-            passed_no_replacement=1,
-            passed_after_replacement=0,
-            unrecoverable=0,
-            replacement_units=1,
-            replaced_channels=1,
-        )
+        summarize_failure_kpis((), (), {}, (0, 1, 2), incomplete=False)
+    base = {
+        "finished": 2,
+        "passed_no_replacement": 1,
+        "passed_after_replacement": 1,
+        "unrecoverable": 0,
+        "replacement_units": 1,
+        "replaced_channels": 1,
+        "first_pass": 1,
+        "first_pass_unknown": 0,
+    }
+    for invalid in (
+        base | {"first_pass_unknown": 1},
+        base
+        | {
+            "passed_no_replacement": 0,
+            "unrecoverable": 1,
+            "first_pass": 2,
+        },
+    ):
+        for model in (FailureKpiUnitCounts, FailureKpiUnitsResponse):
+            with pytest.raises(ValidationError):
+                model(**invalid)
 
 
 class Result:
@@ -180,11 +237,50 @@ def test_cohort_or_follow_up_overflow_sets_incomplete(
     )
     if follow_up_overflow:
         monkeypatch.setattr("app.reporting.failure_kpis.UNIT_STATUS_COHORT_CAP", 1)
+    monkeypatch.setattr(
+        "app.reporting.failure_kpis.read_first_observation_failure_counts",
+        lambda *args, **kwargs: ({item.unit_id: 0 for item in records}, follow_up_overflow),
+    )
     rows = [(1, 1), (2, 1)] if follow_up_overflow else []
     cursor = Cursor(rows, (0, 0, 0))
     window = compute_channel_activity_boundaries(EXTRACTED_AT).periods["last_30_days"]
-    result = read_failure_kpis(cursor, FailureKpisQuery(), window)
+    result = read_failure_kpis(
+        cursor,
+        FailureKpisQuery(),
+        window,
+        validated_failure_limits=_validated_failure_limits,
+        normalized_sql_limit=_normalized_sql_limit,
+    )
     assert result.incomplete is True
+
+
+def test_read_counts_every_eligible_unit_before_recent_display_cap(monkeypatch):
+    records = tuple(record(index) for index in range(1, 102))
+    monkeypatch.setattr(
+        "app.reporting.failure_kpis.read_finished_unit_cohort",
+        lambda cursor, query, window: FinishedUnitCohort(records, False),
+    )
+    captured = []
+
+    def failures(_cursor, unit_ids, purposes, **_kwargs):
+        captured.append((unit_ids, purposes))
+        return {unit_id: 0 for unit_id in unit_ids}, False
+
+    monkeypatch.setattr(
+        "app.reporting.failure_kpis.read_first_observation_failure_counts", failures
+    )
+    cursor = Cursor([], (0, 0, 0))
+    window = compute_channel_activity_boundaries(EXTRACTED_AT).periods["last_30_days"]
+    result = read_failure_kpis(
+        cursor,
+        FailureKpisQuery(),
+        window,
+        validated_failure_limits=_validated_failure_limits,
+        normalized_sql_limit=_normalized_sql_limit,
+    )
+    assert len(captured[0][0]) == 101
+    assert captured[0][1] == ("production",)
+    assert result.units.first_pass == 101
 
 
 def test_retest_window_semantics_and_station_total_equality():
@@ -217,6 +313,7 @@ def test_retest_window_semantics_and_station_total_equality():
     kpis = summarize_failure_kpis(
         (),
         (),
+        {},
         (1, station.totals.active_run_channels, station.totals.retested_run_channels),
         incomplete=station.incomplete,
     )
@@ -246,6 +343,8 @@ def connected_metrics():
             unrecoverable=0,
             replacement_units=1,
             replaced_channels=3,
+            first_pass=4,
+            first_pass_unknown=0,
         ),
         retest=FailureKpiRetestCounts(active_run_channels=560, retested_run_channels=41),
         incomplete=False,

@@ -646,6 +646,8 @@ class FailureKpiUnitsResponse(BaseModel):
     unrecoverable: int = Field(ge=0)
     replacement_units: int = Field(ge=0)
     replaced_channels: int = Field(ge=0)
+    first_pass: int = Field(ge=0)
+    first_pass_unknown: int = Field(ge=0)
 
     @model_validator(mode="after")
     def valid_counts(self) -> Self:
@@ -658,6 +660,10 @@ class FailureKpiUnitsResponse(BaseModel):
             raise ValueError("Replaced channels must cover replacement units")
         if (self.replaced_channels == 0) != (self.replacement_units == 0):
             raise ValueError("Replacement units and channels must both be zero or nonzero")
+        if self.first_pass + self.first_pass_unknown > self.finished - self.replacement_units:
+            raise ValueError("First-pass counts must be units without replacements")
+        if self.first_pass > self.passed_no_replacement + self.unrecoverable:
+            raise ValueError("First-pass count is inconsistent with outcomes")
         return self
 
 

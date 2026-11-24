@@ -31,6 +31,7 @@ import { loadStationSummary, stationTableRows, type StationSummaryConnectedRespo
 import { UNIT_STATUS_LABEL, UNIT_STATUS_OUTCOME_COLOR, UNIT_STATUS_OUTCOME_ORDER } from '../lib/unitStatusPresentation';
 import { loadUnitTestTime, summarizeUnitTestTime, UNIT_TEST_TIME_EXCLUDED_KEYS, type UnitTestTimeConnectedResponse, type UnitTestTimeOutcomeFilter } from '../lib/api/unitTestTime';
 import { loadRecentFinishedUnits, type RecentFinishedUnitsConnectedResponse } from '../lib/api/recentFinishedUnits';
+import { firstPassYield, loadFailureKpis, type FailureKpisConnectedResponse } from '../lib/api/failureKpis';
 import { loadFailureWavelengths, wavelengthBars, wavelengthShare, type FailureWavelengthsConnectedResponse } from '../lib/api/failureWavelengths';
 
 type ChannelActivityState =
@@ -234,6 +235,7 @@ export default function Overview() {
  const [kpiUnitTestTime, setKpiUnitTestTime] = useState<UnitTestTimeState>({ kind: 'loading' });
  const [channelFailures, setChannelFailures] = useState<ChannelFailuresState>({ kind: 'loading' });
  const [failureWavelengths, setFailureWavelengths] = useState<FailureWavelengthsState>({ kind: 'loading' });
+ const [firstPassKpis, setFirstPassKpis] = useState<FailureKpisConnectedResponse | null>(null);
  const [channelFailuresRefresh, setChannelFailuresRefresh] = useState(0);
  const [stationSummary, setStationSummary] = useState<StationSummaryState>({ kind: 'loading' });
  const [stationRefresh, setStationRefresh] = useState(0);
@@ -295,6 +297,13 @@ export default function Overview() {
  }, [channelFailuresRefresh, purposeKey, selectedPurposes, state.range]);
  useEffect(() => {
    const controller = new AbortController();
+   loadFailureKpis(PERIOD_FOR_RANGE[state.range], selectedPurposes, controller.signal)
+     .then(result => setFirstPassKpis(result.data_source === 'test_database' ? result : null))
+     .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setFirstPassKpis(null); });
+   return () => controller.abort();
+ }, [purposeKey, selectedPurposes, state.range]);
+ useEffect(() => {
+   const controller = new AbortController();
    loadFailureWavelengths(PERIOD_FOR_RANGE[state.range], selectedPurposes, controller.signal)
      .then(result => setFailureWavelengths(result.data_source === 'test_database' ? { kind: 'connected', data: result } : { kind: 'demo' }))
      .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setFailureWavelengths({ kind: 'error' }); });
@@ -320,6 +329,10 @@ export default function Overview() {
    && failureWavelengths.data.period.key === PERIOD_FOR_RANGE[state.range]
    && failureWavelengths.data.filters.purpose.join(',') === purposeKey
    ? failureWavelengths.data : null;
+ const liveFirstPass = firstPassKpis
+   && firstPassKpis.period.key === PERIOD_FOR_RANGE[state.range]
+   && firstPassKpis.filters.purpose.join(',') === purposeKey
+   ? firstPassKpis : null;
  const liveWavelengthBars = useMemo(() => liveWavelengths ? wavelengthBars(liveWavelengths) : [], [liveWavelengths]);
  const liveUnitTestTime = unitTestTime.kind === 'connected' ? unitTestTime.data : null;
  const liveKpiUnitTestTime = kpiUnitTestTime.kind === 'connected'
@@ -447,10 +460,12 @@ export default function Overview() {
       {kpis.map((demoKpi, index2) => {
         const isLiveChannel = index2 === 0 && livePeriod && liveSpark;
         const isLiveCompleted = index2 === 1 && liveKpiUnitTestTime;
+        const isLiveYield = index2 === 2 && liveFirstPass;
+        const liveYield = liveFirstPass ? firstPassYield(liveFirstPass.units) : null;
         const isLiveFailure = index2 === 3 && liveFailurePeriod && liveFailureSpark;
         const isLiveAverage = index2 === 4 && liveKpiUnitTestTime && liveKpiUnitTestTimeSummary;
         const isLiveUnit = index2 === 5 && liveUnitData;
-        const isLiveTile = Boolean(isLiveChannel || isLiveCompleted || isLiveFailure || isLiveAverage || isLiveUnit);
+        const isLiveTile = Boolean(isLiveChannel || isLiveCompleted || isLiveYield || isLiveFailure || isLiveAverage || isLiveUnit);
         const finishedTotal = liveKpiUnitTestTime ? liveKpiUnitTestTime.finished.passed + liveKpiUnitTestTime.finished.unrecoverable : 0;
         const missingDuration = liveKpiUnitTestTime ? finishedTotal - liveKpiUnitTestTime.units.length : 0;
         const k = isLiveChannel ? {
@@ -465,6 +480,14 @@ export default function Overview() {
           value: finishedTotal.toLocaleString('en-US'),
           delta: '',
           sub: `${liveKpiUnitTestTime.finished.passed.toLocaleString('en-US')} passed · ${liveKpiUnitTestTime.finished.unrecoverable.toLocaleString('en-US')} unrecoverable`,
+          line: '',
+          area: '',
+        } : isLiveYield ? {
+          ...demoKpi,
+          label: 'First-pass yield (proxy)',
+          value: liveYield === null ? '—' : `${(liveYield * 100).toFixed(1)}%`,
+          delta: '',
+          sub: `${liveFirstPass.units.first_pass.toLocaleString('en-US')} of ${liveFirstPass.units.finished.toLocaleString('en-US')} finished ${liveFirstPass.units.finished === 1 ? 'unit' : 'units'}, no failed first reading or replacement${liveFirstPass.units.first_pass_unknown > 0 ? ` · ${liveFirstPass.units.first_pass_unknown.toLocaleString('en-US')} unknown` : ''}`,
           line: '',
           area: '',
         } : isLiveFailure ? {
@@ -494,13 +517,13 @@ export default function Overview() {
         return <Fragment key={index2}>
         <div style={css("background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 16px 12px;display:flex;flex-direction:column;gap:6px;min-width:0")}>
           <span style={css("display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:4px 8px;font-size:12.5px;color:var(--muted);font-weight:500")}>
-            <span title={isLiveUnit ? 'Current measured status; this is not a scrap or reject record.' : undefined}>{k.label}</span>
+            <span title={isLiveUnit ? 'Current measured status; this is not a scrap or reject record.' : isLiveYield ? 'Proxy: strict first-pass yield needs a recorded first manufacturing test.' : undefined}>{k.label}</span>
             <span title={isLiveUnit ? 'Current measured status; this is not a scrap or reject record.' : undefined} style={css(isLiveTile
               ? "white-space:nowrap;font-size:10px;font-weight:650;letter-spacing:.04em;text-transform:uppercase;padding:3px 7px;border-radius:999px;background:color-mix(in srgb,var(--accent) 10%,var(--panel));color:var(--accent-ink)"
               : "white-space:nowrap;font-size:10px;font-weight:650;letter-spacing:.04em;text-transform:uppercase;padding:3px 7px;border-radius:999px;background:var(--panel2);color:var(--muted)")}>{isLiveTile ? 'Live · test database' : 'Demo'}</span>
           </span>
           {isLiveChannel && <span style={css("font-size:10.5px;color:var(--muted)")}>Channels with test activity · {includedPurposes}</span>}
-          {(isLiveCompleted || isLiveAverage) && <span style={css("font-size:10.5px;color:var(--muted)")}>Finished units · {includedPurposes}</span>}
+          {(isLiveCompleted || isLiveAverage || isLiveYield) && <span style={css("font-size:10.5px;color:var(--muted)")}>Finished units · {includedPurposes}</span>}
           {isLiveFailure && <span style={css("font-size:10.5px;color:var(--muted)")}>First observation per run-channel · {includedPurposes}</span>}
           <div style={css("display:flex;align-items:baseline;gap:8px;flex-wrap:wrap")}>
             <span style={css("font-size:30px;line-height:1.05;font-weight:650;letter-spacing:-0.025em;font-variant-numeric:tabular-nums;color:" + String(k.valueColor))}>{k.value}</span>
@@ -508,13 +531,14 @@ export default function Overview() {
           </div>
           <span style={css("font-size:12px;color:var(--muted);min-height:17px")}>{k.sub}</span>
           {isLiveCompleted && <span style={css("font-size:11px;color:var(--muted)")}>Not a final manufacturing disposition.</span>}
+          {isLiveYield && liveFirstPass.incomplete && <span style={css("font-size:11px;color:var(--warn-fg)")}>Bounded cohort is incomplete.</span>}
           {isLiveCompleted && liveKpiUnitTestTime.incomplete && <span style={css("font-size:11px;color:var(--warn-fg)")}>Bounded cohort is incomplete.</span>}
           {isLiveAverage && missingDuration > 0 && <span style={css("font-size:11px;color:var(--muted)")}>{missingDuration.toLocaleString('en-US')} finished without a known duration, not averaged.</span>}
           {isLiveFailure && liveFailurePeriod.unknown_criteria > 0 && <span style={css("font-size:11px;color:var(--warn-fg)")}>{liveFailurePeriod.unknown_criteria.toLocaleString('en-US')} first observations excluded: unknown criteria</span>}
           {isLiveUnit && <span style={css("font-size:11px;color:var(--ink2)")}>+ {liveUnitData.counts.failing_needs_analysis.toLocaleString('en-US')} need analysis · {liveUnitData.counts.failing_recovery_available.toLocaleString('en-US')} recovery available</span>}
           {isLiveUnit && liveUnitData.incomplete && <span style={css("font-size:11px;color:var(--warn-fg)")}>Bounded cohort is incomplete.</span>}
           {isLiveUnit && <button type="button" onClick={() => setUnitStatusRefresh(value => value + 1)} style={css("align-self:flex-start;min-height:28px;padding:0 8px;border-radius:6px;border:1px solid var(--line);background:var(--panel);color:var(--ink2);font-size:10.5px;font-weight:600")}>Refresh unit status</button>}
-          {!isLiveUnit && !isLiveCompleted && !isLiveAverage && <svg viewBox="0 0 160 34" preserveAspectRatio="none" aria-hidden="true" style={css("width:100%;height:30px;display:block;margin-top:2px")}>
+          {!isLiveUnit && !isLiveCompleted && !isLiveAverage && !isLiveYield && <svg viewBox="0 0 160 34" preserveAspectRatio="none" aria-hidden="true" style={css("width:100%;height:30px;display:block;margin-top:2px")}>
             {!isLiveFailure && <path d={k.area} style={css("fill:" + String(accent) + ";fill-opacity:0.08;stroke:none")}></path>}
             {!isLiveFailure && <polyline points={k.line} vectorEffect="non-scaling-stroke" style={css("fill:none;stroke:" + String(accent) + ";stroke-width:1.6;stroke-linejoin:round;stroke-linecap:round")}></polyline>}
             {isLiveFailure && liveFailureSpark.segments.map((path, index) => <path key={index} d={path} vectorEffect="non-scaling-stroke" style={css("fill:none;stroke:" + String(accent) + ";stroke-width:1.6;stroke-linejoin:round;stroke-linecap:round")} />)}

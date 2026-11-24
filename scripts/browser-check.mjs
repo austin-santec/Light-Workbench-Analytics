@@ -475,10 +475,10 @@ const failureKpisFixture = url => {
   };
   const [start_utc, end_utc, partial] = windows[period];
   const units = failureKpisMode === 'zero'
-    ? { finished: 0, passed_no_replacement: 0, passed_after_replacement: 0, unrecoverable: 0, replacement_units: 0, replaced_channels: 0 }
+    ? { finished: 0, passed_no_replacement: 0, passed_after_replacement: 0, unrecoverable: 0, replacement_units: 0, replaced_channels: 0, first_pass: 0, first_pass_unknown: 0 }
     : period === 'last_30_days'
-      ? { finished: 8, passed_no_replacement: 5, passed_after_replacement: 3, unrecoverable: 0, replacement_units: 3, replaced_channels: 7 }
-      : { finished: 4, passed_no_replacement: 2, passed_after_replacement: 1, unrecoverable: 1, replacement_units: 2, replaced_channels: 5 };
+      ? { finished: 8, passed_no_replacement: 5, passed_after_replacement: 3, unrecoverable: 0, replacement_units: 3, replaced_channels: 7, first_pass: 4, first_pass_unknown: 0 }
+      : { finished: 4, passed_no_replacement: 2, passed_after_replacement: 1, unrecoverable: 1, replacement_units: 2, replaced_channels: 5, first_pass: 1, first_pass_unknown: 1 };
   return {
     data_source: 'test_database', tls: 'encrypted_unverified', extracted_at_utc: '2026-11-13T20:00:00Z', timezone: 'America/Los_Angeles',
     period: { key: period, start_utc, end_utc, partial }, filters: { purpose: purposes }, units,
@@ -1004,7 +1004,19 @@ try {
   await averageKpi.getByText('55m 00s', { exact: true }).waitFor();
   await assertText(averageKpi, '4 finished units · Small Sample');
   await assertText(averageKpi, '1 finished without a known duration, not averaged.');
-  await kpiTile('First-pass yield').getByText('Demo', { exact: true }).waitFor();
+  const yieldKpi = kpiTile('First-pass yield (proxy)');
+  await yieldKpi.getByText('33.3%', { exact: true }).waitFor();
+  await assertText(yieldKpi, '1 of 4 finished units, no failed first reading or replacement · 1 unknown');
+  assert.equal(await yieldKpi.getByText('Demo', { exact: true }).count(), 0);
+  assert.equal(await yieldKpi.locator('svg').count(), 0);
+  assert.equal(await yieldKpi.getByText('First-pass yield (proxy)', { exact: true }).getAttribute('title'), 'Proxy: strict first-pass yield needs a recorded first manufacturing test.');
+  assert.ok(failureKpisRequests.some(url => url.searchParams.get('period') === 'today' && url.searchParams.getAll('purpose').join(',') === 'production'));
+  failureKpisMode = 'zero';
+  await page.getByRole('button', { name: 'Yesterday', exact: true }).click();
+  await yieldKpi.getByText('—', { exact: true }).waitFor();
+  failureKpisMode = 'values';
+  await page.getByRole('button', { name: 'Today', exact: true }).click();
+  await yieldKpi.getByText('33.3%', { exact: true }).waitFor();
   assert.ok(unitTestTimeRequests.some(url => url.searchParams.get('period') === 'today' && url.searchParams.getAll('purpose').join(',') === 'production'));
 
   unitTestTimeMode = 'no_data';
@@ -1073,8 +1085,8 @@ try {
   await assertText(page.getByRole('region', { name: 'Key metrics' }), '1,018 attempts · 21 units');
   await assertText(page.getByRole('region', { name: 'Key metrics' }), '5 of 100 first channel observations · strict > run limits');
   await assertText(page.getByRole('region', { name: 'Key metrics' }), '2 first observations excluded: unknown criteria');
-  assert.equal(await page.getByRole('region', { name: 'Key metrics' }).getByText('Live · test database', { exact: true }).count(), 5);
-  assert.equal(await page.getByRole('region', { name: 'Key metrics' }).getByText('Demo', { exact: true }).count(), 1);
+  assert.equal(await page.getByRole('region', { name: 'Key metrics' }).getByText('Live · test database', { exact: true }).count(), 6);
+  assert.equal(await page.getByRole('region', { name: 'Key metrics' }).getByText('Demo', { exact: true }).count(), 0);
   await assertText(page.getByRole('region', { name: 'Key metrics' }), 'currently failing, no measured recovery');
   await assertText(page.getByRole('region', { name: 'Key metrics' }), '+ 1 need analysis · 1 recovery available');
   const liveUnitOutcomes = unitOutcomesPanel();

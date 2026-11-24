@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
+from decimal import Decimal
 
 from app.reporting.adapter import ReportingError
 from app.reporting.channel_activity import ActivityWindow
@@ -17,6 +18,7 @@ from app.reporting.models import (
 from app.reporting.recent_finished_units import (
     build_replacement_query,
     eligible_finished_records,
+    read_first_observation_failure_counts,
     replacement_counts,
 )
 from app.reporting.unit_status import UNIT_STATUS_COHORT_CAP
@@ -90,6 +92,7 @@ def build_failure_kpi_retest_query(
 def summarize_failure_kpis(
     records,
     replacement_rows: Sequence[Sequence[object]],
+    first_observation_failures: Mapping[int, int | None],
     retest_row: Sequence[object],
     *,
     incomplete: bool,
@@ -100,6 +103,10 @@ def summarize_failure_kpis(
     outcomes = Counter()
     replacement_units = 0
     replaced_channels = 0
+    first_pass = 0
+    first_pass_unknown = 0
+    if set(first_observation_failures) != unit_ids:
+        raise ReportingError("schema_incompatible")
     for record in eligible:
         replaced = replacements.get(record.unit_id, 0)
         if replaced:
@@ -113,6 +120,14 @@ def summarize_failure_kpis(
             else "passed_no_replacement"
         )
         outcomes[outcome] += 1
+        failed = first_observation_failures[record.unit_id]
+        if failed is not None and (type(failed) is not int or failed < 0):
+            raise ReportingError("schema_incompatible")
+        if not replaced:
+            if failed is None:
+                first_pass_unknown += 1
+            elif failed == 0:
+                first_pass += 1
 
     if len(retest_row) != 3 or any(type(value) is not int or value < 0 for value in retest_row):
         raise ReportingError("schema_incompatible")
@@ -127,6 +142,8 @@ def summarize_failure_kpis(
             unrecoverable=outcomes["unrecoverable"],
             replacement_units=replacement_units,
             replaced_channels=replaced_channels,
+            first_pass=first_pass,
+            first_pass_unknown=first_pass_unknown,
         ),
         retest=FailureKpiRetestCounts(active_run_channels=active, retested_run_channels=retested),
         incomplete=incomplete or candidate_runs > FAILURE_KPI_RUN_CAP,
@@ -134,14 +151,30 @@ def summarize_failure_kpis(
 
 
 def read_failure_kpis(
-    cursor, query: FailureKpisQuery, window: ActivityWindow
+    cursor,
+    query: FailureKpisQuery,
+    window: ActivityWindow,
+    *,
+    validated_failure_limits: Callable[[list[tuple]], tuple[dict[int, Decimal | None], bool]],
+    normalized_sql_limit: Callable[[object], Decimal | None],
 ) -> FailureKpisMetrics:
     cohort = read_finished_unit_cohort(cursor, query, window)
     eligible = eligible_finished_records(cohort.records)
     replacement_rows: Sequence[Sequence[object]] = ()
     if eligible:
-        replacement_query = build_replacement_query(tuple(record.unit_id for record in eligible))
+        unit_ids = tuple(record.unit_id for record in eligible)
+        replacement_query = build_replacement_query(unit_ids)
         replacement_rows = cursor.execute(*replacement_query).fetchmany(UNIT_STATUS_COHORT_CAP + 1)
+        failure_counts, failure_incomplete = read_first_observation_failure_counts(
+            cursor,
+            unit_ids,
+            tuple(purpose.value for purpose in query.purposes),
+            validated_failure_limits=validated_failure_limits,
+            normalized_sql_limit=normalized_sql_limit,
+        )
+    else:
+        failure_counts = {}
+        failure_incomplete = False
     follow_up_overflow = len(replacement_rows) > UNIT_STATUS_COHORT_CAP
     retest_query = build_failure_kpi_retest_query(query, window)
     retest_row = cursor.execute(*retest_query).fetchone()
@@ -150,6 +183,7 @@ def read_failure_kpis(
     return summarize_failure_kpis(
         cohort.records,
         replacement_rows[:UNIT_STATUS_COHORT_CAP],
+        failure_counts,
         retest_row,
-        incomplete=cohort.incomplete or follow_up_overflow,
+        incomplete=cohort.incomplete or follow_up_overflow or failure_incomplete,
     )
