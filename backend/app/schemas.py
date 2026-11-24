@@ -554,6 +554,13 @@ class UnitTestTimeExcludedResponse(BaseModel):
     outside_period: int = Field(ge=0)
 
 
+class UnitTestTimeFinishedResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    passed: int = Field(ge=0)
+    unrecoverable: int = Field(ge=0)
+
+
 class UnitTestTimeConnectedResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -564,8 +571,21 @@ class UnitTestTimeConnectedResponse(BaseModel):
     period: UnitTestTimePeriodResponse
     filters: UnitTestTimeFilters
     units: list[UnitTestTimeItemResponse]
+    finished: UnitTestTimeFinishedResponse
     excluded: UnitTestTimeExcludedResponse
     incomplete: bool
+
+    @model_validator(mode="after")
+    def finished_counts_include_timed_units(self) -> Self:
+        passed = sum(unit.outcome == "passed" for unit in self.units)
+        unrecoverable = sum(unit.outcome == "unrecoverable" for unit in self.units)
+        if (
+            self.finished.passed < passed
+            or self.finished.unrecoverable < unrecoverable
+            or self.finished.passed + self.finished.unrecoverable < len(self.units)
+        ):
+            raise ValueError("Finished counts must include every timed unit")
+        return self
 
 
 class UnitOutcomesWeeklyWeekResponse(BaseModel):

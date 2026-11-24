@@ -41,6 +41,7 @@ export interface UnitTestTimeConnectedResponse {
   };
   filters: { purpose: Purpose[] };
   units: UnitTestTimeItem[];
+  finished: Record<UnitTestTimeOutcome, number>;
   excluded: Record<UnitTestTimeExcludedKey, number>;
   incomplete: boolean;
 }
@@ -101,7 +102,7 @@ function isUnit(value: unknown): value is UnitTestTimeItem {
 }
 
 export function isUnitTestTimeConnectedResponse(value: unknown): value is UnitTestTimeConnectedResponse {
-  if (!isRecord(value) || !exactKeys(value, ['data_source', 'tls', 'extracted_at_utc', 'timezone', 'period', 'filters', 'units', 'excluded', 'incomplete'])) return false;
+  if (!isRecord(value) || !exactKeys(value, ['data_source', 'tls', 'extracted_at_utc', 'timezone', 'period', 'filters', 'units', 'finished', 'excluded', 'incomplete'])) return false;
   if (value.data_source !== 'test_database' || !['verified', 'encrypted_unverified'].includes(value.tls as string) || !utcTimestamp(value.extracted_at_utc) || value.timezone !== 'America/Los_Angeles' || typeof value.incomplete !== 'boolean') return false;
   if (!isRecord(value.period) || !exactKeys(value.period, ['key', 'start_utc', 'end_utc', 'partial']) || typeof value.period.key !== 'string' || !CHANNEL_ACTIVITY_PERIODS.includes(value.period.key as ChannelActivityPeriodKey) || !utcTimestamp(value.period.start_utc) || !utcTimestamp(value.period.end_utc) || typeof value.period.partial !== 'boolean' || Date.parse(value.period.start_utc) > Date.parse(value.period.end_utc)) return false;
   if (!isRecord(value.filters) || !exactKeys(value.filters, ['purpose']) || !Array.isArray(value.filters.purpose) || value.filters.purpose.length < 1 || value.filters.purpose.length > RUN_PURPOSES.length || new Set(value.filters.purpose).size !== value.filters.purpose.length || !value.filters.purpose.every(purpose => typeof purpose === 'string' && RUN_PURPOSES.includes(purpose as Purpose))) return false;
@@ -109,6 +110,10 @@ export function isUnitTestTimeConnectedResponse(value: unknown): value is UnitTe
   const units = value.units as UnitTestTimeItem[];
   if (new Set(units.map(unit => unit.unit_id)).size !== units.length) return false;
   if (units.some((unit, index) => index > 0 && (Date.parse(units[index - 1].finished_at_utc) < Date.parse(unit.finished_at_utc) || (units[index - 1].finished_at_utc === unit.finished_at_utc && units[index - 1].unit_id > unit.unit_id)))) return false;
+  if (!isRecord(value.finished) || !exactKeys(value.finished, ['passed', 'unrecoverable']) || !nonnegativeInteger(value.finished.passed) || !nonnegativeInteger(value.finished.unrecoverable)) return false;
+  const passed = units.filter(unit => unit.outcome === 'passed').length;
+  const unrecoverable = units.length - passed;
+  if (value.finished.passed < passed || value.finished.unrecoverable < unrecoverable || value.finished.passed + value.finished.unrecoverable < units.length) return false;
   if (!isRecord(value.excluded)) return false;
   const excluded = value.excluded;
   return exactKeys(excluded, UNIT_TEST_TIME_EXCLUDED_KEYS)

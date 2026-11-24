@@ -312,14 +312,19 @@ const unitTestTimeFixture = url => {
     unit(1, 'passed', '2026-11-09T18:00:00Z', 600_000, 1, 1, 0),
   ];
   const units = unitTestTimeMode === 'no_data' ? [] : unitTestTimeMode === 'singular' ? [allUnits[3]] : allUnits;
+  const finished = unitTestTimeMode === 'no_data'
+    ? { passed: 0, unrecoverable: 0 }
+    : unitTestTimeMode === 'singular'
+      ? { passed: 1, unrecoverable: 0 }
+      : { passed: 3, unrecoverable: 2 };
   const excluded = Object.fromEntries([
     'review_required', 'not_evaluated', 'failing_recovery_available', 'failing_needs_analysis',
     'other_saved_result', 'run_in_progress', 'missing_duration', 'outside_period',
   ].map((key, index) => [key, unitTestTimeMode === 'no_data' ? 0 : index === 0 || index === 5 || index === 6 ? 1 : 0]));
   return {
-    data_source: 'test_database', tls: 'encrypted_unverified', extracted_at_utc: '2026-11-13T20:00:00Z', timezone: 'America/Los_Angeles',
+    data_source: 'test_database', tls: 'encrypted_unverified', extracted_at_utc: '2026-11-23T07:30:00Z', timezone: 'America/Los_Angeles',
     period: { key: period, start_utc: '2026-10-14T07:00:00Z', end_utc: '2026-11-13T08:00:00Z', partial: false },
-    filters: { purpose: purposes }, units, excluded,
+    filters: { purpose: purposes }, units, finished, excluded,
     incomplete: unitTestTimeMode === 'incomplete',
   };
 };
@@ -681,6 +686,7 @@ const channelFailuresPanel = () => page.getByRole('heading', { name: 'Failures b
 const stationPanel = () => page.getByRole('heading', { name: 'Stations, last 30 days', exact: true }).locator('..').locator('..').locator('..').locator('..');
 const unitOutcomesPanel = () => page.getByRole('heading', { name: 'Unit outcomes', exact: true }).locator('..').locator('..').locator('..').locator('..');
 const unitTestTimePanel = (target = page) => target.locator('#configuration-histogram').locator('..');
+const kpiTile = (label, target = page) => target.getByRole('region', { name: 'Key metrics' }).getByText(label, { exact: true }).locator('..').locator('..');
 const weeklyOutcomesPanel = (target = page) => target.getByRole('heading', { name: 'Unit outcomes by week', exact: true }).locator('..').locator('..').locator('..');
 const failureHistogramPanel = () => page.getByRole('heading', { name: 'Failed channels per unit', exact: true }).locator('..').locator('..').locator('..');
 const failureReasonsPanel = (target = page) => target.getByRole('region', { name: 'Failing unit reasons' });
@@ -722,7 +728,10 @@ try {
   assert.equal(failureRateRequests.at(-1).searchParams.getAll('purpose').join(','), 'production');
   assert.equal(unitStatusRequests.at(-1).searchParams.get('period'), 'today');
   await page.getByRole('region', { name: 'Key metrics' }).getByText('Demo', { exact: true }).first().waitFor();
-  assert.equal(await page.getByRole('region', { name: 'Key metrics' }).getByText('Demo', { exact: true }).count(), 3);
+  assert.equal(await page.getByRole('region', { name: 'Key metrics' }).getByText('Demo', { exact: true }).count(), 6);
+  await assertText(page.locator('body'), 'Thursday, November 5, 2026');
+  await assertText(page.locator('body'), 'Demo snapshot · Nov 5, 2026');
+  await kpiTile('First-pass yield').getByText('Demo', { exact: true }).waitFor();
   const demoUnitOutcomes = unitOutcomesPanel();
   await assertText(demoUnitOutcomes, '24 units finished today');
   await demoUnitOutcomes.getByText('Passed first time', { exact: true }).waitFor();
@@ -747,8 +756,9 @@ try {
   await assertText(demoUnitTestTime, 'OSX-150 · SM · 48 channels · 412 units, last 30 days');
   assert.equal(await demoUnitTestTime.getByText('Live · test database', { exact: true }).count(), 0);
   assert.equal(await demoUnitTestTime.getByRole('button', { name: 'All', exact: true }).count(), 0);
-  assert.equal(unitTestTimeRequests.at(-1).searchParams.get('period'), 'last_30_days');
-  assert.equal(unitTestTimeRequests.at(-1).searchParams.getAll('purpose').join(','), 'production');
+  assert.ok(unitTestTimeRequests.some(url => url.searchParams.get('period') === 'last_30_days' && url.searchParams.getAll('purpose').join(',') === 'production'));
+  assert.ok(unitTestTimeRequests.some(url => url.searchParams.get('period') === 'today' && url.searchParams.getAll('purpose').join(',') === 'production'));
+  await page.getByRole('heading', { name: 'Insertion-loss test time by configuration', exact: true }).waitFor();
   check('Live cards, Unit outcomes, channel heatmap and stations keep the unchanged demo path when not connected');
 
   await visit('/failures');
@@ -848,6 +858,8 @@ try {
   runActivityMode = 'connected';
   await page.reload();
   await page.locator('h1').waitFor();
+  await page.getByText('Sunday, November 22, 2026', { exact: true }).waitFor();
+  await page.getByText('Test database · read 11:30 PM Pacific', { exact: true }).waitFor();
   await liveCard.getByRole('button', { name: 'Refresh live data' }).click();
   await page.getByRole('button', { name: 'Refresh channel activity' }).click();
   await page.getByRole('button', { name: 'Refresh failure rate' }).click();
@@ -862,6 +874,34 @@ try {
   await assertText(liveConfigurationTable, '48 ch');
   await assertText(liveConfigurationTable, '1 / 2 confirmed');
   assert.equal(configurationTimingRequests.at(-1).searchParams.get('purpose'), 'production');
+  assert.equal(await page.getByRole('heading', { name: 'Insertion-loss test time by configuration', exact: true }).count(), 0);
+  const unitsCompletedKpi = kpiTile('Units completed');
+  await unitsCompletedKpi.getByText('5', { exact: true }).waitFor();
+  await assertText(unitsCompletedKpi, '3 passed · 2 unrecoverable');
+  await assertText(unitsCompletedKpi, 'Finished units · Production');
+  await assertText(unitsCompletedKpi, 'Not a final manufacturing disposition.');
+  const averageKpi = kpiTile('Avg test time per unit');
+  await averageKpi.getByText('55m 00s', { exact: true }).waitFor();
+  await assertText(averageKpi, '4 finished units · Small Sample');
+  await assertText(averageKpi, '1 finished without a known duration, not averaged.');
+  await kpiTile('First-pass yield').getByText('Demo', { exact: true }).waitFor();
+  assert.ok(unitTestTimeRequests.some(url => url.searchParams.get('period') === 'today' && url.searchParams.getAll('purpose').join(',') === 'production'));
+
+  unitTestTimeMode = 'no_data';
+  await page.getByRole('button', { name: 'Yesterday', exact: true }).click();
+  await averageKpi.getByText('—', { exact: true }).waitFor();
+  await assertText(averageKpi, '0 finished units · No Data');
+  unitTestTimeMode = 'singular';
+  await page.getByRole('button', { name: 'Today', exact: true }).click();
+  await averageKpi.getByText('10m 00s', { exact: true }).waitFor();
+  await assertText(averageKpi, '1 finished unit · Small Sample');
+  unitTestTimeMode = 'incomplete';
+  await page.getByRole('button', { name: 'Yesterday', exact: true }).click();
+  await unitsCompletedKpi.getByText('Bounded cohort is incomplete.', { exact: true }).waitFor();
+  unitTestTimeMode = 'values';
+  await page.getByRole('button', { name: 'Today', exact: true }).click();
+  await averageKpi.getByText('55m 00s', { exact: true }).waitFor();
+  check('Connected header and finished-unit KPIs cover Pacific rollover, missing duration, singular, Small Sample, No Data, incomplete, and Demo yield');
   const liveUnitTestTime = unitTestTimePanel();
   await liveUnitTestTime.getByText('Live · test database', { exact: true }).waitFor();
   await liveUnitTestTime.getByText('4 finished units, last 30 days · Small Sample', { exact: true }).waitFor();
@@ -913,7 +953,8 @@ try {
   await assertText(page.getByRole('region', { name: 'Key metrics' }), '1,018 attempts · 21 units');
   await assertText(page.getByRole('region', { name: 'Key metrics' }), '5 of 100 first channel observations · strict > run limits');
   await assertText(page.getByRole('region', { name: 'Key metrics' }), '2 first observations excluded: unknown criteria');
-  assert.equal(await page.getByRole('region', { name: 'Key metrics' }).getByText('Live · test database', { exact: true }).count(), 3);
+  assert.equal(await page.getByRole('region', { name: 'Key metrics' }).getByText('Live · test database', { exact: true }).count(), 5);
+  assert.equal(await page.getByRole('region', { name: 'Key metrics' }).getByText('Demo', { exact: true }).count(), 1);
   await assertText(page.getByRole('region', { name: 'Key metrics' }), 'currently failing, no measured recovery');
   await assertText(page.getByRole('region', { name: 'Key metrics' }), '+ 1 need analysis · 1 recovery available');
   const liveUnitOutcomes = unitOutcomesPanel();
@@ -1264,6 +1305,7 @@ try {
   await page.getByRole('region', { name: 'Key metrics' }).getByText('8,736', { exact: true }).waitFor();
   await page.getByText('Live · test database · Production + Engineering', { exact: true }).first().waitFor();
   assert.equal(failureRateRequests.at(-1).searchParams.getAll('purpose').join(','), 'production,engineering');
+  assert.ok(unitTestTimeRequests.some(url => url.searchParams.get('period') === 'this_week' && url.searchParams.getAll('purpose').join(',') === 'production,engineering'));
   assert.notEqual(await page.getByRole('img', { name: /^Live daily first-observation/ }).locator('path').last().getAttribute('d'), productionFailureTrend);
   await liveCard.getByText('Runs started').locator('..').getByText('5', { exact: true }).waitFor();
   await liveCard.getByText('Select one purpose or all to see timing').waitFor();
@@ -1274,6 +1316,7 @@ try {
   await liveCard.getByText('Elapsed time').waitFor();
   assert.equal(runActivityRequests.at(-1).searchParams.has('purpose'), false);
   assert.equal(configurationTimingRequests.at(-1).searchParams.has('purpose'), false);
+  assert.ok(unitTestTimeRequests.some(url => url.searchParams.get('period') === 'this_week' && url.searchParams.getAll('purpose').join(',') === 'production,engineering,training,calibration'));
   check('Live counts combine across selected purposes; timing is refused for partial combinations and restored for all-purpose request');
   await page.getByRole('button', { name: 'Back to production only' }).click();
   await liveCard.getByText('Runs started').locator('..').getByText('2', { exact: true }).waitFor();
@@ -1282,10 +1325,8 @@ try {
   check('Range and purpose filters update summary; final purpose cannot be deselected');
 
   const liveHistogramLabel = await page.getByRole('img', { name: /^Histogram of/ }).getAttribute('aria-label');
-  await page.getByRole('button', { name: /OSX-150 SM 36 ch/ }).click();
-  assert.equal(await page.getByRole('button', { name: /OSX-150 SM 36 ch/ }).getAttribute('aria-pressed'), 'true');
-  assert.equal(await page.getByRole('img', { name: /^Histogram of/ }).getAttribute('aria-label'), liveHistogramLabel);
-  check('Configuration selection updates the demo table only; the live unit test-time histogram is unchanged');
+  assert.equal(await page.getByRole('heading', { name: 'Insertion-loss test time by configuration', exact: true }).count(), 0);
+  check('Connected unit-time panel hides the redundant demo configuration table');
   assert.equal(await page.getByRole('img', { name: /^Live daily first-observation/ }).locator('path').last().getAttribute('d'), productionFailureTrend);
   await page.getByRole('button', { name: 'Yesterday', exact: true }).focus();
   await page.keyboard.press('Space');
@@ -1293,6 +1334,8 @@ try {
   await page.keyboard.press('Tab');
   await page.keyboard.press('Enter');
   await assertText(page.getByRole('region', { name: 'Key metrics' }), '8,184');
+  assert.equal(await page.getByRole('img', { name: /^Histogram of/ }).getAttribute('aria-label'), liveHistogramLabel);
+  assert.ok(unitTestTimeRequests.some(url => url.searchParams.get('period') === 'this_week' && url.searchParams.getAll('purpose').join(',') === 'production'));
   check('Skip link, keyboard range selection, visible focus, and restored production Q02 trend');
 
   const table = page.getByRole('table', { name: 'Recently finished units' });

@@ -812,6 +812,7 @@ def unit_test_time(
         ),
         filters=UnitTestTimeFilters(purpose=list(query.purposes)),
         units=[asdict(unit) for unit in metrics.units],
+        finished=metrics.finished.model_dump(),
         excluded=metrics.excluded,
         incomplete=metrics.incomplete,
     )

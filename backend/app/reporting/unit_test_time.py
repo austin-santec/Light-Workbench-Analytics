@@ -10,7 +10,12 @@ from typing import Literal
 
 from app.reporting.adapter import ReportingError
 from app.reporting.channel_activity import ActivityWindow
-from app.reporting.models import TimingQuality, UnitOutcomesWeeklyQuery, UnitTestTimeQuery
+from app.reporting.models import (
+    FinishedUnitCounts,
+    TimingQuality,
+    UnitOutcomesWeeklyQuery,
+    UnitTestTimeQuery,
+)
 from app.reporting.unit_status import (
     UNIT_STATUS_COHORT_CAP,
     UNIT_STATUS_RUN_CAP,
@@ -127,6 +132,7 @@ class UnitTestTimeItem:
 @dataclass(frozen=True)
 class UnitTestTimeMetrics:
     units: tuple[UnitTestTimeItem, ...]
+    finished: FinishedUnitCounts
     excluded: dict[str, int]
     incomplete: bool
 
@@ -352,8 +358,16 @@ def summarize_unit_test_time(
 ) -> UnitTestTimeMetrics:
     records = summarize_finished_unit_cohort(cohorts, projections, run_rows, query, window)
     excluded = Counter()
+    finished = Counter()
     units: list[UnitTestTimeItem] = []
     for record in records:
+        if (
+            record.outcome is not None
+            and record.exclusion_reason != "run_in_progress"
+            and record.finished_at_utc is not None
+            and not record.outside_period
+        ):
+            finished[record.outcome] += 1
         if record.exclusion_reason is not None:
             excluded[record.exclusion_reason] += 1
         elif record.missing_duration:
@@ -378,6 +392,9 @@ def summarize_unit_test_time(
     )
     return UnitTestTimeMetrics(
         units=ordered,
+        finished=FinishedUnitCounts(
+            passed=finished["passed"], unrecoverable=finished["unrecoverable"]
+        ),
         excluded={key: excluded[key] for key in EXCLUDED_KEYS},
         incomplete=incomplete,
     )
@@ -435,11 +452,22 @@ def read_unit_test_time(
     cohort = read_finished_unit_cohort(cursor, query, window)
     if not cohort.records:
         return UnitTestTimeMetrics(
-            units=(), excluded=dict.fromkeys(EXCLUDED_KEYS, 0), incomplete=cohort.incomplete
+            units=(),
+            finished=FinishedUnitCounts(passed=0, unrecoverable=0),
+            excluded=dict.fromkeys(EXCLUDED_KEYS, 0),
+            incomplete=cohort.incomplete,
         )
     excluded = Counter()
+    finished = Counter()
     units: list[UnitTestTimeItem] = []
     for record in cohort.records:
+        if (
+            record.outcome is not None
+            and record.exclusion_reason != "run_in_progress"
+            and record.finished_at_utc is not None
+            and not record.outside_period
+        ):
+            finished[record.outcome] += 1
         if record.exclusion_reason is not None:
             excluded[record.exclusion_reason] += 1
         elif record.missing_duration:
@@ -462,6 +490,9 @@ def read_unit_test_time(
     return UnitTestTimeMetrics(
         units=tuple(
             sorted(units, key=lambda item: (-item.finished_at_utc.timestamp(), item.unit_id))
+        ),
+        finished=FinishedUnitCounts(
+            passed=finished["passed"], unrecoverable=finished["unrecoverable"]
         ),
         excluded={key: excluded[key] for key in EXCLUDED_KEYS},
         incomplete=cohort.incomplete,

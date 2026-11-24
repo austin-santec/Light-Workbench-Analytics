@@ -170,6 +170,18 @@ function liveUnitTestTimeHistogram(data: ReturnType<typeof summarizeUnitTestTime
   return { bars, meanX: Math.max(x0, Math.min(x1, meanX)) };
 }
 
+function pacificHeader(extractedAtUtc: string) {
+  const extracted = new Date(extractedAtUtc);
+  return {
+    date: new Intl.DateTimeFormat('en-US', {
+      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'America/Los_Angeles',
+    }).format(extracted),
+    time: new Intl.DateTimeFormat('en-US', {
+      hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/Los_Angeles',
+    }).format(extracted),
+  };
+}
+
 export default function Overview() {
  const [state, setState] = useState<OverviewState>({ range: 'today', cfg: 0, purp: { production: true, engineering: false, training: false, calibration: false } });
  const [livePurposeCounts, setLivePurposeCounts] = useState<Record<Purpose, number> | null>(null);
@@ -182,6 +194,7 @@ export default function Overview() {
  const [unitTestTime, setUnitTestTime] = useState<UnitTestTimeState>({ kind: 'loading' });
  const [unitTestTimeRefresh, setUnitTestTimeRefresh] = useState(0);
  const [unitTestTimeOutcome, setUnitTestTimeOutcome] = useState<UnitTestTimeOutcomeFilter>('all');
+ const [kpiUnitTestTime, setKpiUnitTestTime] = useState<UnitTestTimeState>({ kind: 'loading' });
  const [channelFailures, setChannelFailures] = useState<ChannelFailuresState>({ kind: 'loading' });
  const [channelFailuresRefresh, setChannelFailuresRefresh] = useState(0);
  const [stationSummary, setStationSummary] = useState<StationSummaryState>({ kind: 'loading' });
@@ -222,6 +235,13 @@ export default function Overview() {
  }, [unitTestTimeRefresh]);
  useEffect(() => {
    const controller = new AbortController();
+   loadUnitTestTime(PERIOD_FOR_RANGE[state.range], selectedPurposes, controller.signal)
+     .then(result => setKpiUnitTestTime(result.data_source === 'test_database' ? { kind: 'connected', data: result } : { kind: 'demo' }))
+     .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setKpiUnitTestTime({ kind: 'error' }); });
+   return () => controller.abort();
+ }, [purposeKey, selectedPurposes, state.range]);
+ useEffect(() => {
+   const controller = new AbortController();
    loadChannelFailures(PERIOD_FOR_RANGE[state.range], selectedPurposes, controller.signal)
      .then(result => setChannelFailures(result.data_source === 'test_database' ? { kind: 'connected', data: result } : { kind: 'demo' }))
      .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setChannelFailures({ kind: 'error' }); });
@@ -244,6 +264,14 @@ export default function Overview() {
  const liveFailureChart = liveFailureData ? liveFailureRateChart(liveFailureData) : null;
  const liveUnitData = unitStatus.kind === 'connected' ? unitStatus.data : null;
  const liveUnitTestTime = unitTestTime.kind === 'connected' ? unitTestTime.data : null;
+ const liveKpiUnitTestTime = kpiUnitTestTime.kind === 'connected'
+   && kpiUnitTestTime.data.period.key === PERIOD_FOR_RANGE[state.range]
+   && kpiUnitTestTime.data.filters.purpose.join(',') === purposeKey
+   ? kpiUnitTestTime.data : null;
+ const liveKpiUnitTestTimeSummary = useMemo(
+   () => liveKpiUnitTestTime ? summarizeUnitTestTime(liveKpiUnitTestTime.units, 'all') : null,
+   [liveKpiUnitTestTime],
+ );
  const liveUnitTestTimeSummary = useMemo(
    () => liveUnitTestTime ? summarizeUnitTestTime(liveUnitTestTime.units, unitTestTimeOutcome) : null,
    [liveUnitTestTime, unitTestTimeOutcome],
@@ -281,15 +309,16 @@ export default function Overview() {
  const liveStations = stationSummary.kind === 'connected' ? stationSummary.data : null;
  const liveStationRows = useMemo(() => liveStations ? stationTableRows(liveStations) : null, [liveStations]);
  const includedPurposes = selectedPurposes.map(purpose => PURPOSE_LABELS[purpose]).join(' + ');
+ const liveHeader = liveKpiUnitTestTime ? pacificHeader(liveKpiUnitTestTime.extracted_at_utc) : null;
  return (<>
 
     <header style={css("display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:14px")}>
       <div style={css("display:flex;flex-direction:column;gap:4px")}>
-        <span style={css("font-size:12.5px;color:var(--muted);font-weight:500")}>Thursday, November 5, 2026</span>
+        <span style={css("font-size:12.5px;color:var(--muted);font-weight:500")}>{liveHeader?.date ?? 'Thursday, November 5, 2026'}</span>
         <h1 style={css("margin:0;font-size:28px;line-height:1.15;font-weight:650;letter-spacing:-0.02em")}>{scope.heading}</h1>
       </div>
       <div style={css("display:flex;flex-wrap:wrap;align-items:center;gap:8px")}>
-        <span style={css("display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);padding-right:6px")}><span style={css("width:7px;height:7px;border-radius:50%;background:#2FB36B")}></span>Demo snapshot · Nov 5, 2026</span>
+        <span style={css("display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);padding-right:6px")}><span style={css("width:7px;height:7px;border-radius:50%;background:#2FB36B")}></span>{liveHeader ? `Test database · read ${liveHeader.time} Pacific` : 'Demo snapshot · Nov 5, 2026'}</span>
         <PreviewButton type="button" style={css("min-height:44px;padding:0 14px;border-radius:9px;border:1px solid var(--line);background:var(--panel);font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:8px")}>
           <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true" style={css("fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round")}><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"></path></svg>
           Refresh
@@ -305,7 +334,7 @@ export default function Overview() {
       </div>
     </header>
 
-    <p id="overview-scope" className="preview-note">Summary range/purpose: counts, yields, outcomes and activity. Live channel activity and first-observation failure rate follow the selected range and Run purpose. Model, Mode, Channels, Station and Operator are disabled previews and are not applied to them. Other historical charts and sparklines stay fixed.</p>
+    <p id="overview-scope" className="preview-note">{liveKpiUnitTestTime ? 'Summary range/purpose: live tiles and panels follow the selected range and Run purpose unless they say otherwise. Model, Mode, Channels, Station and Operator are disabled previews and are not applied. Tiles marked Demo are synthetic.' : 'Summary range/purpose: counts, yields, outcomes and activity. Live channel activity and first-observation failure rate follow the selected range and Run purpose. Model, Mode, Channels, Station and Operator are disabled previews and are not applied to them. Other historical charts and sparklines stay fixed.'}</p>
     <section aria-label="Summary filters and global previews" aria-describedby="overview-scope" style={css("display:flex;flex-wrap:wrap;align-items:center;gap:10px 12px;padding:10px;background:var(--panel);border:1px solid var(--line);border-radius:14px")}>
       <SegmentedControl label="Time range" options={TIME_RANGES} value={state.range} onChange={range => setState(current => ({ ...current, range }))} size="summary" describedBy="overview-scope" />
       <span aria-hidden="true" style={css("width:1px;height:28px;background:var(--line)")}></span>
@@ -358,8 +387,13 @@ export default function Overview() {
     <section aria-label="Key metrics" style={css("display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px")}>
       {kpis.map((demoKpi, index2) => {
         const isLiveChannel = index2 === 0 && livePeriod && liveSpark;
+        const isLiveCompleted = index2 === 1 && liveKpiUnitTestTime;
         const isLiveFailure = index2 === 3 && liveFailurePeriod && liveFailureSpark;
+        const isLiveAverage = index2 === 4 && liveKpiUnitTestTime && liveKpiUnitTestTimeSummary;
         const isLiveUnit = index2 === 5 && liveUnitData;
+        const isLiveTile = Boolean(isLiveChannel || isLiveCompleted || isLiveFailure || isLiveAverage || isLiveUnit);
+        const finishedTotal = liveKpiUnitTestTime ? liveKpiUnitTestTime.finished.passed + liveKpiUnitTestTime.finished.unrecoverable : 0;
+        const missingDuration = liveKpiUnitTestTime ? finishedTotal - liveKpiUnitTestTime.units.length : 0;
         const k = isLiveChannel ? {
           ...demoKpi,
           value: livePeriod.channels_tested.toLocaleString('en-US'),
@@ -367,11 +401,26 @@ export default function Overview() {
           sub: `${livePeriod.attempts.toLocaleString('en-US')} ${livePeriod.attempts === 1 ? 'attempt' : 'attempts'} · ${livePeriod.units.toLocaleString('en-US')} ${livePeriod.units === 1 ? 'unit' : 'units'}`,
           line: liveSpark.line,
           area: liveSpark.area,
+        } : isLiveCompleted ? {
+          ...demoKpi,
+          value: finishedTotal.toLocaleString('en-US'),
+          delta: '',
+          sub: `${liveKpiUnitTestTime.finished.passed.toLocaleString('en-US')} passed · ${liveKpiUnitTestTime.finished.unrecoverable.toLocaleString('en-US')} unrecoverable`,
+          line: '',
+          area: '',
         } : isLiveFailure ? {
           ...demoKpi,
           value: liveFailurePeriod.rate === null ? '—' : `${(liveFailurePeriod.rate * 100).toFixed(1)}%`,
           delta: '',
           sub: `${liveFailurePeriod.failed.toLocaleString('en-US')} of ${liveFailurePeriod.observed.toLocaleString('en-US')} first channel observations · strict > run limits`,
+          line: '',
+          area: '',
+        } : isLiveAverage ? {
+          ...demoKpi,
+          label: 'Avg test time per unit',
+          value: liveKpiUnitTestTimeSummary.meanMs === null ? '—' : formatDuration(liveKpiUnitTestTimeSummary.meanMs / 1000),
+          delta: '',
+          sub: `${liveKpiUnitTestTimeSummary.n.toLocaleString('en-US')} finished ${liveKpiUnitTestTimeSummary.n === 1 ? 'unit' : 'units'}${liveKpiUnitTestTimeSummary.sampleLabel ? ` · ${liveKpiUnitTestTimeSummary.sampleLabel}` : ''}`,
           line: '',
           area: '',
         } : isLiveUnit ? {
@@ -387,22 +436,26 @@ export default function Overview() {
         <div style={css("background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 16px 12px;display:flex;flex-direction:column;gap:6px;min-width:0")}>
           <span style={css("display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12.5px;color:var(--muted);font-weight:500")}>
             <span title={isLiveUnit ? 'Current measured status; this is not a scrap or reject record.' : undefined}>{k.label}</span>
-            {(index2 === 0 || index2 === 3 || index2 === 5) && <span title={isLiveUnit ? 'Current measured status; this is not a scrap or reject record.' : undefined} style={css((isLiveChannel || isLiveFailure || isLiveUnit)
+            <span title={isLiveUnit ? 'Current measured status; this is not a scrap or reject record.' : undefined} style={css(isLiveTile
               ? "font-size:10px;font-weight:650;letter-spacing:.04em;text-transform:uppercase;padding:3px 7px;border-radius:999px;background:color-mix(in srgb,var(--accent) 10%,var(--panel));color:var(--accent-ink)"
-              : "font-size:10px;font-weight:650;letter-spacing:.04em;text-transform:uppercase;padding:3px 7px;border-radius:999px;background:var(--panel2);color:var(--muted)")}>{isLiveChannel || isLiveFailure || isLiveUnit ? 'Live · test database' : 'Demo'}</span>}
+              : "font-size:10px;font-weight:650;letter-spacing:.04em;text-transform:uppercase;padding:3px 7px;border-radius:999px;background:var(--panel2);color:var(--muted)")}>{isLiveTile ? 'Live · test database' : 'Demo'}</span>
           </span>
           {isLiveChannel && <span style={css("font-size:10.5px;color:var(--muted)")}>Channels with test activity · {includedPurposes}</span>}
+          {(isLiveCompleted || isLiveAverage) && <span style={css("font-size:10.5px;color:var(--muted)")}>Finished units · {includedPurposes}</span>}
           {isLiveFailure && <span style={css("font-size:10.5px;color:var(--muted)")}>First observation per run-channel · {includedPurposes}</span>}
           <div style={css("display:flex;align-items:baseline;gap:8px;flex-wrap:wrap")}>
             <span style={css("font-size:30px;line-height:1.05;font-weight:650;letter-spacing:-0.025em;font-variant-numeric:tabular-nums;color:" + String(k.valueColor))}>{k.value}</span>
-            {!isLiveChannel && !isLiveFailure && !isLiveUnit && <span style={css("font-size:12px;font-weight:600;padding:2px 7px;border-radius:6px;background:" + String(k.dBg) + ";color:" + String(k.dFg) + ";white-space:nowrap")}>{k.delta}</span>}
+            {!isLiveTile && <span style={css("font-size:12px;font-weight:600;padding:2px 7px;border-radius:6px;background:" + String(k.dBg) + ";color:" + String(k.dFg) + ";white-space:nowrap")}>{k.delta}</span>}
           </div>
           <span style={css("font-size:12px;color:var(--muted);min-height:17px")}>{k.sub}</span>
+          {isLiveCompleted && <span style={css("font-size:11px;color:var(--muted)")}>Not a final manufacturing disposition.</span>}
+          {isLiveCompleted && liveKpiUnitTestTime.incomplete && <span style={css("font-size:11px;color:var(--warn-fg)")}>Bounded cohort is incomplete.</span>}
+          {isLiveAverage && missingDuration > 0 && <span style={css("font-size:11px;color:var(--muted)")}>{missingDuration.toLocaleString('en-US')} finished without a known duration, not averaged.</span>}
           {isLiveFailure && liveFailurePeriod.unknown_criteria > 0 && <span style={css("font-size:11px;color:var(--warn-fg)")}>{liveFailurePeriod.unknown_criteria.toLocaleString('en-US')} first observations excluded: unknown criteria</span>}
           {isLiveUnit && <span style={css("font-size:11px;color:var(--ink2)")}>+ {liveUnitData.counts.failing_needs_analysis.toLocaleString('en-US')} need analysis · {liveUnitData.counts.failing_recovery_available.toLocaleString('en-US')} recovery available</span>}
           {isLiveUnit && liveUnitData.incomplete && <span style={css("font-size:11px;color:var(--warn-fg)")}>Bounded cohort is incomplete.</span>}
           {isLiveUnit && <button type="button" onClick={() => setUnitStatusRefresh(value => value + 1)} style={css("align-self:flex-start;min-height:28px;padding:0 8px;border-radius:6px;border:1px solid var(--line);background:var(--panel);color:var(--ink2);font-size:10.5px;font-weight:600")}>Refresh unit status</button>}
-          {!isLiveUnit && <svg viewBox="0 0 160 34" preserveAspectRatio="none" aria-hidden="true" style={css("width:100%;height:30px;display:block;margin-top:2px")}>
+          {!isLiveUnit && !isLiveCompleted && !isLiveAverage && <svg viewBox="0 0 160 34" preserveAspectRatio="none" aria-hidden="true" style={css("width:100%;height:30px;display:block;margin-top:2px")}>
             {!isLiveFailure && <path d={k.area} style={css("fill:" + String(accent) + ";fill-opacity:0.08;stroke:none")}></path>}
             {!isLiveFailure && <polyline points={k.line} vectorEffect="non-scaling-stroke" style={css("fill:none;stroke:" + String(accent) + ";stroke-width:1.6;stroke-linejoin:round;stroke-linecap:round")}></polyline>}
             {isLiveFailure && liveFailureSpark.segments.map((path, index) => <path key={index} d={path} vectorEffect="non-scaling-stroke" style={css("fill:none;stroke:" + String(accent) + ";stroke-width:1.6;stroke-linejoin:round;stroke-linecap:round")} />)}
@@ -414,7 +467,7 @@ export default function Overview() {
     </section>
 
     <section style={css("display:flex;flex-wrap:wrap;gap:12px")}>
-      <div style={css("flex:3 1 640px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 18px 10px;display:flex;flex-direction:column;gap:12px")}>
+      {!liveUnitTestTime && <div style={css("flex:3 1 640px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 18px 10px;display:flex;flex-direction:column;gap:12px")}>
         <div style={css("display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;gap:10px")}>
           <div style={css("display:flex;flex-direction:column;gap:3px")}>
             <h2 style={css("margin:0;font-size:16px;font-weight:600")}>Insertion-loss test time by configuration</h2>
@@ -423,9 +476,9 @@ export default function Overview() {
           <a href="#/queries" className="lnk" style={css("font-size:13px;display:inline-flex;align-items:center;min-height:32px;white-space:nowrap")}>Open in console</a>
         </div>
         <ConfigurationTable rows={cfgRows} onSelect={cfg => setState(current => ({ ...current, cfg }))} />
-      </div>
+      </div>}
 
-      <div style={css("flex:2 1 380px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:10px")}>
+      <div style={css((liveUnitTestTime ? "flex:1 1 100%;" : "flex:2 1 380px;") + "min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:10px")}>
         {liveUnitTestTime && liveUnitTestTimeSummary ? <>
           <div style={css("display:flex;justify-content:space-between;align-items:flex-start;gap:10px")}>
             <div style={css("display:flex;flex-direction:column;gap:3px")}>

@@ -1,3 +1,20 @@
+# Live Overview header and finished-unit KPIs
+
+Updated November 23, 2026. Implemented the approved connected Overview header, **Units completed**, and **Avg test time per unit** slice without connecting to SQL Server. The unchanged unit-test-time SQL now also returns `finished` passed/unrecoverable counts derived from the existing D17 cohort before missing-duration exclusion. Counts require an in-period finish date and exclude open qualifying runs; the timed `units[]` subset remains unchanged. Backend and strict frontend validation require exact nonnegative outcome keys and counts that include every matching timed unit.
+
+Overview makes a second independently aborted unit-test-time request that follows the selected summary range and Run purposes. Only a matching connected response changes the Pacific header read date/time, the two live KPI tiles and the connected scope note; loading and every unavailable result retain the exact demo header/tiles. Units completed includes finished units without a known duration and states that it is not final manufacturing disposition. Average test time uses the T12 combined mean over duration-complete units, with Small Sample/No Data and missing-duration disclosure. First-pass yield remains synthetic and always has a **Demo** badge; every other KPI now also identifies its own demo fallback. The fixed last-30-days production unit-time panel remains independent, and when connected it takes the row while the redundant demo configuration table is hidden.
+
+Offline verification:
+
+- From `backend/`, `.venv\Scripts\python.exe -m pytest -q` passed **412 tests**; `.venv\Scripts\ruff.exe check .`, `.venv\Scripts\ruff.exe format --check .` and `.venv\Scripts\python.exe -m pip check` passed. Synthetic coverage includes an in-period missing-duration finished unit, out-of-period finished unit, run-in-progress unit, unfinished unit, empty cohort and response consistency. Existing SQL hash/read-only checks remained unchanged and passed.
+- `npm.cmd run typecheck` and `npm.cmd run lint` passed. The exact `npm.cmd run build` reached Vite and hit the documented managed-filesystem/esbuild config-loader restriction; `npm.cmd run build -- --configLoader runner` passed with Vite 7.3.7 and **472 modules transformed**. `node --check scripts/browser-check.mjs` passed.
+- `npm.cmd run test:browser` passed **38 checks** against the running dev server after the reviewer fixed two page-level text assertions in the new harness code (they passed the Playwright page instead of a locator).
+- `git diff --check`, strict UTF-8 decoding and the mojibake-marker scan passed.
+
+No credential, target detail, real record, dependency or `AGENTS.md` change was committed.
+
+Live acceptance (November 23, 2026, test database): with Last 30 days + Production, Units completed showed 6 (6 passed, 0 unrecoverable) and Avg test time per unit 32m 23s · Small Sample, matching the Time to test one unit panel and the unit-test-time response; Today showed 0 and "—" · No Data, matching its response (2 tested units, neither finished). The header showed the Pacific date of an extraction at 00:30 UTC the next day (Monday, November 23, read 4:30 PM Pacific). The demo configuration table was hidden and First-pass yield kept its Demo badge. Narrow 375px layout checked with no page overflow. Not seen live: an unrecoverable or missing-duration finished unit, or the incomplete note.
+
 # Stage B sanitized failure check
 
 Updated November 23, 2026. Owner-run check against the authorized non-production test server, documentation only; no code changed.

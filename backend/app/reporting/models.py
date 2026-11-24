@@ -106,6 +106,13 @@ class UnitTestTimeQuery(BaseModel):
         return value
 
 
+class FinishedUnitCounts(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    passed: int = Field(ge=0)
+    unrecoverable: int = Field(ge=0)
+
+
 class UnitOutcomesWeeklyQuery(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
 
