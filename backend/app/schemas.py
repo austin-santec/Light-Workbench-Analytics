@@ -178,6 +178,13 @@ class FailureConcentrationQueryParams(BaseModel):
     purpose: list[RunPurpose] = Field(default_factory=lambda: [RunPurpose.PRODUCTION])
 
 
+class FailureWavelengthsQueryParams(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    period: Literal["today", "yesterday", "this_week", "last_30_days"] = "last_30_days"
+    purpose: list[RunPurpose] = Field(default_factory=lambda: [RunPurpose.PRODUCTION])
+
+
 class RunActivityWindow(BaseModel):
     started_from: AwareDatetime
     started_before: AwareDatetime
@@ -849,6 +856,61 @@ class FailureConcentrationConnectedResponse(BaseModel):
     channels: list[FailureConcentrationChannelResponse]
     ports: list[FailureConcentrationPortResponse]
     incomplete: bool
+
+
+class FailureWavelengthPairResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    wavelength_mode: Literal["SM", "MM"]
+    wavelength_1_nm: int = Field(gt=0)
+    wavelength_2_nm: int = Field(gt=0)
+    failed: int = Field(ge=1)
+    first_only: int = Field(ge=0)
+    second_only: int = Field(ge=0)
+    both: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def valid_pair_counts(self) -> Self:
+        if self.wavelength_1_nm == self.wavelength_2_nm:
+            raise ValueError("Wavelengths must be distinct")
+        if self.failed != self.first_only + self.second_only + self.both:
+            raise ValueError("Failure buckets must sum to failed")
+        return self
+
+
+class FailureWavelengthTotalsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    failed: int = Field(ge=0)
+    observed: int = Field(ge=0)
+    unknown_criteria: int = Field(ge=0)
+    runs: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def observed_covers_failures(self) -> Self:
+        if self.observed < self.failed:
+            raise ValueError("Observed must cover failures")
+        return self
+
+
+class FailureWavelengthsConnectedResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    data_source: Literal["test_database"] = "test_database"
+    tls: Literal["verified", "encrypted_unverified"]
+    extracted_at_utc: AwareDatetime
+    timezone: Literal["America/Los_Angeles"] = "America/Los_Angeles"
+    period: UnitStatusPeriodResponse
+    filters: UnitStatusFilters
+    pairs: list[FailureWavelengthPairResponse]
+    totals: FailureWavelengthTotalsResponse
+    incomplete: bool
+
+    @model_validator(mode="after")
+    def pairs_match_totals(self) -> Self:
+        if sum(pair.failed for pair in self.pairs) != self.totals.failed:
+            raise ValueError("Pair failures must sum to total failures")
+        return self
 
 
 class ReportingFailureResponse(BaseModel):

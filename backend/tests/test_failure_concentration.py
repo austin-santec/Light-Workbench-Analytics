@@ -107,6 +107,9 @@ def test_sql_binds_selected_period_and_preserves_shared_sql_text():
             "fad6bc803b49cf1a5670f30287178f074145a8f7c24467cfa6b960bc968e9114"
         ),
         "CHANNEL_FAILURES_SQL": "39f8a3e653de8a7b529860545d8740114e90acaddad1cab1c56abfd32947f6a7",
+        "FAILURE_CONCENTRATION_SQL": (
+            "a29348ddeda5342a32d505ef698fa81714e43b6f069f64008e516abf760be0cd"
+        ),
         "FAILURE_RATE_PERIOD_SQL": (
             "8afcbef833380698f973fbbac42558705c42bd06ccb5d94c5c6ba5a386fd059a"
         ),
@@ -120,6 +123,7 @@ def test_sql_binds_selected_period_and_preserves_shared_sql_text():
         for name, value in {
             "FIRST_OBSERVATION_CTES": FIRST_OBSERVATION_CTES,
             "CHANNEL_FAILURES_SQL": CHANNEL_FAILURES_SQL,
+            "FAILURE_CONCENTRATION_SQL": FAILURE_CONCENTRATION_SQL,
             "FAILURE_RATE_PERIOD_SQL": FAILURE_RATE_PERIOD_SQL,
             "FAILURE_RATE_DAILY_SQL": FAILURE_RATE_DAILY_SQL,
             "STATION_SUMMARY_SQL": STATION_SUMMARY_SQL,

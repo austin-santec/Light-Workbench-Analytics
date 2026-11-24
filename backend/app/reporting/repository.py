@@ -33,6 +33,10 @@ from app.reporting.models import (
     FailureConcentrationQuery,
     FailureRateCounts,
     FailureRateMetrics,
+    FailureWavelengthPair,
+    FailureWavelengthsMetrics,
+    FailureWavelengthsQuery,
+    FailureWavelengthTotals,
     RecentFinishedUnitsQuery,
     RecommendationUsageMetrics,
     RecommendationUsageQuery,
@@ -416,6 +420,31 @@ WITH {_failure_rate_candidate_runs_sql(FAILURE_RATE_RUN_CAP).strip()},
     WHERE f.written_at_utc >= ? AND f.written_at_utc < ?
 )
 SELECT logical_channel, physical_port, run_id, front_panel_channel_count,
+    failed_sql, sql_fail_limit
+FROM windowed_observations
+ORDER BY run_id, logical_channel
+"""
+
+FAILURE_WAVELENGTHS_SQL = f"""
+WITH {_failure_rate_candidate_runs_sql(FAILURE_RATE_RUN_CAP).strip()},
+{FIRST_OBSERVATION_CTES}windowed_observations AS (
+    SELECT f.logical_channel, f.run_id, c.wavelength_mode,
+        m.wavelength_1_nm, m.wavelength_2_nm,
+        m.wavelength_1_il_db, m.wavelength_2_il_db,
+        CASE WHEN p.sql_fail_limit IS NOT NULL AND (
+                m.wavelength_1_il_db > p.sql_fail_limit
+                OR m.wavelength_2_il_db > p.sql_fail_limit
+            ) THEN CONVERT(INT, 1) ELSE CONVERT(INT, 0) END AS failed_sql,
+        p.sql_fail_limit
+    FROM first_observations AS f
+    JOIN parsed_runs AS p ON p.run_id = f.run_id
+    JOIN candidate_runs AS c ON c.run_id = f.run_id
+    JOIN dbo.IL_MEASUREMENTS AS m ON m.measurement_id = f.measurement_id
+    WHERE f.written_at_utc >= ? AND f.written_at_utc < ?
+)
+SELECT logical_channel, run_id, wavelength_mode,
+    wavelength_1_nm, wavelength_2_nm,
+    wavelength_1_il_db, wavelength_2_il_db,
     failed_sql, sql_fail_limit
 FROM windowed_observations
 ORDER BY run_id, logical_channel
@@ -853,6 +882,15 @@ def _normalized_sql_limit(value: object) -> Decimal | None:
     return result
 
 
+def _agreed_failure_limit(raw_sql_limit: object, python_limit: Decimal | None) -> Decimal | None:
+    sql_limit = _normalized_sql_limit(raw_sql_limit)
+    if python_limit is None:
+        return None
+    if sql_limit != python_limit:
+        raise ReportingError("schema_incompatible")
+    return python_limit
+
+
 def _validated_failure_limits(limit_rows: list[tuple]) -> tuple[dict[int, Decimal | None], bool]:
     incomplete = len(limit_rows) > FAILURE_RATE_RUN_CAP
     limits: dict[int, Decimal | None] = {}
@@ -1055,14 +1093,11 @@ def summarize_failure_concentration(
         port_counts = ports.setdefault(
             (physical_port, extra), {"failed": 0, "observed": 0, "unknown_criteria": 0}
         )
-        sql_limit = _normalized_sql_limit(raw_sql_limit)
-        python_limit = validated_limits[run_id]
-        if python_limit is None:
+        agreed_limit = _agreed_failure_limit(raw_sql_limit, validated_limits[run_id])
+        if agreed_limit is None:
             channel_counts["unknown_criteria"] += 1
             port_counts["unknown_criteria"] += 1
             continue
-        if sql_limit != python_limit:
-            raise ReportingError("schema_incompatible")
         channel_counts["failed"] += failed_sql
         channel_counts["observed"] += 1
         port_counts["failed"] += failed_sql
@@ -1099,6 +1134,122 @@ def summarize_failure_concentration(
         runs=len(runs),
         channels=per_channel,
         ports=per_port,
+        incomplete=incomplete,
+    )
+
+
+def build_failure_wavelengths_queries(
+    query: FailureWavelengthsQuery, boundaries: ChannelActivityBoundaries
+) -> tuple[tuple[str, tuple], tuple[str, tuple]]:
+    query = FailureWavelengthsQuery.model_validate(query.model_dump())
+    window = boundaries.periods[query.period]
+    candidate_query = ChannelFailuresQuery(period=query.period, purposes=query.purposes)
+    filters = _candidate_run_parameters(candidate_query, window.start_utc, window.end_utc)
+    bounds = (window.start_utc.replace(tzinfo=None), window.end_utc.replace(tzinfo=None))
+    return (FAILURE_WAVELENGTHS_SQL, (*filters, *bounds)), (FAILURE_RATE_LIMITS_SQL, filters)
+
+
+def _normalized_loss(value: object) -> Decimal | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ReportingError("schema_incompatible")
+    try:
+        result = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        raise ReportingError("schema_incompatible") from None
+    if not result.is_finite():
+        raise ReportingError("schema_incompatible")
+    return result
+
+
+def summarize_failure_wavelengths(
+    rows: list[tuple], limit_rows: list[tuple]
+) -> FailureWavelengthsMetrics:
+    validated_limits, incomplete = _validated_failure_limits(limit_rows)
+    pairs: dict[tuple[str, int, int], dict[str, int]] = {}
+    runs: set[int] = set()
+    seen: set[tuple[int, int]] = set()
+    observed = 0
+    unknown = 0
+
+    for row in rows:
+        if len(row) != 9:
+            raise ReportingError("schema_incompatible")
+        (
+            channel,
+            run_id,
+            mode,
+            wavelength_1_nm,
+            wavelength_2_nm,
+            raw_loss_1,
+            raw_loss_2,
+            failed_sql,
+            raw_sql_limit,
+        ) = row
+        if (
+            type(channel) is not int
+            or channel <= 0
+            or type(run_id) is not int
+            or run_id <= 0
+            or mode not in {"SM", "MM"}
+            or type(wavelength_1_nm) is not int
+            or type(wavelength_2_nm) is not int
+            or wavelength_1_nm <= 0
+            or wavelength_2_nm <= 0
+            or wavelength_1_nm == wavelength_2_nm
+            or type(failed_sql) is not int
+            or failed_sql not in {0, 1}
+            or (run_id, channel) in seen
+            or run_id not in validated_limits
+        ):
+            raise ReportingError("schema_incompatible")
+        seen.add((run_id, channel))
+        runs.add(run_id)
+        loss_1 = _normalized_loss(raw_loss_1)
+        loss_2 = _normalized_loss(raw_loss_2)
+        limit = _agreed_failure_limit(raw_sql_limit, validated_limits[run_id])
+        if limit is None:
+            unknown += 1
+            continue
+
+        observed += 1
+        first_over = loss_1 is not None and loss_1 > limit
+        second_over = loss_2 is not None and loss_2 > limit
+        failed = first_over or second_over
+        if failed != bool(failed_sql):
+            raise ReportingError("schema_incompatible")
+        if not failed:
+            continue
+
+        counts = pairs.setdefault(
+            (mode, wavelength_1_nm, wavelength_2_nm),
+            {"failed": 0, "first_only": 0, "second_only": 0, "both": 0},
+        )
+        counts["failed"] += 1
+        bucket = (
+            "both" if first_over and second_over else "first_only" if first_over else "second_only"
+        )
+        counts[bucket] += 1
+
+    per_pair = tuple(
+        FailureWavelengthPair(
+            wavelength_mode=mode,
+            wavelength_1_nm=wavelength_1_nm,
+            wavelength_2_nm=wavelength_2_nm,
+            **counts,
+        )
+        for (mode, wavelength_1_nm, wavelength_2_nm), counts in sorted(pairs.items())
+    )
+    failed = sum(pair.failed for pair in per_pair)
+    return FailureWavelengthsMetrics(
+        pairs=per_pair,
+        totals=FailureWavelengthTotals(
+            failed=failed,
+            observed=observed,
+            unknown_criteria=unknown,
+            runs=len(runs),
+        ),
         incomplete=incomplete,
     )
 
@@ -1489,6 +1640,9 @@ class ReportingRepository(Protocol):
     def get_failure_concentration(
         self, query: FailureConcentrationQuery, boundaries: ChannelActivityBoundaries
     ) -> FailureConcentrationMetrics: ...
+    def get_failure_wavelengths(
+        self, query: FailureWavelengthsQuery, boundaries: ChannelActivityBoundaries
+    ) -> FailureWavelengthsMetrics: ...
     def get_station_summary(
         self, query: StationSummaryQuery, boundaries: ChannelActivityBoundaries
     ) -> StationSummaryMetrics: ...
@@ -1666,6 +1820,19 @@ class SqlServerReportingRepository:
             if len(rows) > CHANNEL_FAILURES_ROW_CAP:
                 raise ReportingError("schema_incompatible")
             return summarize_failure_concentration(rows, limit_rows)
+
+    def get_failure_wavelengths(
+        self, query: FailureWavelengthsQuery, boundaries: ChannelActivityBoundaries
+    ) -> FailureWavelengthsMetrics:
+        query = FailureWavelengthsQuery.model_validate(query.model_dump())
+        wavelengths_query, limits_query = build_failure_wavelengths_queries(query, boundaries)
+        with self._adapter.cursor() as cursor:
+            self._preflight(cursor)
+            rows = cursor.execute(*wavelengths_query).fetchmany(CHANNEL_FAILURES_ROW_CAP + 1)
+            limit_rows = cursor.execute(*limits_query).fetchmany(FAILURE_RATE_RUN_CAP + 1)
+            if len(rows) > CHANNEL_FAILURES_ROW_CAP:
+                raise ReportingError("schema_incompatible")
+            return summarize_failure_wavelengths(rows, limit_rows)
 
     def get_station_summary(
         self, query: StationSummaryQuery, boundaries: ChannelActivityBoundaries

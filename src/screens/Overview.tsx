@@ -31,6 +31,7 @@ import { loadStationSummary, stationTableRows, type StationSummaryConnectedRespo
 import { UNIT_STATUS_LABEL, UNIT_STATUS_OUTCOME_COLOR, UNIT_STATUS_OUTCOME_ORDER } from '../lib/unitStatusPresentation';
 import { loadUnitTestTime, summarizeUnitTestTime, UNIT_TEST_TIME_EXCLUDED_KEYS, type UnitTestTimeConnectedResponse, type UnitTestTimeOutcomeFilter } from '../lib/api/unitTestTime';
 import { loadRecentFinishedUnits, type RecentFinishedUnitsConnectedResponse } from '../lib/api/recentFinishedUnits';
+import { loadFailureWavelengths, wavelengthBars, wavelengthShare, type FailureWavelengthsConnectedResponse } from '../lib/api/failureWavelengths';
 
 type ChannelActivityState =
   | { kind: 'loading' | 'demo' | 'error' }
@@ -55,6 +56,9 @@ type StationSummaryState =
 type ChannelFailuresState =
   | { kind: 'loading' | 'demo' | 'error' }
   | { kind: 'connected'; data: ChannelFailuresConnectedResponse };
+type FailureWavelengthsState =
+  | { kind: 'loading' | 'demo' | 'error' }
+  | { kind: 'connected'; data: FailureWavelengthsConnectedResponse };
 
 type RecentFinishedUnitsState =
   | { kind: 'loading' | 'demo' | 'error' }
@@ -229,6 +233,7 @@ export default function Overview() {
  const [unitTestTimeOutcome, setUnitTestTimeOutcome] = useState<UnitTestTimeOutcomeFilter>('all');
  const [kpiUnitTestTime, setKpiUnitTestTime] = useState<UnitTestTimeState>({ kind: 'loading' });
  const [channelFailures, setChannelFailures] = useState<ChannelFailuresState>({ kind: 'loading' });
+ const [failureWavelengths, setFailureWavelengths] = useState<FailureWavelengthsState>({ kind: 'loading' });
  const [channelFailuresRefresh, setChannelFailuresRefresh] = useState(0);
  const [stationSummary, setStationSummary] = useState<StationSummaryState>({ kind: 'loading' });
  const [stationRefresh, setStationRefresh] = useState(0);
@@ -290,6 +295,13 @@ export default function Overview() {
  }, [channelFailuresRefresh, purposeKey, selectedPurposes, state.range]);
  useEffect(() => {
    const controller = new AbortController();
+   loadFailureWavelengths(PERIOD_FOR_RANGE[state.range], selectedPurposes, controller.signal)
+     .then(result => setFailureWavelengths(result.data_source === 'test_database' ? { kind: 'connected', data: result } : { kind: 'demo' }))
+     .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setFailureWavelengths({ kind: 'error' }); });
+   return () => controller.abort();
+ }, [purposeKey, selectedPurposes, state.range, unitStatusRefresh]);
+ useEffect(() => {
+   const controller = new AbortController();
    loadStationSummary(selectedPurposes, controller.signal)
      .then(result => setStationSummary(result.data_source === 'test_database' ? { kind: 'connected', data: result } : { kind: 'demo' }))
      .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setStationSummary({ kind: 'error' }); });
@@ -304,6 +316,11 @@ export default function Overview() {
  const liveFailureSpark = liveFailureData ? liveFailureSparkline(liveFailureData) : null;
  const liveFailureChart = liveFailureData ? liveFailureRateChart(liveFailureData) : null;
  const liveUnitData = unitStatus.kind === 'connected' ? unitStatus.data : null;
+ const liveWavelengths = failureWavelengths.kind === 'connected'
+   && failureWavelengths.data.period.key === PERIOD_FOR_RANGE[state.range]
+   && failureWavelengths.data.filters.purpose.join(',') === purposeKey
+   ? failureWavelengths.data : null;
+ const liveWavelengthBars = useMemo(() => liveWavelengths ? wavelengthBars(liveWavelengths) : [], [liveWavelengths]);
  const liveUnitTestTime = unitTestTime.kind === 'connected' ? unitTestTime.data : null;
  const liveKpiUnitTestTime = kpiUnitTestTime.kind === 'connected'
    && kpiUnitTestTime.data.period.key === PERIOD_FOR_RANGE[state.range]
@@ -704,6 +721,25 @@ export default function Overview() {
         </div>
         {liveUnitData && liveUnitData.counts.cohort_units === 0 && <span style={css("font-size:12.5px;color:var(--muted)")}>No units tested in this range.</span>}
         {liveUnitData && <span style={css("font-size:11.5px;color:var(--muted)")}>Current measured status at extraction time. Not a first-pass yield or a final scrap decision.</span>}
+        {liveWavelengths ? <div id="failure-wavelengths" data-source="live-failure-wavelengths" style={css("display:flex;flex-direction:column;gap:10px;padding-top:12px;border-top:1px solid var(--line)")}>
+          <span style={css("display:flex;align-items:center;flex-wrap:wrap;gap:7px;font-size:13px;font-weight:600")}>Which wavelength fails<span className="live-unit-badge">Live · test database</span></span>
+          <span style={css("font-size:11.5px;color:var(--muted)")}>First observation per run-channel; share of failed observations by which wavelength was over the saved limit.</span>
+          {liveWavelengthBars.length === 0
+            ? <span role="status" style={css("font-size:12.5px;color:var(--muted)")}>No failed first observations in this range.</span>
+            : liveWavelengthBars.map(bar => <div key={bar.key} style={css("display:flex;flex-direction:column;gap:6px")}>
+              <span style={css("display:flex;justify-content:space-between;gap:10px;font-size:12px;color:var(--muted)")}><span style={css("font-weight:600;color:var(--ink2)")}>{bar.label}</span><span style={css("font-variant-numeric:tabular-nums")}>{bar.failed.toLocaleString('en-US')} failed</span></span>
+              <div role="img" aria-label={bar.aria} style={css("display:flex;height:10px;border-radius:4px;overflow:hidden;gap:2px;background:var(--line2)")}>
+                {bar.segments.filter(segment => segment.count > 0).map(segment => <div key={segment.key} title={`${segment.label}: ${segment.count} of ${bar.failed}`} style={css(`width:${(segment.share * 100).toFixed(2)}%;background:${segment.color}`)}></div>)}
+              </div>
+              <div style={css("display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12px;color:var(--ink2)")}>
+                {bar.segments.map(segment => <span key={segment.key} style={css("display:inline-flex;align-items:center;gap:6px;font-variant-numeric:tabular-nums")}><span style={css("width:9px;height:9px;border-radius:2px;background:" + segment.color)}></span>{segment.label} <b style={css("font-weight:650")}>{wavelengthShare(segment.share)}</b><span style={css("color:var(--muted)")}>({segment.count})</span></span>)}
+              </div>
+            </div>)}
+          {(liveWavelengths.totals.unknown_criteria > 0 || liveWavelengths.incomplete) && <span style={css("font-size:11.5px;color:var(--muted)")}>
+            {liveWavelengths.totals.unknown_criteria > 0 && `${liveWavelengths.totals.unknown_criteria.toLocaleString('en-US')} ${liveWavelengths.totals.unknown_criteria === 1 ? 'observation' : 'observations'} with unknown limits not counted. `}
+            {liveWavelengths.incomplete && <span style={css("color:var(--warn-fg)")}>Run cap reached; results are incomplete.</span>}
+          </span>}
+        </div> : <>
         <div style={css("display:flex;flex-direction:column;gap:8px;padding-top:12px;border-top:1px solid var(--line)")}>
           <span style={css("display:flex;align-items:center;gap:7px;font-size:13px;font-weight:600")}>Which wavelength fails{liveUnitData && <span title="Example only; not from the test database." style={css("font-size:10px;font-weight:650;letter-spacing:.04em;text-transform:uppercase;padding:3px 7px;border-radius:999px;background:var(--panel2);color:var(--muted)")}>Demo</span>}</span>
           <div role="img" aria-label="Failed channels by wavelength: 1550 nm only 58 percent, 1310 nm only 27 percent, both 15 percent" style={css("display:flex;height:10px;border-radius:4px;overflow:hidden;gap:2px")}>
@@ -715,6 +751,7 @@ export default function Overview() {
             <span style={css("display:inline-flex;align-items:center;gap:6px")}><span style={css("width:9px;height:9px;border-radius:2px;background:var(--o3)")}></span>Both <b style={css("font-weight:650")}>15%</b></span>
           </div>
         </div>
+        </>}
       </div>
 
       <div style={css("flex:1.4 1 440px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:12px")}>

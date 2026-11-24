@@ -1,3 +1,11 @@
+# Live Overview failure wavelengths
+
+Updated November 24, 2026. The **Which wavelength fails** strip in Overview **Unit outcomes** is live. Backend (implemented by Codex under the new backend/frontend split, reviewed by Claude): `GET /api/v1/reporting/failure-wavelengths` reuses the failure-concentration first-observation population and saved-limit agreement, adds each first observation's recorded wavelength pair and losses, and splits failed observations into first-only, second-only and both per `(mode, nm, nm)` pair. Shared failure SQL is hash-checked unchanged; no object, column or grant was added. Frontend (Claude): strict client, one stacked bar per real pair with the longer wavelength first, empty/unknown-criteria/incomplete notes, following the Overview range and purposes; every unavailable state keeps the original demo strip.
+
+Offline verification: 441 backend tests, Ruff check/format, `pip check`, typecheck, lint, build (`--configLoader runner`) and `npm.cmd run test:browser` (**39 checks**) passed; `git diff --check` passed.
+
+Live acceptance (test database, Last 30 days, Production): totals equaled failure concentration (37 failed of 560 observed, 21 runs, 0 unknown, complete). Only the SM 1310/1550 nm pair had failures; its split (1310 only 15, 1550 only 7, both 15) matched an independent Query console count over the same first observations and saved limits. The strip was inspected at desktop width and at 390px with no horizontal scroll. Query-plan/cost review remains open.
+
 # Live Overview recently finished units
 
 Updated November 23, 2026. Implemented the approved connected **Recently finished units** slice without connecting to SQL Server. The new bounded endpoint reuses the unchanged, hash-tested D17 cohort/timing SQL and D16 status projection, including missing-duration finished units and excluding open qualifying runs. Three parameterized follow-ups for the newest 100 eligible unit IDs supply latest qualifying-run station, strict saved-limit first-observation failures, and distinct replacement channels across historical assignments. D16 now retains internal effective readings/context limits for Worst IL without changing its HTTP contract or classification behavior.

@@ -375,6 +375,69 @@ class FailureConcentrationMetrics(BaseModel):
     incomplete: bool
 
 
+class FailureWavelengthsQuery(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
+
+    period: Literal["today", "yesterday", "this_week", "last_30_days"] = "last_30_days"
+    purposes: tuple[RunPurpose, ...] = (RunPurpose.PRODUCTION,)
+
+    @field_validator("purposes")
+    @classmethod
+    def selected_purposes(cls, value: tuple[RunPurpose, ...]) -> tuple[RunPurpose, ...]:
+        if not 1 <= len(value) <= len(RunPurpose) or len(set(value)) != len(value):
+            raise ValueError("One to four unique purposes are required")
+        return value
+
+
+class FailureWavelengthPair(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    wavelength_mode: Literal["SM", "MM"]
+    wavelength_1_nm: int = Field(gt=0)
+    wavelength_2_nm: int = Field(gt=0)
+    failed: int = Field(ge=1)
+    first_only: int = Field(ge=0)
+    second_only: int = Field(ge=0)
+    both: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def valid_pair_counts(self) -> Self:
+        if self.wavelength_1_nm == self.wavelength_2_nm:
+            raise ValueError("Wavelengths must be distinct")
+        if self.failed != self.first_only + self.second_only + self.both:
+            raise ValueError("Failure buckets must sum to failed")
+        return self
+
+
+class FailureWavelengthTotals(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    failed: int = Field(ge=0)
+    observed: int = Field(ge=0)
+    unknown_criteria: int = Field(ge=0)
+    runs: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def observed_covers_failures(self) -> Self:
+        if self.observed < self.failed:
+            raise ValueError("Observed must cover failures")
+        return self
+
+
+class FailureWavelengthsMetrics(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    pairs: tuple[FailureWavelengthPair, ...]
+    totals: FailureWavelengthTotals
+    incomplete: bool
+
+    @model_validator(mode="after")
+    def pairs_match_totals(self) -> Self:
+        if sum(pair.failed for pair in self.pairs) != self.totals.failed:
+            raise ValueError("Pair failures must sum to total failures")
+        return self
+
+
 class ReplacementActivityQuery(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
 

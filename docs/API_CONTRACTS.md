@@ -194,6 +194,12 @@ The Overview **Failures by logical channel** heatmap uses the selected range and
 
 The Failures **Where failures concentrate** panel ranks nonzero-failure channels and ports by failures, rate and number, shows up to five of each, and labels per-run extra ports without making the demo's unsupported port-50 candidate claim. Unavailable states retain the original synthetic panel.
 
+### Failure wavelengths
+
+`GET /api/v1/reporting/failure-wavelengths?period=today|yesterday|this_week|last_30_days&purpose=<purpose>[&purpose=...]` returns the exact Q02 first-observation population used by failure concentration, split by which recorded wavelength exceeded the run's saved limit. Defaults are `last_30_days` and `production`; purposes are one to four unique values. There are no mode or model filters. Period/filter echo, `not_connected`, validation, the shared run-cap `incomplete` flag and sanitized 503 behavior match failure concentration.
+
+`pairs` contains only pair keys with at least one failed observation and is ordered by `wavelength_mode`, `wavelength_1_nm`, then `wavelength_2_nm`, ascending. A key is the row's recorded `wavelength_mode` (`SM` or `MM`) and two positive, distinct integer nm values. Each item has non-negative `failed`, `first_only`, `second_only` and `both` counts, with `failed >= 1` and `failed = first_only + second_only + both`. Null loss is not over the limit on that side. `totals` contains `failed`, `observed`, `unknown_criteria` and `runs`; pair failures sum to total failures and observed is at least failed. Unknown criteria contribute only to `unknown_criteria`. When neither response is incomplete, all four totals equal failure concentration for the same period and purposes.
+
 ### Recommendation usage
 
 `GET /api/v1/reporting/recommendation-usage?period=today|yesterday|this_week|last_30_days&purpose=<purpose>[&purpose=...]` returns R06 saved-recommendation linkage for analyses saved in the selected Pacific period. Defaults are `last_30_days` and `production`; purposes are one to four unique values. The response echoes the period and purpose filters, reports extraction time T, and uses the same `not_connected`, validation and sanitized 503 behavior as current unit status.

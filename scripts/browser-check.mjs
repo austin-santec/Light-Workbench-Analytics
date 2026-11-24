@@ -19,6 +19,7 @@ let channelFailuresMode = 'values';
 let failureConcentrationMode = 'values';
 let stationMode = 'values';
 let recentFinishedMode = 'values';
+let failureWavelengthsMode = 'values';
 const runActivityRequests = [];
 const configurationTimingRequests = [];
 const channelActivityRequests = [];
@@ -32,6 +33,7 @@ const channelFailuresRequests = [];
 const failureConcentrationRequests = [];
 const stationSummaryRequests = [];
 const recentFinishedRequests = [];
+const failureWavelengthsRequests = [];
 const unitSearchRequests = [];
 const purposeTotals = { production: 2, engineering: 3, training: 1, calibration: 4 };
 const purposeOpenRuns = { production: 0, engineering: 1, training: 0, calibration: 0 };
@@ -366,6 +368,27 @@ const unitOutcomesWeeklyFixture = url => {
     incomplete: unitOutcomesWeeklyMode === 'incomplete',
   };
 };
+const failureWavelengthsFixture = url => {
+  const period = url.searchParams.get('period') || 'last_30_days';
+  const purposes = url.searchParams.getAll('purpose').length ? url.searchParams.getAll('purpose') : ['production'];
+  const windows = {
+    today: ['2026-11-23T08:00:00Z', '2026-11-23T20:00:00Z', true],
+    yesterday: ['2026-11-22T08:00:00Z', '2026-11-23T08:00:00Z', false],
+    this_week: ['2026-11-23T08:00:00Z', '2026-11-23T20:00:00Z', true],
+    last_30_days: ['2026-10-25T07:00:00Z', '2026-11-23T08:00:00Z', false],
+  };
+  const [start_utc, end_utc, partial] = windows[period];
+  const sm = { wavelength_mode: 'SM', wavelength_1_nm: 1310, wavelength_2_nm: 1550, failed: 20, first_only: 12, second_only: 5, both: 3 };
+  const mm = { wavelength_mode: 'MM', wavelength_1_nm: 850, wavelength_2_nm: 1300, failed: 1, first_only: 0, second_only: 1, both: 0 };
+  const pairs = failureWavelengthsMode === 'empty' ? [] : period === 'last_30_days' ? [mm, sm] : [sm];
+  const failed = pairs.reduce((sum, pair) => sum + pair.failed, 0);
+  return {
+    data_source: 'test_database', tls: 'encrypted_unverified', extracted_at_utc: '2026-11-23T20:00:00Z', timezone: 'America/Los_Angeles',
+    period: { key: period, start_utc, end_utc, partial }, filters: { purpose: purposes }, pairs,
+    totals: { failed, observed: failed + 400, unknown_criteria: failureWavelengthsMode === 'incomplete' ? 2 : 0, runs: 9 },
+    incomplete: failureWavelengthsMode === 'incomplete',
+  };
+};
 const recentFinishedFixture = url => {
   const period = url.searchParams.get('period') || 'last_30_days';
   const purposes = url.searchParams.getAll('purpose').length ? url.searchParams.getAll('purpose') : ['production'];
@@ -630,6 +653,15 @@ await page.route('**/api/v1/reporting/recent-finished-units?*', async route => {
     body: JSON.stringify(runActivityMode === 'not_connected' ? { data_source: 'not_connected' } : recentFinishedFixture(url)),
   });
 });
+await page.route('**/api/v1/reporting/failure-wavelengths?*', async route => {
+  const url = new URL(route.request().url());
+  failureWavelengthsRequests.push(url);
+  await route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify(runActivityMode === 'not_connected' ? { data_source: 'not_connected' } : failureWavelengthsFixture(url)),
+  });
+});
 await page.route('**/api/v1/reporting/unit-outcomes-weekly?*', async route => {
   const url = new URL(route.request().url());
   unitOutcomesWeeklyRequests.push(url);
@@ -709,7 +741,7 @@ page.on('response', response => {
 });
 page.on('requestfailed', request => {
   const pathname = new URL(request.url()).pathname;
-  const expectedUnmountCancellation = ['/api/v1/reporting/run-activity', '/api/v1/reporting/test-time-by-configuration', '/api/v1/reporting/channel-activity', '/api/v1/reporting/failure-rate', '/api/v1/reporting/replacement-activity', '/api/v1/reporting/unit-status', '/api/v1/reporting/unit-test-time', '/api/v1/reporting/recent-finished-units', '/api/v1/reporting/unit-outcomes-weekly', '/api/v1/reporting/recommendation-usage', '/api/v1/reporting/channel-failures', '/api/v1/reporting/failure-concentration', '/api/v1/reporting/station-summary', '/api/v1/units/search', '/api/v1/query/schema', '/api/v1/query/execute'].includes(pathname) && request.failure()?.errorText === 'net::ERR_ABORTED';
+  const expectedUnmountCancellation = ['/api/v1/reporting/run-activity', '/api/v1/reporting/test-time-by-configuration', '/api/v1/reporting/channel-activity', '/api/v1/reporting/failure-rate', '/api/v1/reporting/replacement-activity', '/api/v1/reporting/unit-status', '/api/v1/reporting/unit-test-time', '/api/v1/reporting/recent-finished-units', '/api/v1/reporting/failure-wavelengths', '/api/v1/reporting/unit-outcomes-weekly', '/api/v1/reporting/recommendation-usage', '/api/v1/reporting/channel-failures', '/api/v1/reporting/failure-concentration', '/api/v1/reporting/station-summary', '/api/v1/units/search', '/api/v1/query/schema', '/api/v1/query/execute'].includes(pathname) && request.failure()?.errorText === 'net::ERR_ABORTED';
   if (!expectedUnmountCancellation) errors.push(`Request failed: ${request.url()} ${request.failure()?.errorText}`);
 });
 const check = label => { checks.push(label); console.log(`PASS ${label}`); };
@@ -856,6 +888,7 @@ try {
   await downPage.route('**/api/v1/reporting/unit-status?*', route => route.abort('connectionrefused'));
   await downPage.route('**/api/v1/reporting/unit-test-time?*', route => route.abort('connectionrefused'));
   await downPage.route('**/api/v1/reporting/recent-finished-units?*', route => route.abort('connectionrefused'));
+  await downPage.route('**/api/v1/reporting/failure-wavelengths?*', route => route.abort('connectionrefused'));
   await downPage.route('**/api/v1/reporting/unit-outcomes-weekly?*', route => route.abort('connectionrefused'));
   await downPage.route('**/api/v1/reporting/recommendation-usage?*', route => route.abort('connectionrefused'));
   await downPage.route('**/api/v1/reporting/channel-failures?*', route => route.abort('connectionrefused'));
@@ -865,6 +898,8 @@ try {
     await downPage.goto(`${base}/#/`, { waitUntil: 'domcontentloaded' });
     await downPage.getByRole('region', { name: 'Run activity' }).getByText('Backend not reachable on 127.0.0.1:8000').first().waitFor();
     await assertText(unitTestTimePanel(downPage), 'OSX-150 · SM · 48 channels · 412 units, last 30 days');
+    await downPage.getByRole('img', { name: 'Failed channels by wavelength: 1550 nm only 58 percent, 1310 nm only 27 percent, both 15 percent', exact: true }).waitFor();
+    assert.equal(await downPage.locator('#failure-wavelengths').count(), 0);
     check('Live card backend-down state');
     await downPage.goto(`${base}/#/failures`, { waitUntil: 'domcontentloaded' });
     await downPage.getByRole('region', { name: 'Replacement activity' }).getByText('Backend not reachable on 127.0.0.1:8000').waitFor();
@@ -1007,7 +1042,7 @@ try {
   await assertText(page.getByRole('region', { name: 'Key metrics' }), '+ 1 need analysis · 1 recovery available');
   const liveUnitOutcomes = unitOutcomesPanel();
   await assertText(liveUnitOutcomes, 'Current status of 6 units tested today.');
-  await liveUnitOutcomes.getByText('Live · test database', { exact: true }).waitFor();
+  await liveUnitOutcomes.getByText('Live · test database', { exact: true }).first().waitFor();
   for (const label of ['Passing', 'Recovery available', 'Needs analysis', 'No measured recovery', 'Review required', 'Not evaluated']) {
     const row = liveUnitOutcomes.getByText(label, { exact: true }).locator('..').locator('..');
     await assertText(row, '1');
@@ -1015,10 +1050,8 @@ try {
   }
   assert.equal(await liveUnitOutcomes.getByRole('img', { name: 'Current unit status: 1 passing, 1 recovery available, 1 needs analysis, 1 no measured recovery, 1 review required, 1 not evaluated' }).count(), 1);
   await liveUnitOutcomes.getByText('Current measured status at extraction time. Not a first-pass yield or a final scrap decision.', { exact: true }).waitFor();
-  const wavelengthDemo = liveUnitOutcomes.getByText('Demo', { exact: true });
-  await wavelengthDemo.waitFor();
-  assert.equal(await wavelengthDemo.getAttribute('title'), 'Example only; not from the test database.');
-  assert.ok((await liveUnitOutcomes.textContent()).includes('Live · test database'));
+  await liveUnitOutcomes.locator('#failure-wavelengths').waitFor();
+  assert.equal(await liveUnitOutcomes.getByText('Demo', { exact: true }).count(), 0);
 
   unitStatusMode = 'zero';
   await page.getByRole('button', { name: 'Refresh unit status' }).click();
@@ -1438,6 +1471,33 @@ try {
   await page.getByRole('button', { name: 'Last 30 days', exact: true }).click();
   await table.getByRole('link', { name: 'DEMO-LIVE-703' }).waitFor();
   check('Live activity rows, links, Pacific dates, nulls, limit color, dynamic filters, sorting, empty, truncated, incomplete, and summary re-requests');
+
+  const wavelengths = page.locator('#failure-wavelengths');
+  await wavelengths.waitFor();
+  assert.equal(failureWavelengthsRequests.at(-1).searchParams.get('period'), 'last_30_days');
+  assert.equal(failureWavelengthsRequests.at(-1).searchParams.getAll('purpose').join(','), 'production');
+  // Pairs come from the data in contract order (MM before SM); longer wavelength is listed first in each bar.
+  assert.deepEqual(await wavelengths.getByRole('img').evaluateAll(nodes => nodes.map(node => node.getAttribute('aria-label'))), [
+    'MM 850/1300 nm, 1 failed observation: 1300 nm only 1 (100%), 850 nm only 0 (0%), Both 0 (0%)',
+    'SM 1310/1550 nm, 20 failed observations: 1550 nm only 5 (25%), 1310 nm only 12 (60%), Both 3 (15%)',
+  ]);
+  assert.equal(await wavelengths.getByRole('img').first().locator('div').count(), 1);
+  assert.equal(await wavelengths.locator('.live-unit-badge').count(), 1);
+  assert.equal(await page.getByText('Failed channels by wavelength: 1550 nm only 58 percent', { exact: false }).count(), 0);
+  await page.getByRole('button', { name: 'Today', exact: true }).click();
+  await wavelengths.getByRole('img', { name: /^SM 1310\/1550 nm, 20 failed/ }).waitFor();
+  assert.equal(await wavelengths.getByRole('img').count(), 1);
+  failureWavelengthsMode = 'incomplete';
+  await page.getByRole('button', { name: 'Yesterday', exact: true }).click();
+  await wavelengths.getByText('Run cap reached; results are incomplete.', { exact: true }).waitFor();
+  await assertText(wavelengths, '2 observations with unknown limits not counted.');
+  failureWavelengthsMode = 'empty';
+  await page.getByRole('button', { name: 'Today', exact: true }).click();
+  await wavelengths.getByText('No failed first observations in this range.', { exact: true }).waitFor();
+  failureWavelengthsMode = 'values';
+  await page.getByRole('button', { name: 'Last 30 days', exact: true }).click();
+  await wavelengths.getByRole('img', { name: /^MM 850\/1300 nm/ }).waitFor();
+  check('Live wavelength strip shows real pairs, longer-first segments, range changes, unknown, incomplete, and empty states');
 
   // The following Unit lookup checks start from the demo detail fixture the demo table used to link to.
   await visit('/unit?serial=DEMO-18793');
