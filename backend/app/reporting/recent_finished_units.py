@@ -130,7 +130,7 @@ def _optional_station(value: object) -> int | None:
     return None if value is None else _positive_int(value)
 
 
-def _counts(rows: Sequence[Sequence[object]], unit_ids: set[int]) -> dict[int, int]:
+def replacement_counts(rows: Sequence[Sequence[object]], unit_ids: set[int]) -> dict[int, int]:
     result: dict[int, int] = {}
     for row in rows:
         if len(row) != 2:
@@ -141,6 +141,21 @@ def _counts(rows: Sequence[Sequence[object]], unit_ids: set[int]) -> dict[int, i
             raise ReportingError("schema_incompatible")
         result[unit_id] = count
     return result
+
+
+def eligible_finished_records(records: Sequence[FinishedUnitRecord]) -> list[FinishedUnitRecord]:
+    return [
+        record
+        for record in records
+        if record.outcome is not None
+        and record.exclusion_reason != "run_in_progress"
+        and record.finished_at_utc is not None
+        and not record.outside_period
+    ]
+
+
+def build_replacement_query(unit_ids: Sequence[int]) -> tuple[str, tuple]:
+    return _id_query(_REPLACEMENTS_SQL, unit_ids)
 
 
 def _failure_counts(
@@ -203,14 +218,7 @@ def summarize_recent_finished_units(
     validated_failure_limits: Callable[[list[tuple]], tuple[dict[int, Decimal | None], bool]],
     normalized_sql_limit: Callable[[object], Decimal | None],
 ) -> RecentFinishedUnitsMetrics:
-    eligible = [
-        record
-        for record in records
-        if record.outcome is not None
-        and record.exclusion_reason != "run_in_progress"
-        and record.finished_at_utc is not None
-        and not record.outside_period
-    ]
+    eligible = eligible_finished_records(records)
     ordered = sorted(eligible, key=lambda item: (-item.finished_at_utc.timestamp(), item.unit_id))
     truncated = len(ordered) > RECENT_FINISHED_UNIT_CAP
     listed = ordered[:RECENT_FINISHED_UNIT_CAP]
@@ -223,7 +231,7 @@ def summarize_recent_finished_units(
         if unit_id not in unit_ids or unit_id in stations:
             raise ReportingError("schema_incompatible")
         stations[unit_id] = _optional_station(row[1])
-    replacements = _counts(replacement_rows, unit_ids)
+    replacements = replacement_counts(replacement_rows, unit_ids)
     failures, limits_incomplete = _failure_counts(
         failure_rows, unit_ids, validated_failure_limits, normalized_sql_limit
     )
@@ -288,14 +296,7 @@ def read_recent_finished_units(
     normalized_sql_limit: Callable[[object], Decimal | None],
 ) -> RecentFinishedUnitsMetrics:
     cohort = read_finished_unit_cohort(cursor, query, window)
-    eligible = [
-        record
-        for record in cohort.records
-        if record.outcome is not None
-        and record.exclusion_reason != "run_in_progress"
-        and record.finished_at_utc is not None
-        and not record.outside_period
-    ]
+    eligible = eligible_finished_records(cohort.records)
     eligible.sort(key=lambda item: (-item.finished_at_utc.timestamp(), item.unit_id))
     listed = eligible[:RECENT_FINISHED_UNIT_CAP]
     if not listed:

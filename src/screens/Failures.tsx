@@ -11,6 +11,7 @@ import { loadRecommendationUsage, type RecommendationUsageConnectedResponse } fr
 import { loadFailureConcentration, topConcentration, type FailureConcentrationConnectedResponse } from '../lib/api/failureConcentration';
 import { UNIT_STATUS_LABEL } from '../lib/unitStatusPresentation';
 import { groupFailingUnitReasons } from '../lib/failingUnitReasons';
+import { failureKpiTiles, loadFailureKpis, type FailureKpisConnectedResponse } from '../lib/api/failureKpis';
 import { loadUnitOutcomesWeekly, unitOutcomeGeometry, UNIT_OUTCOMES_EXCLUDED_KEYS, type UnitOutcomesExcludedKey, type UnitOutcomesWeeklyConnectedResponse } from '../lib/api/unitOutcomesWeekly';
 
 const STATUS_PERIOD: Record<LiveReplacementRange, 'today' | 'yesterday' | 'this_week' | 'last_30_days'> = {
@@ -22,6 +23,19 @@ const RANGE_LABEL: Record<LiveReplacementRange, string> = {
 const HISTOGRAM_RANGE_LABEL: Record<LiveReplacementRange, string> = {
   today: 'today', yesterday: 'yesterday', week: 'this week', month: 'in the last 30 days',
 };
+const PACIFIC_DATE = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Los_Angeles', month: 'short', day: 'numeric' });
+const PACIFIC_YEAR = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Los_Angeles', year: 'numeric' });
+
+// "Last 30 days · Oct 25 to Nov 23, 2026" from a live period; the end bound is exclusive.
+function livePeriodHeader(range: LiveReplacementRange, period: { start_utc: string; end_utc: string }): string {
+  const start = new Date(period.start_utc);
+  const end = new Date(Math.max(Date.parse(period.start_utc), Date.parse(period.end_utc) - 1));
+  const startText = PACIFIC_DATE.format(start);
+  const endText = PACIFIC_DATE.format(end);
+  const year = PACIFIC_YEAR.format(end);
+  return `${RANGE_LABEL[range]} · ${startText === endText ? `${endText}, ${year}` : `${startText} to ${endText}, ${year}`}`;
+}
+
 const FAILING_STATUS: UnitStatus[] = ['failing_no_measured_recovery', 'failing_needs_analysis', 'failing_recovery_available'];
 const EVALUATED_STATUS: UnitStatus[] = ['passing', ...FAILING_STATUS];
 type LiveChannelCount = 'all' | number;
@@ -55,6 +69,8 @@ export default function Failures() {
  const [failureConcentrationRefresh, setFailureConcentrationRefresh] = useState(0);
  const [unitOutcomes, setUnitOutcomes] = useState<UnitOutcomesWeeklyConnectedResponse | null>(null);
  const [unitOutcomesRefresh, setUnitOutcomesRefresh] = useState(0);
+ const [failureKpis, setFailureKpis] = useState<FailureKpisConnectedResponse | null>(null);
+ const [failureKpisRefresh, setFailureKpisRefresh] = useState(0);
  const values = getFailuresValues(state);
  const { accent, kpis, weeks: demoWeeks, wGrid: demoWeekGrid, reasons, fbars, fp, topCh, topPort, units } = values;
  useEffect(() => {
@@ -87,15 +103,26 @@ export default function Failures() {
  }, [failureConcentrationRefresh, liveRange]);
  useEffect(() => {
    const controller = new AbortController();
+   loadFailureKpis(STATUS_PERIOD[liveRange], ['production'], controller.signal)
+     .then(result => setFailureKpis(result.data_source === 'test_database' ? result : null))
+     .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setFailureKpis(null); });
+   return () => controller.abort();
+ }, [failureKpisRefresh, liveRange]);
+ useEffect(() => {
+   const controller = new AbortController();
    loadUnitOutcomesWeekly(['production'], controller.signal)
      .then(result => setUnitOutcomes(result.data_source === 'test_database' ? result : null))
      .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setUnitOutcomes(null); });
    return () => controller.abort();
  }, [unitOutcomesRefresh]);
+ const liveKpis = failureKpis && failureKpis.period.key === STATUS_PERIOD[liveRange] ? failureKpis : null;
+ const liveKpiTiles = liveKpis ? failureKpiTiles(liveKpis, String(accent)) : null;
+ const headerPeriod = liveKpis?.period ?? (failureConcentration?.period.key === STATUS_PERIOD[liveRange] ? failureConcentration.period : null);
  const changeLiveRange = (range: LiveReplacementRange) => {
    setUnitStatus(null);
    setRecommendationUsage(null);
    setFailureConcentration(null);
+   setFailureKpis(null);
    setLiveRange(range);
  };
  const refreshUnitStatus = () => {
@@ -180,7 +207,7 @@ export default function Failures() {
 
     <header style={css("display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:14px")}>
       <div style={css("display:flex;flex-direction:column;gap:4px")}>
-        <span style={css("font-size:12.5px;color:var(--muted);font-weight:500")}>Last 30 days · Oct 7 to Nov 5, 2026</span>
+        <span style={css("font-size:12.5px;color:var(--muted);font-weight:500")}>{headerPeriod ? livePeriodHeader(liveRange, headerPeriod) : 'Last 30 days · Oct 7 to Nov 5, 2026'}</span>
         <h1 style={css("margin:0;font-size:28px;line-height:1.15;font-weight:650;letter-spacing:-0.02em")}>Failures & replacements</h1>
         <p style={css("margin:0;font-size:13.5px;color:var(--muted);max-width:640px")}>How often channels fail, how many get swapped to extra ports, and why some units can't be recovered.</p>
       </div>
@@ -203,6 +230,23 @@ export default function Failures() {
 
     <LiveReplacementActivityPanel range={liveRange} onRangeChange={changeLiveRange} />
 
+    {liveKpiTiles ? <>
+    <p className="preview-note">The header filters and export are disabled previews.</p>
+    <section aria-label="Key metrics" id="failure-kpis" data-source="live-failure-kpis" style={css("display:flex;flex-direction:column;gap:8px")}>
+      <div style={css("display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px")}>
+        <span style={css("display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:12.5px;color:var(--muted)")}><span className="live-unit-badge">Live · test database</span>Production units finished {HISTOGRAM_RANGE_LABEL[liveRange]}; retests are run-channels with activity in the range.{liveKpis?.incomplete && <span style={css("color:var(--warn-fg)")}>Bounded cohort is incomplete.</span>}</span>
+        <button type="button" aria-label="Refresh key metrics" onClick={() => setFailureKpisRefresh(value => value + 1)} style={css("min-height:28px;padding:0 8px;border-radius:6px;border:1px solid var(--line);background:var(--panel);color:var(--ink2);font-size:10.5px;font-weight:600")}>Refresh</button>
+      </div>
+      <div style={css("display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px")}>
+      {liveKpiTiles.map(k => <div key={k.key} data-kpi={k.key} style={css("background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;display:flex;flex-direction:column;gap:6px")}>
+          <span style={css("font-size:12.5px;color:var(--muted);font-weight:500")}>{k.label}</span>
+          <span style={css("font-size:30px;line-height:1.05;font-weight:650;letter-spacing:-0.025em;font-variant-numeric:tabular-nums;color:" + k.color)}>{k.value}</span>
+          <span style={css("font-size:12.5px;color:var(--ink2)")}>{k.sub}</span>
+          <div style={css("height:5px;border-radius:3px;background:var(--line2);overflow:hidden;margin-top:4px")}><div style={css("height:5px;border-radius:3px;width:" + k.pct.toFixed(1) + "%;background:" + k.bar)}></div></div>
+        </div>)}
+      </div>
+    </section>
+    </> : <>
     <p className="preview-note">The tiles below marked Demo are synthetic examples with fixed periods; the header filters and export are disabled previews.</p>
     <section aria-label="Key metrics" style={css("display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px")}>
       {kpis.map((k, index0) => <Fragment key={index0}>
@@ -217,6 +261,7 @@ export default function Failures() {
         </div>
       </Fragment>)}
     </section>
+    </>}
 
     <section style={css("display:flex;flex-wrap:wrap;gap:12px")}>
       <div style={css("flex:2 1 560px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:10px")}>

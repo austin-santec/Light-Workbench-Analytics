@@ -469,6 +469,7 @@ def test_openapi_matches_error_and_query_contracts(client):
         "/api/v1/reporting/channel-activity",
         "/api/v1/reporting/channel-failures",
         "/api/v1/reporting/failure-concentration",
+        "/api/v1/reporting/failure-kpis",
         "/api/v1/reporting/failure-wavelengths",
         "/api/v1/reporting/failure-rate",
         "/api/v1/reporting/recommendation-usage",
@@ -525,6 +526,14 @@ def test_openapi_matches_error_and_query_contracts(client):
         "purpose",
     }
     assert failure_wavelengths["responses"]["503"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/ReportingFailureResponse"
+    }
+    failure_kpis = spec["paths"]["/api/v1/reporting/failure-kpis"]["get"]
+    assert {parameter["name"] for parameter in failure_kpis["parameters"]} == {
+        "period",
+        "purpose",
+    }
+    assert failure_kpis["responses"]["503"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/ReportingFailureResponse"
     }
     replacement_activity = spec["paths"]["/api/v1/reporting/replacement-activity"]["get"]

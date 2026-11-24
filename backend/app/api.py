@@ -21,6 +21,7 @@ from app.reporting.models import (
     ChannelActivityQuery,
     ChannelFailuresQuery,
     FailureConcentrationQuery,
+    FailureKpisQuery,
     FailureWavelengthsQuery,
     RecentFinishedUnitsQuery,
     RecommendationUsageQuery,
@@ -54,6 +55,8 @@ from app.schemas import (
     FailureConcentrationConnectedResponse,
     FailureConcentrationPortResponse,
     FailureConcentrationQueryParams,
+    FailureKpisConnectedResponse,
+    FailureKpisQueryParams,
     FailureRateConnectedResponse,
     FailureRateCountsResponse,
     FailureRateDayResponse,
@@ -238,6 +241,19 @@ def validated_recent_finished_units_query(
 ) -> RecentFinishedUnitsQuery:
     try:
         return RecentFinishedUnitsQuery(period=params.period, purposes=tuple(params.purpose))
+    except ValidationError as exc:
+        errors = [
+            item | {"loc": ("query", *item["loc"])}
+            for item in exc.errors(include_url=False, include_input=False, include_context=False)
+        ]
+        raise RequestValidationError(errors) from None
+
+
+def validated_failure_kpis_query(
+    params: Annotated[FailureKpisQueryParams, Query()],
+) -> FailureKpisQuery:
+    try:
+        return FailureKpisQuery(period=params.period, purposes=tuple(params.purpose))
     except ValidationError as exc:
         errors = [
             item | {"loc": ("query", *item["loc"])}
@@ -687,6 +703,43 @@ def failure_concentration(
             for channel in metrics.channels
         ],
         ports=[FailureConcentrationPortResponse(**port.model_dump()) for port in metrics.ports],
+        incomplete=metrics.incomplete,
+    )
+
+
+@router.get(
+    "/reporting/failure-kpis",
+    response_model=FailureKpisConnectedResponse | RunActivityNotConnectedResponse,
+    responses={503: {"model": ReportingFailureResponse}},
+    tags=["reporting"],
+)
+def failure_kpis(
+    query: Annotated[FailureKpisQuery, Depends(validated_failure_kpis_query)],
+    access: Annotated[ReportingAccess | None, Depends(get_reporting_access)],
+    extracted_at: Annotated[datetime, Depends(get_extracted_at_utc)],
+) -> FailureKpisConnectedResponse | RunActivityNotConnectedResponse | JSONResponse:
+    """D17 outcomes and V10 retests for the selected Pacific period."""
+    if access is None:
+        return RunActivityNotConnectedResponse()
+    boundaries = compute_channel_activity_boundaries(extracted_at)
+    try:
+        metrics = access.repository.get_failure_kpis(query, boundaries)
+    except ReportingError as exc:
+        return JSONResponse(status_code=503, content={"code": exc.code})
+    window = boundaries.periods[query.period]
+    return FailureKpisConnectedResponse(
+        tls=access.tls,
+        extracted_at_utc=boundaries.extracted_at_utc,
+        timezone=PACIFIC_TIMEZONE_NAME,
+        period=UnitTestTimePeriodResponse(
+            key=query.period,
+            start_utc=window.start_utc,
+            end_utc=window.end_utc,
+            partial=window.partial,
+        ),
+        filters=UnitTestTimeFilters(purpose=list(query.purposes)),
+        units=metrics.units.model_dump(),
+        retest=metrics.retest.model_dump(),
         incomplete=metrics.incomplete,
     )
 

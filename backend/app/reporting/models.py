@@ -110,6 +110,55 @@ class RecentFinishedUnitsQuery(UnitTestTimeQuery):
     """Filters for the bounded D17 recent-finished-unit table."""
 
 
+class FailureKpisQuery(UnitTestTimeQuery):
+    """Filters for the live Failures KPI counts."""
+
+
+class FailureKpiUnitCounts(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    finished: int = Field(ge=0)
+    passed_no_replacement: int = Field(ge=0)
+    passed_after_replacement: int = Field(ge=0)
+    unrecoverable: int = Field(ge=0)
+    replacement_units: int = Field(ge=0)
+    replaced_channels: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def valid_counts(self) -> Self:
+        needing = self.passed_after_replacement + self.unrecoverable
+        if self.finished != self.passed_no_replacement + needing:
+            raise ValueError("Finished must equal the three outcome counts")
+        if not self.passed_after_replacement <= self.replacement_units <= needing:
+            raise ValueError("Replacement-unit count is inconsistent with outcomes")
+        if self.replaced_channels < self.replacement_units:
+            raise ValueError("Replaced channels must cover replacement units")
+        if (self.replaced_channels == 0) != (self.replacement_units == 0):
+            raise ValueError("Replacement units and channels must both be zero or nonzero")
+        return self
+
+
+class FailureKpiRetestCounts(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    active_run_channels: int = Field(ge=0)
+    retested_run_channels: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def retests_are_active(self) -> Self:
+        if self.retested_run_channels > self.active_run_channels:
+            raise ValueError("Retested run-channels must be active")
+        return self
+
+
+class FailureKpisMetrics(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    units: FailureKpiUnitCounts
+    retest: FailureKpiRetestCounts
+    incomplete: bool
+
+
 class FinishedUnitCounts(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 

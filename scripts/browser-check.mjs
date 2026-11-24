@@ -20,6 +20,7 @@ let failureConcentrationMode = 'values';
 let stationMode = 'values';
 let recentFinishedMode = 'values';
 let failureWavelengthsMode = 'values';
+let failureKpisMode = 'values';
 const runActivityRequests = [];
 const configurationTimingRequests = [];
 const channelActivityRequests = [];
@@ -34,6 +35,7 @@ const failureConcentrationRequests = [];
 const stationSummaryRequests = [];
 const recentFinishedRequests = [];
 const failureWavelengthsRequests = [];
+const failureKpisRequests = [];
 const unitSearchRequests = [];
 const purposeTotals = { production: 2, engineering: 3, training: 1, calibration: 4 };
 const purposeOpenRuns = { production: 0, engineering: 1, training: 0, calibration: 0 };
@@ -462,6 +464,28 @@ const channelFailuresFixture = url => {
     incomplete: channelFailuresMode === 'incomplete',
   };
 };
+const failureKpisFixture = url => {
+  const period = url.searchParams.get('period') || 'last_30_days';
+  const purposes = url.searchParams.getAll('purpose').length ? url.searchParams.getAll('purpose') : ['production'];
+  const windows = {
+    today: ['2026-11-13T08:00:00Z', '2026-11-13T20:00:00Z', true],
+    yesterday: ['2026-11-12T08:00:00Z', '2026-11-13T08:00:00Z', false],
+    this_week: ['2026-11-09T08:00:00Z', '2026-11-13T20:00:00Z', true],
+    last_30_days: ['2026-10-14T07:00:00Z', '2026-11-13T08:00:00Z', false],
+  };
+  const [start_utc, end_utc, partial] = windows[period];
+  const units = failureKpisMode === 'zero'
+    ? { finished: 0, passed_no_replacement: 0, passed_after_replacement: 0, unrecoverable: 0, replacement_units: 0, replaced_channels: 0 }
+    : period === 'last_30_days'
+      ? { finished: 8, passed_no_replacement: 5, passed_after_replacement: 3, unrecoverable: 0, replacement_units: 3, replaced_channels: 7 }
+      : { finished: 4, passed_no_replacement: 2, passed_after_replacement: 1, unrecoverable: 1, replacement_units: 2, replaced_channels: 5 };
+  return {
+    data_source: 'test_database', tls: 'encrypted_unverified', extracted_at_utc: '2026-11-13T20:00:00Z', timezone: 'America/Los_Angeles',
+    period: { key: period, start_utc, end_utc, partial }, filters: { purpose: purposes }, units,
+    retest: failureKpisMode === 'zero' ? { active_run_channels: 0, retested_run_channels: 0 } : { active_run_channels: 110, retested_run_channels: 7 },
+    incomplete: failureKpisMode === 'incomplete',
+  };
+};
 const failureConcentrationFixture = url => {
   const period = url.searchParams.get('period') || 'last_30_days';
   const purposes = url.searchParams.getAll('purpose').length ? url.searchParams.getAll('purpose') : ['production'];
@@ -680,6 +704,15 @@ await page.route('**/api/v1/reporting/channel-failures?*', async route => {
     body: JSON.stringify(runActivityMode === 'not_connected' ? { data_source: 'not_connected' } : channelFailuresFixture(url)),
   });
 });
+await page.route('**/api/v1/reporting/failure-kpis?*', async route => {
+  const url = new URL(route.request().url());
+  failureKpisRequests.push(url);
+  await route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify(runActivityMode === 'not_connected' ? { data_source: 'not_connected' } : failureKpisFixture(url)),
+  });
+});
 await page.route('**/api/v1/reporting/failure-concentration?*', async route => {
   const url = new URL(route.request().url());
   failureConcentrationRequests.push(url);
@@ -741,7 +774,7 @@ page.on('response', response => {
 });
 page.on('requestfailed', request => {
   const pathname = new URL(request.url()).pathname;
-  const expectedUnmountCancellation = ['/api/v1/reporting/run-activity', '/api/v1/reporting/test-time-by-configuration', '/api/v1/reporting/channel-activity', '/api/v1/reporting/failure-rate', '/api/v1/reporting/replacement-activity', '/api/v1/reporting/unit-status', '/api/v1/reporting/unit-test-time', '/api/v1/reporting/recent-finished-units', '/api/v1/reporting/failure-wavelengths', '/api/v1/reporting/unit-outcomes-weekly', '/api/v1/reporting/recommendation-usage', '/api/v1/reporting/channel-failures', '/api/v1/reporting/failure-concentration', '/api/v1/reporting/station-summary', '/api/v1/units/search', '/api/v1/query/schema', '/api/v1/query/execute'].includes(pathname) && request.failure()?.errorText === 'net::ERR_ABORTED';
+  const expectedUnmountCancellation = ['/api/v1/reporting/run-activity', '/api/v1/reporting/test-time-by-configuration', '/api/v1/reporting/channel-activity', '/api/v1/reporting/failure-rate', '/api/v1/reporting/replacement-activity', '/api/v1/reporting/unit-status', '/api/v1/reporting/unit-test-time', '/api/v1/reporting/recent-finished-units', '/api/v1/reporting/failure-wavelengths', '/api/v1/reporting/unit-outcomes-weekly', '/api/v1/reporting/recommendation-usage', '/api/v1/reporting/channel-failures', '/api/v1/reporting/failure-concentration', '/api/v1/reporting/failure-kpis', '/api/v1/reporting/station-summary', '/api/v1/units/search', '/api/v1/query/schema', '/api/v1/query/execute'].includes(pathname) && request.failure()?.errorText === 'net::ERR_ABORTED';
   if (!expectedUnmountCancellation) errors.push(`Request failed: ${request.url()} ${request.failure()?.errorText}`);
 });
 const check = label => { checks.push(label); console.log(`PASS ${label}`); };
@@ -893,6 +926,7 @@ try {
   await downPage.route('**/api/v1/reporting/recommendation-usage?*', route => route.abort('connectionrefused'));
   await downPage.route('**/api/v1/reporting/channel-failures?*', route => route.abort('connectionrefused'));
   await downPage.route('**/api/v1/reporting/failure-concentration?*', route => route.abort('connectionrefused'));
+  await downPage.route('**/api/v1/reporting/failure-kpis?*', route => route.abort('connectionrefused'));
   await downPage.route('**/api/v1/reporting/station-summary*', route => route.abort('connectionrefused'));
   try {
     await downPage.goto(`${base}/#/`, { waitUntil: 'domcontentloaded' });
@@ -904,6 +938,9 @@ try {
     await downPage.goto(`${base}/#/failures`, { waitUntil: 'domcontentloaded' });
     await downPage.getByRole('region', { name: 'Replacement activity' }).getByText('Backend not reachable on 127.0.0.1:8000').waitFor();
     await downPage.getByText('More failures than usable extras (4)', { exact: true }).waitFor();
+    await downPage.getByRole('region', { name: 'Key metrics' }).getByText('838', { exact: true }).waitFor();
+    assert.equal(await downPage.getByRole('region', { name: 'Key metrics' }).getByText('Demo', { exact: true }).count(), 5);
+    await downPage.getByText('Last 30 days · Oct 7 to Nov 5, 2026', { exact: true }).waitFor();
     await downPage.getByText('failed channels in one unit, first pass', { exact: true }).waitFor();
     await failureReasonsPanel(downPage).getByText("27 units, from each run's latest replacement analysis.", { exact: true }).waitFor();
     await weeklyOutcomesPanel(downPage).getByText('Passed first time', { exact: true }).waitFor();
@@ -1240,6 +1277,37 @@ try {
   await concentrationPanel.getByRole('button', { name: 'Refresh failure concentration' }).click();
   await concentrationPanel.getByText('Failed first observations, today · 15 of 110 failed.', { exact: true }).waitFor();
   check('Failure concentration covers connected ranking, ties, counts, titles, relative bars, same-number extra ports, notes, empty state, range, and refresh');
+
+  // Failures KPI tiles follow the shared live range (Today here).
+  const kpis = page.locator('#failure-kpis');
+  const kpiValue = key => kpis.locator(`[data-kpi="${key}"]`);
+  await kpiValue('needing').getByText('2', { exact: true }).waitFor();
+  assert.equal(failureKpisRequests.at(-1).searchParams.get('period'), 'today');
+  assert.equal(failureKpisRequests.at(-1).searchParams.getAll('purpose').join(','), 'production');
+  await assertText(kpiValue('needing'), '50.0% of 4 finished units');
+  await assertText(kpiValue('swapped'), '2.5');
+  await assertText(kpiValue('swapped'), '5 replaced channels across 2 units');
+  await assertText(kpiValue('recovered'), '50.0%');
+  await assertText(kpiValue('recovered'), '1 of 2 units that needed replacement now pass');
+  await assertText(kpiValue('unrecoverable'), '25.0% of 4 finished units');
+  await assertText(kpiValue('retested'), '6.4%');
+  await assertText(kpiValue('retested'), '7 of 110 run-channels had another attempt in the same run');
+  assert.equal(await kpis.getByText('Demo', { exact: true }).count(), 0);
+  assert.equal(await page.getByText('838', { exact: true }).count(), 0);
+  await page.getByText('Today · Nov 13, 2026', { exact: true }).waitFor();
+  failureKpisMode = 'zero';
+  await kpis.getByRole('button', { name: 'Refresh key metrics' }).click();
+  await kpiValue('needing').getByText('No finished units in this range', { exact: true }).waitFor();
+  await kpiValue('swapped').getByText('—', { exact: true }).waitFor();
+  await assertText(kpiValue('recovered'), 'No units needed replacement');
+  await assertText(kpiValue('retested'), 'No channel activity in this range');
+  failureKpisMode = 'incomplete';
+  await kpis.getByRole('button', { name: 'Refresh key metrics' }).click();
+  await kpis.getByText('Bounded cohort is incomplete.', { exact: true }).waitFor();
+  failureKpisMode = 'values';
+  await kpis.getByRole('button', { name: 'Refresh key metrics' }).click();
+  await kpiValue('swapped').getByText('2.5', { exact: true }).waitFor();
+  check('Failures KPI tiles show live counts, ratios, null ratios, incomplete, refresh, and the live header period');
   const liveFailureHistogram = failureHistogramPanel();
   await liveFailureHistogram.getByText('4 evaluated units tested today · 3 currently failing.', { exact: true }).waitFor();
   await liveFailureHistogram.getByText('Live · test database', { exact: true }).waitFor();

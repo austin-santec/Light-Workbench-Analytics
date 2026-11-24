@@ -16,6 +16,7 @@ from app.reporting.channel_activity import (
     WeeklyOutcomeBoundaries,
 )
 from app.reporting.console_guard import StatementRejected, validate_console_statement
+from app.reporting.failure_kpis import FailureKpisMetrics, read_failure_kpis
 from app.reporting.first_observations import FIRST_OBSERVATION_CTES
 from app.reporting.models import (
     ChannelActivityCounts,
@@ -31,6 +32,7 @@ from app.reporting.models import (
     FailureConcentrationMetrics,
     FailureConcentrationPort,
     FailureConcentrationQuery,
+    FailureKpisQuery,
     FailureRateCounts,
     FailureRateMetrics,
     FailureWavelengthPair,
@@ -1643,6 +1645,9 @@ class ReportingRepository(Protocol):
     def get_failure_wavelengths(
         self, query: FailureWavelengthsQuery, boundaries: ChannelActivityBoundaries
     ) -> FailureWavelengthsMetrics: ...
+    def get_failure_kpis(
+        self, query: FailureKpisQuery, boundaries: ChannelActivityBoundaries
+    ) -> FailureKpisMetrics: ...
     def get_station_summary(
         self, query: StationSummaryQuery, boundaries: ChannelActivityBoundaries
     ) -> StationSummaryMetrics: ...
@@ -1846,6 +1851,14 @@ class SqlServerReportingRepository:
             if len(rows) > FAILURE_RATE_RUN_CAP:
                 raise ReportingError("schema_incompatible")
             return summarize_station_summary(rows, limit_rows)
+
+    def get_failure_kpis(
+        self, query: FailureKpisQuery, boundaries: ChannelActivityBoundaries
+    ) -> FailureKpisMetrics:
+        query = FailureKpisQuery.model_validate(query.model_dump())
+        with self._adapter.cursor() as cursor:
+            self._preflight(cursor)
+            return read_failure_kpis(cursor, query, boundaries.periods[query.period])
 
     def get_replacement_activity(
         self, query: ReplacementActivityQuery, boundaries: ChannelActivityBoundaries

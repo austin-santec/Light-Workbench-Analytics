@@ -143,6 +143,10 @@ class RecentFinishedUnitsQueryParams(UnitTestTimeQueryParams):
     pass
 
 
+class FailureKpisQueryParams(UnitTestTimeQueryParams):
+    pass
+
+
 class UnitOutcomesWeeklyQueryParams(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
@@ -630,6 +634,57 @@ class RecentFinishedUnitsConnectedResponse(BaseModel):
     filters: UnitTestTimeFilters
     units: list[RecentFinishedUnitResponse] = Field(max_length=100)
     truncated: bool
+    incomplete: bool
+
+
+class FailureKpiUnitsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    finished: int = Field(ge=0)
+    passed_no_replacement: int = Field(ge=0)
+    passed_after_replacement: int = Field(ge=0)
+    unrecoverable: int = Field(ge=0)
+    replacement_units: int = Field(ge=0)
+    replaced_channels: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def valid_counts(self) -> Self:
+        needing = self.passed_after_replacement + self.unrecoverable
+        if self.finished != self.passed_no_replacement + needing:
+            raise ValueError("Finished must equal the three outcome counts")
+        if not self.passed_after_replacement <= self.replacement_units <= needing:
+            raise ValueError("Replacement-unit count is inconsistent with outcomes")
+        if self.replaced_channels < self.replacement_units:
+            raise ValueError("Replaced channels must cover replacement units")
+        if (self.replaced_channels == 0) != (self.replacement_units == 0):
+            raise ValueError("Replacement units and channels must both be zero or nonzero")
+        return self
+
+
+class FailureKpiRetestResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    active_run_channels: int = Field(ge=0)
+    retested_run_channels: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def retests_are_active(self) -> Self:
+        if self.retested_run_channels > self.active_run_channels:
+            raise ValueError("Retested run-channels must be active")
+        return self
+
+
+class FailureKpisConnectedResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    data_source: Literal["test_database"] = "test_database"
+    tls: Literal["verified", "encrypted_unverified"]
+    extracted_at_utc: AwareDatetime
+    timezone: Literal["America/Los_Angeles"] = "America/Los_Angeles"
+    period: UnitTestTimePeriodResponse
+    filters: UnitTestTimeFilters
+    units: FailureKpiUnitsResponse
+    retest: FailureKpiRetestResponse
     incomplete: bool
 
 

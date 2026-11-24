@@ -190,6 +190,10 @@ Migration review at source commit `5d4972830e74cc1b1e718fb577916d132e58faf7` fou
 
 The recent-finished-units operation reuses the D17 cohort and timing statements unchanged, then runs exactly three bounded reads for the newest 100 eligible unit IDs: latest qualifying-run `station_number`; first logical-channel observations across qualifying runs using the shared saved-limit parser and strict `>` agreement check; and `COUNT(DISTINCT logical_channel)` replacements across every historical assignment. All identifiers and purposes are bound parameters, explicit projections and `TOP`/`fetchmany(cap + 1)` bounds are retained, empty cohorts skip every follow-up, and overflow is surfaced as incomplete. These reads use only already gated objects and columns and require no new grant.
 
+### Failure KPI reads
+
+Failure KPIs reuse the unchanged D17 cohort/timing pipeline for every eligible unit in the bounded 500-unit cohort, then issue only the existing distinct-replacement follow-up for those unit IDs. A separate fixed retest aggregate preserves station summary's candidate-run, whole-run observation ranking and selected-window V08/V10 rules while exposing candidate-cap overflow. All values are bound, projections are explicit, and the normal preflight, one short-lived connection, timeout and deterministic cleanup rules apply. No new object, column gate, permission or grant is required.
+
 ## Tests, local diagnostic and Stage B acceptance
 
 From `backend/`:

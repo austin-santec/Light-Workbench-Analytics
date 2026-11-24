@@ -244,6 +244,14 @@ While live mode is connected, the Unit sidebar reads and writes at most five rec
 
 `GET /api/v1/reporting/recent-finished-units?period=today|yesterday|this_week|last_30_days&purpose=<purpose>[&purpose=...]` lists at most 100 newest D17-finished units for the selected Pacific summary period. Defaults, validation, period/filter echo, `not_connected`, and sanitized 503 behavior match unit test time. Missing-duration units remain listed with `total_ms: null`; an open qualifying run excludes the unit. Each exact-key row carries the D16 context configuration, latest qualifying-run station, distinct historical replacement channels, distinct first-observation failed channels (or null plus `failed_unknown`), and the worst current effective insertion-loss reading with wavelength and saved-limit verdict. `truncated` reports more than 100 eligible rows; `incomplete` reports any bounded source or follow-up overflow.
 
+### Failure KPIs
+
+`GET /api/v1/reporting/failure-kpis?period=today|yesterday|this_week|last_30_days&purpose=<purpose>[&purpose=...]` returns integer inputs for the five live Failures KPI tiles. Defaults are `last_30_days` and `production`; purposes are one to four unique values. Unknown parameters are rejected. Period/filter echo, the exact `not_connected` envelope, and sanitized 503 behavior match recent finished units.
+
+`units` contains `finished`, `passed_no_replacement`, `passed_after_replacement`, `unrecoverable`, `replacement_units`, and `replaced_channels`. Finished is the sum of the three outcomes. Replacement units are D17-finished units with at least one distinct historical replaced logical channel; every passed-after-replacement unit is included, while an unrecoverable unit may have zero replacements. `replaced_channels` sums each replacement unit's distinct logical channels across all historical assignments. Missing-duration finished units count, open qualifying runs do not, and the 100-row recent-units display cap does not apply.
+
+`retest` contains `active_run_channels` and `retested_run_channels` using station summary's V08/V10 within-run definition for the selected period. A predecessor before the selected period can make an in-period attempt a retest; an attempt in another run cannot. The client computes all ratios. Every count is a non-negative integer, retested cannot exceed active, and `incomplete` is true when any cohort, follow-up, or retest candidate-run cap overflows.
+
 ## Errors
 
 `ErrorResponse` wraps `{error: {code: string, message: string, details: ErrorDetail[]}}`; details contain only `{field: string, code: string}`. Example invalid `limit=0`:
