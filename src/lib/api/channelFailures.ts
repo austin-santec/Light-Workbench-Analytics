@@ -1,6 +1,7 @@
 import type { Purpose } from '../../types';
 import { CHANNEL_ACTIVITY_PERIODS, type ChannelActivityPeriodKey } from './channelActivity';
 import { RUN_PURPOSES, RunActivityClientError } from './runActivity';
+import { appendReportFilters, filterEchoMatches, isReportFilterEcho, NO_FILTERS, type ReportFilterEcho, type ReportFilters } from './reportFilters';
 
 export interface ChannelFailureCounts {
   failed: number;
@@ -24,7 +25,7 @@ export interface ChannelFailuresConnectedResponse {
     end_utc: string;
     partial: boolean;
   };
-  filters: { purpose: Purpose[]; wavelength_mode: 'SM' | 'MM' | null; switch_model: string | null };
+  filters: ReportFilterEcho;
   classification_rule: 'strict >, run limit snapshot';
   totals: ChannelFailureCounts;
   runs: number;
@@ -73,9 +74,7 @@ export function isChannelFailuresConnectedResponse(value: unknown): value is Cha
   if (value.data_source !== 'test_database' || !['verified', 'encrypted_unverified'].includes(value.tls as string) || !utcTimestamp(value.extracted_at_utc) || value.timezone !== 'America/Los_Angeles' || value.classification_rule !== 'strict >, run limit snapshot') return false;
   const period = value.period;
   if (!isRecord(period) || !exactKeys(period, ['key', 'start_utc', 'end_utc', 'partial']) || !CHANNEL_ACTIVITY_PERIODS.includes(period.key as ChannelActivityPeriodKey) || !utcTimestamp(period.start_utc) || !utcTimestamp(period.end_utc) || typeof period.partial !== 'boolean' || Date.parse(period.start_utc) > Date.parse(period.end_utc)) return false;
-  const filters = value.filters;
-  if (!isRecord(filters) || !exactKeys(filters, ['purpose', 'wavelength_mode', 'switch_model']) || !Array.isArray(filters.purpose) || filters.purpose.length < 1 || filters.purpose.length > RUN_PURPOSES.length || new Set(filters.purpose).size !== filters.purpose.length || !filters.purpose.every(purpose => RUN_PURPOSES.includes(purpose as Purpose))) return false;
-  if (!(filters.wavelength_mode === null || filters.wavelength_mode === 'SM' || filters.wavelength_mode === 'MM') || !(filters.switch_model === null || typeof filters.switch_model === 'string')) return false;
+  if (!isReportFilterEcho(value.filters)) return false;
   if (!isRecord(value.totals) || !exactKeys(value.totals, COUNT_KEYS) || !isCounts(value.totals)) return false;
   if (!nonnegativeInteger(value.runs) || typeof value.incomplete !== 'boolean') return false;
   if (!Array.isArray(value.channels) || !value.channels.every(isChannel)) return false;
@@ -95,12 +94,14 @@ export async function loadChannelFailures(
   period: ChannelActivityPeriodKey,
   purposes: readonly Purpose[],
   signal: AbortSignal,
+  filters: ReportFilters = NO_FILTERS,
 ): Promise<ChannelFailuresResult> {
   if (!CHANNEL_ACTIVITY_PERIODS.includes(period) || purposes.length < 1 || purposes.length > RUN_PURPOSES.length || new Set(purposes).size !== purposes.length || purposes.some(purpose => !RUN_PURPOSES.includes(purpose))) {
     throw new RunActivityClientError('invalid_response');
   }
   const query = new URLSearchParams({ period });
   purposes.forEach(purpose => query.append('purpose', purpose));
+  appendReportFilters(query, filters);
   const response = await fetch(`/api/v1/reporting/channel-failures?${query}`, { signal, headers: { Accept: 'application/json' } });
   const body = await readJson(response);
   if (response.status === 503) {
@@ -110,8 +111,7 @@ export async function loadChannelFailures(
   }
   if (!response.ok) throw new RunActivityClientError(response.status >= 500 ? 'unreachable' : 'request_failed');
   if (isRecord(body) && exactKeys(body, ['data_source']) && body.data_source === 'not_connected') return { data_source: 'not_connected' };
-  if (!isChannelFailuresConnectedResponse(body) || body.period.key !== period || body.filters.wavelength_mode !== null || body.filters.switch_model !== null
-    || body.filters.purpose.length !== purposes.length || body.filters.purpose.some((purpose, index) => purpose !== purposes[index])) throw new RunActivityClientError('invalid_response');
+  if (!isChannelFailuresConnectedResponse(body) || body.period.key !== period || !filterEchoMatches(body.filters, purposes, filters)) throw new RunActivityClientError('invalid_response');
   return body;
 }
 

@@ -1,6 +1,7 @@
 import type { Purpose } from '../../types';
 import { CHANNEL_ACTIVITY_PERIODS, type ChannelActivityPeriodKey } from './channelActivity';
 import { RUN_PURPOSES, RunActivityClientError } from './runActivity';
+import { appendReportFilters, filterEchoMatches, isReportFilterEcho, NO_FILTERS, type ReportFilterEcho, type ReportFilters } from './reportFilters';
 
 export interface FailureWavelengthPair {
   wavelength_mode: 'SM' | 'MM';
@@ -18,7 +19,7 @@ export interface FailureWavelengthsConnectedResponse {
   extracted_at_utc: string;
   timezone: 'America/Los_Angeles';
   period: { key: ChannelActivityPeriodKey; start_utc: string; end_utc: string; partial: boolean };
-  filters: { purpose: Purpose[] };
+  filters: ReportFilterEcho;
   pairs: FailureWavelengthPair[];
   totals: { failed: number; observed: number; unknown_criteria: number; runs: number };
   incomplete: boolean;
@@ -82,8 +83,7 @@ export function isFailureWavelengthsConnectedResponse(value: unknown): value is 
     || !utcTimestamp(period.start_utc) || !utcTimestamp(period.end_utc)
     || typeof period.partial !== 'boolean'
     || Date.parse(period.start_utc) > Date.parse(period.end_utc)) return false;
-  const filters = value.filters;
-  if (!isRecord(filters) || !exactKeys(filters, ['purpose']) || !validPurposes(filters.purpose)) return false;
+  if (!isReportFilterEcho(value.filters)) return false;
   const totals = value.totals;
   if (!isRecord(totals) || !exactKeys(totals, ['failed', 'observed', 'unknown_criteria', 'runs'])
     || !nonnegativeInteger(totals.failed) || !nonnegativeInteger(totals.observed)
@@ -103,12 +103,14 @@ export async function loadFailureWavelengths(
   period: ChannelActivityPeriodKey,
   purposes: readonly Purpose[],
   signal: AbortSignal,
+  filters: ReportFilters = NO_FILTERS,
 ): Promise<FailureWavelengthsResult> {
   if (!CHANNEL_ACTIVITY_PERIODS.includes(period) || !validPurposes([...purposes])) {
     throw new RunActivityClientError('invalid_response');
   }
   const query = new URLSearchParams({ period });
   purposes.forEach(purpose => query.append('purpose', purpose));
+  appendReportFilters(query, filters);
   const response = await fetch(`/api/v1/reporting/failure-wavelengths?${query}`, {
     signal,
     headers: { Accept: 'application/json' },
@@ -127,8 +129,7 @@ export async function loadFailureWavelengths(
     return { data_source: 'not_connected' };
   }
   if (!isFailureWavelengthsConnectedResponse(body) || body.period.key !== period
-    || body.filters.purpose.length !== purposes.length
-    || body.filters.purpose.some((purpose, index) => purpose !== purposes[index])) {
+    || !filterEchoMatches(body.filters, purposes, filters)) {
     throw new RunActivityClientError('invalid_response');
   }
   return body;

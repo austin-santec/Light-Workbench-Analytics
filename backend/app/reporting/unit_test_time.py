@@ -11,6 +11,7 @@ from typing import Literal
 
 from app.reporting.adapter import ReportingError
 from app.reporting.channel_activity import ActivityWindow
+from app.reporting.filters import unit_matches_filters
 from app.reporting.models import (
     FinishedUnitCounts,
     TimingQuality,
@@ -31,6 +32,25 @@ from app.reporting.unit_status import (
 from app.schemas import RunPurpose
 
 _PURPOSE_SLOTS = 4
+_LATEST_STATION_SQL = f"""
+WITH ranked_runs AS (
+    SELECT a.unit_id, r.station_number,
+        ROW_NUMBER() OVER (
+            PARTITION BY a.unit_id
+            ORDER BY r.run_started_at_utc DESC, r.run_id DESC
+        ) AS run_rank
+    FROM dbo.UNIT_SWITCH_ASSIGNMENTS AS a
+    JOIN dbo.IL_RUNS AS r ON r.assignment_id = a.assignment_id
+    WHERE a.unit_id IN ({{placeholders}})
+        AND r.run_purpose IN ({", ".join("?" for _ in range(_PURPOSE_SLOTS))})
+        AND r.analysis_status NOT IN ('excluded', 'superseded')
+        AND r.superseded_by_run_id IS NULL
+)
+SELECT TOP ({UNIT_STATUS_COHORT_CAP + 1}) unit_id, station_number
+FROM ranked_runs
+WHERE run_rank = 1
+ORDER BY unit_id
+"""
 FINISHED_ANALYSIS_RESULTS = {
     "fail_no_viable_recovery",
     "not_applicable_no_extra_ports",
@@ -165,6 +185,52 @@ class FinishedUnitCohort:
     incomplete: bool
 
 
+def build_latest_station_query(
+    unit_ids: Sequence[int], purposes: Sequence[RunPurpose]
+) -> tuple[str, tuple[object, ...]]:
+    values = tuple(unit_ids)
+    if not values or len(values) > UNIT_STATUS_COHORT_CAP or len(set(values)) != len(values):
+        raise ValueError("One to 500 unique bounded unit identifiers are required")
+    purpose_values = [purpose.value for purpose in purposes]
+    purpose_values.extend([purpose_values[-1]] * (_PURPOSE_SLOTS - len(purpose_values)))
+    return (
+        _LATEST_STATION_SQL.format(placeholders=", ".join("?" for _ in values)),
+        (*values, *purpose_values),
+    )
+
+
+def parse_latest_stations(
+    rows: Sequence[Sequence[object]], unit_ids: set[int]
+) -> dict[int, int | None]:
+    stations: dict[int, int | None] = {}
+    for row in rows:
+        if len(row) != 2:
+            raise ReportingError("schema_incompatible")
+        unit_id = _positive_int(row[0])
+        if unit_id not in unit_ids or unit_id in stations:
+            raise ReportingError("schema_incompatible")
+        stations[unit_id] = _optional_positive_int(row[1])
+    return stations
+
+
+def filter_finished_unit_records(
+    records: Sequence[FinishedUnitRecord],
+    query: UnitTestTimeQuery,
+    stations: dict[int, int | None],
+) -> tuple[FinishedUnitRecord, ...]:
+    return tuple(
+        record
+        for record in records
+        if unit_matches_filters(
+            query,
+            switch_model=record.switch_model,
+            wavelength_mode=record.wavelength_mode,
+            channel_count=record.channel_count,
+            station=stations.get(record.unit_id),
+        )
+    )
+
+
 def finished_outcome(projection: UnitStatusProjection) -> FinishedOutcome | None:
     """Apply the reusable D17 working finished-unit rule to one D16 projection."""
     if projection.status == "passing":
@@ -282,7 +348,20 @@ def summarize_finished_unit_cohort(
             )
             records.append(
                 FinishedUnitRecord(
-                    unit_id, cohort.main_board_serial, None, reason, None, False, False, 0, 0, 0, 0
+                    unit_id,
+                    cohort.main_board_serial,
+                    None,
+                    reason,
+                    None,
+                    False,
+                    False,
+                    0,
+                    0,
+                    0,
+                    0,
+                    switch_model=cohort.switch_model,
+                    wavelength_mode=projection.wavelength_mode,
+                    channel_count=projection.channel_count,
                 )
             )
             continue
@@ -307,13 +386,29 @@ def summarize_finished_unit_cohort(
                     len(qualifying),
                     0,
                     0,
+                    switch_model=cohort.switch_model,
+                    wavelength_mode=projection.wavelength_mode,
+                    channel_count=projection.channel_count,
                 )
             )
             continue
         if not qualifying:
             records.append(
                 FinishedUnitRecord(
-                    unit_id, cohort.main_board_serial, outcome, None, None, False, True, 0, 0, 0, 0
+                    unit_id,
+                    cohort.main_board_serial,
+                    outcome,
+                    None,
+                    None,
+                    False,
+                    True,
+                    0,
+                    0,
+                    0,
+                    0,
+                    switch_model=cohort.switch_model,
+                    wavelength_mode=projection.wavelength_mode,
+                    channel_count=projection.channel_count,
                 )
             )
             continue
@@ -452,9 +547,29 @@ def read_finished_unit_cohort(
     records = summarize_finished_unit_cohort(
         cohorts, projections, timing_rows[:UNIT_STATUS_RUN_CAP], query, window
     )
+    station_incomplete = False
+    if isinstance(query, UnitTestTimeQuery):
+        stations: dict[int, int | None] = {}
+        if query.station is not None:
+            eligible_ids = tuple(
+                record.unit_id
+                for record in records
+                if record.outcome is not None
+                and record.exclusion_reason != "run_in_progress"
+                and record.finished_at_utc is not None
+                and not record.outside_period
+            )
+            if eligible_ids:
+                station_sql = build_latest_station_query(eligible_ids, query.purposes)
+                station_rows = cursor.execute(*station_sql).fetchmany(UNIT_STATUS_COHORT_CAP + 1)
+                station_incomplete = len(station_rows) > UNIT_STATUS_COHORT_CAP
+                stations = parse_latest_stations(
+                    station_rows[:UNIT_STATUS_COHORT_CAP], set(eligible_ids)
+                )
+        records = filter_finished_unit_records(records, query, stations)
     return FinishedUnitCohort(
         records=records,
-        incomplete=incomplete or projection_incomplete or timing_incomplete,
+        incomplete=incomplete or projection_incomplete or timing_incomplete or station_incomplete,
     )
 
 

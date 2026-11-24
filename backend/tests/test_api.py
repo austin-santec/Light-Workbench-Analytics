@@ -472,6 +472,7 @@ def test_openapi_matches_error_and_query_contracts(client):
         "/api/v1/reporting/failure-kpis",
         "/api/v1/reporting/failure-wavelengths",
         "/api/v1/reporting/failure-rate",
+        "/api/v1/reporting/filter-options",
         "/api/v1/reporting/recommendation-usage",
         "/api/v1/reporting/recent-finished-units",
         "/api/v1/reporting/replacement-activity",
@@ -507,6 +508,8 @@ def test_openapi_matches_error_and_query_contracts(client):
         "purpose",
         "wavelength_mode",
         "switch_model",
+        "channel_count",
+        "station",
     }
     assert channel_activity["responses"]["503"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/ReportingFailureResponse"
@@ -516,6 +519,8 @@ def test_openapi_matches_error_and_query_contracts(client):
         "purpose",
         "wavelength_mode",
         "switch_model",
+        "channel_count",
+        "station",
     }
     assert failure_rate["responses"]["503"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/ReportingFailureResponse"
@@ -524,6 +529,10 @@ def test_openapi_matches_error_and_query_contracts(client):
     assert {parameter["name"] for parameter in failure_wavelengths["parameters"]} == {
         "period",
         "purpose",
+        "switch_model",
+        "wavelength_mode",
+        "channel_count",
+        "station",
     }
     assert failure_wavelengths["responses"]["503"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/ReportingFailureResponse"
@@ -532,6 +541,10 @@ def test_openapi_matches_error_and_query_contracts(client):
     assert {parameter["name"] for parameter in failure_kpis["parameters"]} == {
         "period",
         "purpose",
+        "switch_model",
+        "wavelength_mode",
+        "channel_count",
+        "station",
     }
     assert failure_kpis["responses"]["503"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/ReportingFailureResponse"
@@ -547,6 +560,10 @@ def test_openapi_matches_error_and_query_contracts(client):
     assert {parameter["name"] for parameter in unit_status["parameters"]} == {
         "period",
         "purpose",
+        "switch_model",
+        "wavelength_mode",
+        "channel_count",
+        "station",
     }
     assert unit_status["responses"]["503"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/ReportingFailureResponse"
@@ -555,6 +572,10 @@ def test_openapi_matches_error_and_query_contracts(client):
     assert {parameter["name"] for parameter in unit_test_time["parameters"]} == {
         "period",
         "purpose",
+        "switch_model",
+        "wavelength_mode",
+        "channel_count",
+        "station",
     }
     assert unit_test_time["responses"]["503"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/ReportingFailureResponse"
@@ -563,6 +584,10 @@ def test_openapi_matches_error_and_query_contracts(client):
     assert {parameter["name"] for parameter in recent_finished["parameters"]} == {
         "period",
         "purpose",
+        "switch_model",
+        "wavelength_mode",
+        "channel_count",
+        "station",
     }
     assert recent_finished["responses"]["503"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/ReportingFailureResponse"

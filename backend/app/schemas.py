@@ -111,12 +111,17 @@ class TestTimeByConfigurationQueryParams(BaseModel):
     wavelength_mode: Literal["SM", "MM"] | None = None
 
 
-class ChannelActivityQueryParams(BaseModel):
+class ReportingFilterQueryParams(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
-    purpose: list[RunPurpose] = Field(default_factory=lambda: [RunPurpose.PRODUCTION])
-    wavelength_mode: Literal["SM", "MM"] | None = None
     switch_model: str | None = None
+    wavelength_mode: Literal["SM", "MM"] | None = None
+    channel_count: int | None = None
+    station: int | None = None
+
+
+class ChannelActivityQueryParams(ReportingFilterQueryParams):
+    purpose: list[RunPurpose] = Field(default_factory=lambda: [RunPurpose.PRODUCTION])
 
 
 class ReplacementActivityQueryParams(BaseModel):
@@ -125,16 +130,12 @@ class ReplacementActivityQueryParams(BaseModel):
     switch_model: str | None = None
 
 
-class UnitStatusQueryParams(BaseModel):
-    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
-
+class UnitStatusQueryParams(ReportingFilterQueryParams):
     period: Literal["today", "yesterday", "this_week", "last_30_days"] = "last_30_days"
     purpose: list[RunPurpose] = Field(default_factory=lambda: [RunPurpose.PRODUCTION])
 
 
-class UnitTestTimeQueryParams(BaseModel):
-    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
-
+class UnitTestTimeQueryParams(ReportingFilterQueryParams):
     period: Literal["today", "yesterday", "this_week", "last_30_days"] = "last_30_days"
     purpose: list[RunPurpose] = Field(default_factory=lambda: [RunPurpose.PRODUCTION])
 
@@ -160,19 +161,14 @@ class RecommendationUsageQueryParams(BaseModel):
     purpose: list[RunPurpose] = Field(default_factory=lambda: [RunPurpose.PRODUCTION])
 
 
-class StationSummaryQueryParams(BaseModel):
-    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
-
-    purpose: list[RunPurpose] = Field(default_factory=lambda: [RunPurpose.PRODUCTION])
-
-
-class ChannelFailuresQueryParams(BaseModel):
-    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
-
+class StationSummaryQueryParams(ReportingFilterQueryParams):
     period: Literal["today", "yesterday", "this_week", "last_30_days"] = "last_30_days"
     purpose: list[RunPurpose] = Field(default_factory=lambda: [RunPurpose.PRODUCTION])
-    wavelength_mode: Literal["SM", "MM"] | None = None
-    switch_model: str | None = None
+
+
+class ChannelFailuresQueryParams(ReportingFilterQueryParams):
+    period: Literal["today", "yesterday", "this_week", "last_30_days"] = "last_30_days"
+    purpose: list[RunPurpose] = Field(default_factory=lambda: [RunPurpose.PRODUCTION])
 
 
 class FailureConcentrationQueryParams(BaseModel):
@@ -182,9 +178,7 @@ class FailureConcentrationQueryParams(BaseModel):
     purpose: list[RunPurpose] = Field(default_factory=lambda: [RunPurpose.PRODUCTION])
 
 
-class FailureWavelengthsQueryParams(BaseModel):
-    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
-
+class FailureWavelengthsQueryParams(ReportingFilterQueryParams):
     period: Literal["today", "yesterday", "this_week", "last_30_days"] = "last_30_days"
     purpose: list[RunPurpose] = Field(default_factory=lambda: [RunPurpose.PRODUCTION])
 
@@ -346,9 +340,13 @@ class TestTimeByConfigurationConnectedResponse(BaseModel):
 
 
 class ChannelActivityFilters(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     purpose: list[RunPurpose]
-    wavelength_mode: Literal["SM", "MM"] | None
     switch_model: str | None
+    wavelength_mode: Literal["SM", "MM"] | None
+    channel_count: int | None
+    station: int | None
 
 
 class ChannelActivityCountsResponse(BaseModel):
@@ -521,7 +519,7 @@ class UnitStatusConnectedResponse(BaseModel):
     extracted_at_utc: AwareDatetime
     timezone: Literal["America/Los_Angeles"] = "America/Los_Angeles"
     period: UnitStatusPeriodResponse
-    filters: UnitStatusFilters
+    filters: ChannelActivityFilters
     classification_rule: Literal["strict >, run limit snapshot"] = "strict >, run limit snapshot"
     counts: UnitStatusCounts
     units: list[UnitStatusItem]
@@ -537,10 +535,8 @@ class UnitTestTimePeriodResponse(BaseModel):
     partial: bool
 
 
-class UnitTestTimeFilters(BaseModel):
+class UnitTestTimeFilters(ChannelActivityFilters):
     model_config = ConfigDict(extra="forbid")
-
-    purpose: list[RunPurpose]
 
 
 class UnitTestTimeItemResponse(BaseModel):
@@ -863,7 +859,7 @@ class StationSummaryConnectedResponse(BaseModel):
     extracted_at_utc: AwareDatetime
     timezone: Literal["America/Los_Angeles"] = "America/Los_Angeles"
     period: UnitStatusPeriodResponse
-    filters: UnitStatusFilters
+    filters: ChannelActivityFilters
     classification_rule: Literal["strict >, run limit snapshot"] = "strict >, run limit snapshot"
     stations: list[StationRowResponse]
     totals: StationCountsResponse
@@ -962,7 +958,7 @@ class FailureWavelengthsConnectedResponse(BaseModel):
     extracted_at_utc: AwareDatetime
     timezone: Literal["America/Los_Angeles"] = "America/Los_Angeles"
     period: UnitStatusPeriodResponse
-    filters: UnitStatusFilters
+    filters: ChannelActivityFilters
     pairs: list[FailureWavelengthPairResponse]
     totals: FailureWavelengthTotalsResponse
     incomplete: bool
@@ -972,6 +968,34 @@ class FailureWavelengthsConnectedResponse(BaseModel):
         if sum(pair.failed for pair in self.pairs) != self.totals.failed:
             raise ValueError("Pair failures must sum to total failures")
         return self
+
+
+class FilterOptionsQueryParams(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    purpose: list[RunPurpose] = Field(default_factory=lambda: [RunPurpose.PRODUCTION])
+
+
+class FilterOptionsFilters(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    purpose: list[RunPurpose]
+
+
+class FilterOptionsConnectedResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    data_source: Literal["test_database"] = "test_database"
+    tls: Literal["verified", "encrypted_unverified"]
+    extracted_at_utc: AwareDatetime
+    timezone: Literal["America/Los_Angeles"] = "America/Los_Angeles"
+    period: UnitStatusPeriodResponse
+    filters: FilterOptionsFilters
+    switch_models: list[str]
+    wavelength_modes: list[Literal["MM", "SM"]]
+    channel_counts: list[int]
+    stations: list[int]
+    incomplete: bool
 
 
 class ReportingFailureResponse(BaseModel):

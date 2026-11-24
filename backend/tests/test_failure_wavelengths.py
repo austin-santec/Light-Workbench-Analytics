@@ -79,11 +79,15 @@ def test_sql_binds_selected_period_and_projects_measurement_wavelengths():
         None,
         None,
         None,
+        None,
+        None,
+        None,
+        None,
     )
     assert sql == FAILURE_WAVELENGTHS_SQL and limits_sql == FAILURE_RATE_LIMITS_SQL
     assert params == (*expected_filters, start, end)
     assert limit_params == expected_filters
-    assert sql.count("?") == len(params) == 12
+    assert sql.count("?") == len(params) == 16
     assert FIRST_OBSERVATION_CTES in sql
     for field in (
         "c.wavelength_mode",
@@ -276,7 +280,6 @@ def test_connected_contract_defaults_period_filters_and_order(application):
     [
         {"period": "forever"},
         [("purpose", "production"), ("purpose", "production")],
-        {"wavelength_mode": "SM"},
         {"model": "DEMO"},
         {"unknown": "value"},
     ],

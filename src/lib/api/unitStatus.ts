@@ -1,6 +1,7 @@
 import type { Purpose } from '../../types';
 import { CHANNEL_ACTIVITY_PERIODS, type ChannelActivityPeriodKey } from './channelActivity';
 import { RUN_PURPOSES, RunActivityClientError } from './runActivity';
+import { appendReportFilters, filterEchoMatches, isReportFilterEcho, NO_FILTERS, type ReportFilterEcho, type ReportFilters } from './reportFilters';
 
 export const UNIT_STATUSES = [
   'review_required',
@@ -52,7 +53,7 @@ export interface UnitStatusConnectedResponse {
     end_utc: string;
     partial: boolean;
   };
-  filters: { purpose: Purpose[] };
+  filters: ReportFilterEcho;
   classification_rule: 'strict >, run limit snapshot';
   counts: Record<UnitStatus, number> & { cohort_units: number };
   units: UnitStatusItem[];
@@ -114,7 +115,7 @@ export function isUnitStatusConnectedResponse(value: unknown): value is UnitStat
   if (!isRecord(value) || !exactKeys(value, ['data_source', 'tls', 'extracted_at_utc', 'timezone', 'period', 'filters', 'classification_rule', 'counts', 'units', 'incomplete'])) return false;
   if (value.data_source !== 'test_database' || !['verified', 'encrypted_unverified'].includes(value.tls as string) || !utcTimestamp(value.extracted_at_utc) || value.timezone !== 'America/Los_Angeles' || value.classification_rule !== 'strict >, run limit snapshot' || typeof value.incomplete !== 'boolean') return false;
   if (!isRecord(value.period) || !exactKeys(value.period, ['key', 'start_utc', 'end_utc', 'partial']) || typeof value.period.key !== 'string' || !CHANNEL_ACTIVITY_PERIODS.includes(value.period.key as ChannelActivityPeriodKey) || !utcTimestamp(value.period.start_utc) || !utcTimestamp(value.period.end_utc) || typeof value.period.partial !== 'boolean' || Date.parse(value.period.start_utc) > Date.parse(value.period.end_utc)) return false;
-  if (!isRecord(value.filters) || !exactKeys(value.filters, ['purpose']) || !Array.isArray(value.filters.purpose) || value.filters.purpose.length < 1 || value.filters.purpose.length > RUN_PURPOSES.length || new Set(value.filters.purpose).size !== value.filters.purpose.length || !value.filters.purpose.every(purpose => typeof purpose === 'string' && RUN_PURPOSES.includes(purpose as Purpose))) return false;
+  if (!isReportFilterEcho(value.filters)) return false;
   if (!isRecord(value.counts)) return false;
   const rawCounts = value.counts;
   if (!exactKeys(rawCounts, ['cohort_units', ...UNIT_STATUSES]) || !['cohort_units', ...UNIT_STATUSES].every(key => nonnegativeInteger(rawCounts[key]))) return false;
@@ -132,12 +133,14 @@ export async function loadUnitStatus(
   period: ChannelActivityPeriodKey,
   purposes: readonly Purpose[],
   signal: AbortSignal,
+  filters: ReportFilters = NO_FILTERS,
 ): Promise<UnitStatusResult> {
   if (!CHANNEL_ACTIVITY_PERIODS.includes(period) || purposes.length < 1 || purposes.length > RUN_PURPOSES.length || new Set(purposes).size !== purposes.length || purposes.some(purpose => !RUN_PURPOSES.includes(purpose))) {
     throw new RunActivityClientError('invalid_response');
   }
   const query = new URLSearchParams({ period });
   purposes.forEach(purpose => query.append('purpose', purpose));
+  appendReportFilters(query, filters);
   const response = await fetch(`/api/v1/reporting/unit-status?${query}`, { signal, headers: { Accept: 'application/json' } });
   const body = await readJson(response);
   if (response.status === 503) {
@@ -147,6 +150,6 @@ export async function loadUnitStatus(
   }
   if (!response.ok) throw new RunActivityClientError(response.status >= 500 ? 'unreachable' : 'request_failed');
   if (isRecord(body) && exactKeys(body, ['data_source']) && body.data_source === 'not_connected') return { data_source: 'not_connected' };
-  if (!isUnitStatusConnectedResponse(body) || body.period.key !== period || body.filters.purpose.length !== purposes.length || body.filters.purpose.some((purpose, index) => purpose !== purposes[index])) throw new RunActivityClientError('invalid_response');
+  if (!isUnitStatusConnectedResponse(body) || body.period.key !== period || !filterEchoMatches(body.filters, purposes, filters)) throw new RunActivityClientError('invalid_response');
   return body;
 }

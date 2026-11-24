@@ -23,6 +23,7 @@ from app.reporting.models import (
     FailureConcentrationQuery,
     FailureKpisQuery,
     FailureWavelengthsQuery,
+    FilterOptionsQuery,
     RecentFinishedUnitsQuery,
     RecommendationUsageQuery,
     ReplacementActivityQuery,
@@ -42,7 +43,6 @@ from app.schemas import (
     AssignmentHardwareConnectedResponse,
     ChannelActivityConnectedResponse,
     ChannelActivityDayResponse,
-    ChannelActivityFilters,
     ChannelActivityPeriodResponse,
     ChannelActivityQueryParams,
     ChannelFailureResponse,
@@ -65,6 +65,9 @@ from app.schemas import (
     FailureWavelengthsConnectedResponse,
     FailureWavelengthsQueryParams,
     FailureWavelengthTotalsResponse,
+    FilterOptionsConnectedResponse,
+    FilterOptionsFilters,
+    FilterOptionsQueryParams,
     HealthResponse,
     QueryExecuteConnectedResponse,
     QueryExecuteRequest,
@@ -113,7 +116,6 @@ from app.schemas import (
     UnitStatusPeriodResponse,
     UnitStatusQueryParams,
     UnitTestTimeConnectedResponse,
-    UnitTestTimeFilters,
     UnitTestTimePeriodResponse,
     UnitTestTimeQueryParams,
 )
@@ -188,6 +190,8 @@ def validated_channel_activity_query(
             purposes=tuple(params.purpose),
             wavelength_mode=params.wavelength_mode,
             switch_model=params.switch_model,
+            channel_count=params.channel_count,
+            station=params.station,
         )
     except ValidationError as exc:
         errors = [
@@ -214,7 +218,9 @@ def validated_unit_status_query(
     params: Annotated[UnitStatusQueryParams, Query()],
 ) -> UnitStatusQuery:
     try:
-        return UnitStatusQuery(period=params.period, purposes=tuple(params.purpose))
+        return UnitStatusQuery(
+            period=params.period, purposes=tuple(params.purpose), **_reporting_filter_values(params)
+        )
     except ValidationError as exc:
         errors = [
             item | {"loc": ("query", *item["loc"])}
@@ -227,7 +233,9 @@ def validated_unit_test_time_query(
     params: Annotated[UnitTestTimeQueryParams, Query()],
 ) -> UnitTestTimeQuery:
     try:
-        return UnitTestTimeQuery(period=params.period, purposes=tuple(params.purpose))
+        return UnitTestTimeQuery(
+            period=params.period, purposes=tuple(params.purpose), **_reporting_filter_values(params)
+        )
     except ValidationError as exc:
         errors = [
             item | {"loc": ("query", *item["loc"])}
@@ -240,7 +248,9 @@ def validated_recent_finished_units_query(
     params: Annotated[RecentFinishedUnitsQueryParams, Query()],
 ) -> RecentFinishedUnitsQuery:
     try:
-        return RecentFinishedUnitsQuery(period=params.period, purposes=tuple(params.purpose))
+        return RecentFinishedUnitsQuery(
+            period=params.period, purposes=tuple(params.purpose), **_reporting_filter_values(params)
+        )
     except ValidationError as exc:
         errors = [
             item | {"loc": ("query", *item["loc"])}
@@ -253,7 +263,9 @@ def validated_failure_kpis_query(
     params: Annotated[FailureKpisQueryParams, Query()],
 ) -> FailureKpisQuery:
     try:
-        return FailureKpisQuery(period=params.period, purposes=tuple(params.purpose))
+        return FailureKpisQuery(
+            period=params.period, purposes=tuple(params.purpose), **_reporting_filter_values(params)
+        )
     except ValidationError as exc:
         errors = [
             item | {"loc": ("query", *item["loc"])}
@@ -284,6 +296,8 @@ def validated_channel_failures_query(
             purposes=tuple(params.purpose),
             wavelength_mode=params.wavelength_mode,
             switch_model=params.switch_model,
+            channel_count=params.channel_count,
+            station=params.station,
         )
     except ValidationError as exc:
         errors = [
@@ -310,7 +324,9 @@ def validated_failure_wavelengths_query(
     params: Annotated[FailureWavelengthsQueryParams, Query()],
 ) -> FailureWavelengthsQuery:
     try:
-        return FailureWavelengthsQuery(period=params.period, purposes=tuple(params.purpose))
+        return FailureWavelengthsQuery(
+            period=params.period, purposes=tuple(params.purpose), **_reporting_filter_values(params)
+        )
     except ValidationError as exc:
         errors = [
             item | {"loc": ("query", *item["loc"])}
@@ -323,7 +339,9 @@ def validated_station_summary_query(
     params: Annotated[StationSummaryQueryParams, Query()],
 ) -> StationSummaryQuery:
     try:
-        return StationSummaryQuery(purposes=tuple(params.purpose))
+        return StationSummaryQuery(
+            period=params.period, purposes=tuple(params.purpose), **_reporting_filter_values(params)
+        )
     except ValidationError as exc:
         errors = [
             item | {"loc": ("query", *item["loc"])}
@@ -347,6 +365,32 @@ def validated_recommendation_usage_query(
 
 def get_extracted_at_utc() -> datetime:
     return datetime.now(UTC)
+
+
+def _reporting_filter_values(params) -> dict[str, object]:
+    return {
+        "switch_model": params.switch_model,
+        "wavelength_mode": params.wavelength_mode,
+        "channel_count": params.channel_count,
+        "station": params.station,
+    }
+
+
+def _reporting_filter_echo(query) -> dict[str, object]:
+    return {"purpose": list(query.purposes), **_reporting_filter_values(query)}
+
+
+def validated_filter_options_query(
+    params: Annotated[FilterOptionsQueryParams, Query()],
+) -> FilterOptionsQuery:
+    try:
+        return FilterOptionsQuery(purposes=tuple(params.purpose))
+    except ValidationError as exc:
+        errors = [
+            item | {"loc": ("query", *item["loc"])}
+            for item in exc.errors(include_url=False, include_input=False, include_context=False)
+        ]
+        raise RequestValidationError(errors) from None
 
 
 @router.get("/health/live", response_model=HealthResponse, tags=["health"])
@@ -518,6 +562,44 @@ def test_time_by_configuration(
 
 
 @router.get(
+    "/reporting/filter-options",
+    response_model=FilterOptionsConnectedResponse | RunActivityNotConnectedResponse,
+    responses={503: {"model": ReportingFailureResponse}},
+    tags=["reporting"],
+)
+def filter_options(
+    query: Annotated[FilterOptionsQuery, Depends(validated_filter_options_query)],
+    access: Annotated[ReportingAccess | None, Depends(get_reporting_access)],
+    extracted_at: Annotated[datetime, Depends(get_extracted_at_utc)],
+) -> FilterOptionsConnectedResponse | RunActivityNotConnectedResponse | JSONResponse:
+    """Distinct values on accepted last-30-day logical-channel activity."""
+    if access is None:
+        return RunActivityNotConnectedResponse()
+    boundaries = compute_channel_activity_boundaries(extracted_at)
+    try:
+        metrics = access.repository.get_filter_options(query, boundaries)
+    except ReportingError as exc:
+        return JSONResponse(status_code=503, content={"code": exc.code})
+    window = boundaries.periods["last_30_days"]
+    return FilterOptionsConnectedResponse(
+        tls=access.tls,
+        extracted_at_utc=boundaries.extracted_at_utc,
+        period=UnitStatusPeriodResponse(
+            key="last_30_days",
+            start_utc=window.start_utc,
+            end_utc=window.end_utc,
+            partial=window.partial,
+        ),
+        filters=FilterOptionsFilters(purpose=list(query.purposes)),
+        switch_models=list(metrics.switch_models),
+        wavelength_modes=list(metrics.wavelength_modes),
+        channel_counts=list(metrics.channel_counts),
+        stations=list(metrics.stations),
+        incomplete=metrics.incomplete,
+    )
+
+
+@router.get(
     "/reporting/channel-activity",
     response_model=ChannelActivityConnectedResponse | RunActivityNotConnectedResponse,
     responses={503: {"model": ReportingFailureResponse}},
@@ -560,11 +642,7 @@ def channel_activity(
         tls=access.tls,
         extracted_at_utc=boundaries.extracted_at_utc,
         timezone=PACIFIC_TIMEZONE_NAME,
-        filters=ChannelActivityFilters(
-            purpose=list(query.purposes),
-            wavelength_mode=query.wavelength_mode,
-            switch_model=query.switch_model,
-        ),
+        filters=_reporting_filter_echo(query),
         periods=periods,
         daily=daily,
         incomplete=metrics.incomplete,
@@ -615,8 +693,10 @@ def failure_rate(
         extracted_at_utc=boundaries.extracted_at_utc,
         filters={
             "purpose": list(query.purposes),
-            "wavelength_mode": query.wavelength_mode,
             "switch_model": query.switch_model,
+            "wavelength_mode": query.wavelength_mode,
+            "channel_count": query.channel_count,
+            "station": query.station,
         },
         periods=periods,
         daily=daily,
@@ -653,11 +733,7 @@ def channel_failures(
             end_utc=window.end_utc,
             partial=window.partial,
         ),
-        filters=ChannelActivityFilters(
-            purpose=list(query.purposes),
-            wavelength_mode=query.wavelength_mode,
-            switch_model=query.switch_model,
-        ),
+        filters=_reporting_filter_echo(query),
         totals=FailureRateCountsResponse(**metrics.totals.model_dump()),
         runs=metrics.runs,
         max_channel=metrics.max_channel,
@@ -737,7 +813,7 @@ def failure_kpis(
             end_utc=window.end_utc,
             partial=window.partial,
         ),
-        filters=UnitTestTimeFilters(purpose=list(query.purposes)),
+        filters=_reporting_filter_echo(query),
         units=metrics.units.model_dump(),
         retest=metrics.retest.model_dump(),
         incomplete=metrics.incomplete,
@@ -773,7 +849,7 @@ def failure_wavelengths(
             end_utc=window.end_utc,
             partial=window.partial,
         ),
-        filters=UnitStatusFilters(purpose=list(query.purposes)),
+        filters=_reporting_filter_echo(query),
         pairs=[FailureWavelengthPairResponse(**pair.model_dump()) for pair in metrics.pairs],
         totals=FailureWavelengthTotalsResponse(**metrics.totals.model_dump()),
         incomplete=metrics.incomplete,
@@ -799,17 +875,17 @@ def station_summary(
         metrics = access.repository.get_station_summary(query, boundaries)
     except ReportingError as exc:
         return JSONResponse(status_code=503, content={"code": exc.code})
-    window = boundaries.periods["last_30_days"]
+    window = boundaries.periods[query.period]
     return StationSummaryConnectedResponse(
         tls=access.tls,
         extracted_at_utc=boundaries.extracted_at_utc,
         period=UnitStatusPeriodResponse(
-            key="last_30_days",
+            key=query.period,
             start_utc=window.start_utc,
             end_utc=window.end_utc,
             partial=window.partial,
         ),
-        filters=UnitStatusFilters(purpose=list(query.purposes)),
+        filters=_reporting_filter_echo(query),
         stations=[StationRowResponse(**station.model_dump()) for station in metrics.stations],
         totals=StationCountsResponse(**metrics.totals.model_dump()),
         incomplete=metrics.incomplete,
@@ -897,13 +973,19 @@ def unit_status(
             end_utc=window.end_utc,
             partial=window.partial,
         ),
-        filters=UnitStatusFilters(purpose=list(query.purposes)),
+        filters=_reporting_filter_echo(query),
         counts=metrics.counts,
         units=[
             {
                 key: value
                 for key, value in asdict(unit).items()
-                if key not in {"wavelength_mode", "effective_readings", "fail_limit"}
+                if key
+                not in {
+                    "wavelength_mode",
+                    "station_number",
+                    "effective_readings",
+                    "fail_limit",
+                }
             }
             for unit in metrics.units
         ],
@@ -940,7 +1022,7 @@ def unit_test_time(
             end_utc=window.end_utc,
             partial=window.partial,
         ),
-        filters=UnitTestTimeFilters(purpose=list(query.purposes)),
+        filters=_reporting_filter_echo(query),
         units=[asdict(unit) for unit in metrics.units],
         finished=metrics.finished.model_dump(),
         excluded=metrics.excluded,
@@ -978,7 +1060,7 @@ def recent_finished_units(
             end_utc=window.end_utc,
             partial=window.partial,
         ),
-        filters=UnitTestTimeFilters(purpose=list(query.purposes)),
+        filters=_reporting_filter_echo(query),
         units=[asdict(unit) for unit in metrics.units],
         truncated=metrics.truncated,
         incomplete=metrics.incomplete,

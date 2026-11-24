@@ -125,7 +125,7 @@ def test_sql_is_fixed_bounded_parameterized_read_only_and_uses_exact_pair_distin
     for (sql, params), windows in [(period_query, 4), (daily_query, 31)]:
         assert sql in {CHANNEL_ACTIVITY_PERIOD_SQL, CHANNEL_ACTIVITY_DAILY_SQL}
         assert injection not in sql and injection in params
-        assert sql.count("?") == len(params) == windows * 3 + 10
+        assert sql.count("?") == len(params) == windows * 3 + 14
         assert "m.written_at_utc >= w.start_utc" in sql
         assert "m.written_at_utc < w.end_utc" in sql
         assert "WHERE m.written_at_utc >= ? AND m.written_at_utc < ?" in sql
@@ -139,15 +139,19 @@ def test_sql_is_fixed_bounded_parameterized_read_only_and_uses_exact_pair_distin
             unquoted,
             re.I,
         )
-    assert period_query[1][-8:] == (
+    assert period_query[1][-12:] == (
         "production",
         "engineering",
         "engineering",
         "engineering",
-        "SM",
-        "SM",
         injection,
         injection,
+        "SM",
+        "SM",
+        None,
+        None,
+        None,
+        None,
     )
 
 

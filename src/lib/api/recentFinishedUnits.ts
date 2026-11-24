@@ -1,6 +1,7 @@
 import type { Purpose } from '../../types';
 import { CHANNEL_ACTIVITY_PERIODS, type ChannelActivityPeriodKey } from './channelActivity';
 import { RUN_PURPOSES, RunActivityClientError } from './runActivity';
+import { appendReportFilters, filterEchoMatches, isReportFilterEcho, NO_FILTERS, type ReportFilterEcho, type ReportFilters } from './reportFilters';
 
 export type RecentFinishedOutcome = 'passed_no_replacement' | 'passed_after_replacement' | 'unrecoverable';
 
@@ -28,7 +29,7 @@ export interface RecentFinishedUnitsConnectedResponse {
   extracted_at_utc: string;
   timezone: 'America/Los_Angeles';
   period: { key: ChannelActivityPeriodKey; start_utc: string; end_utc: string; partial: boolean };
-  filters: { purpose: Purpose[] };
+  filters: ReportFilterEcho;
   units: RecentFinishedUnit[];
   truncated: boolean;
   incomplete: boolean;
@@ -83,7 +84,7 @@ export function isRecentFinishedUnitsConnectedResponse(value: unknown): value is
   if (value.data_source !== 'test_database' || !['verified', 'encrypted_unverified'].includes(value.tls as string) || !utcTimestamp(value.extracted_at_utc) || value.timezone !== 'America/Los_Angeles' || typeof value.truncated !== 'boolean' || typeof value.incomplete !== 'boolean') return false;
   if (!isRecord(value.period) || !exactKeys(value.period, ['key', 'start_utc', 'end_utc', 'partial']) || !CHANNEL_ACTIVITY_PERIODS.includes(value.period.key as ChannelActivityPeriodKey) || !utcTimestamp(value.period.start_utc) || !utcTimestamp(value.period.end_utc) || typeof value.period.partial !== 'boolean') return false;
   const period = value.period;
-  if (!isRecord(value.filters) || !exactKeys(value.filters, ['purpose']) || !Array.isArray(value.filters.purpose) || value.filters.purpose.length < 1 || value.filters.purpose.length > RUN_PURPOSES.length || new Set(value.filters.purpose).size !== value.filters.purpose.length || !value.filters.purpose.every(purpose => RUN_PURPOSES.includes(purpose as Purpose))) return false;
+  if (!isReportFilterEcho(value.filters)) return false;
   if (!Array.isArray(value.units) || value.units.length > 100 || !value.units.every(isUnit)) return false;
   const units = value.units as RecentFinishedUnit[];
   if (value.truncated && units.length !== 100) return false;
@@ -96,10 +97,11 @@ async function readJson(response: Response): Promise<unknown> {
   try { return await response.json(); } catch { throw new RunActivityClientError('invalid_response'); }
 }
 
-export async function loadRecentFinishedUnits(period: ChannelActivityPeriodKey, purposes: readonly Purpose[], signal: AbortSignal): Promise<RecentFinishedUnitsResult> {
+export async function loadRecentFinishedUnits(period: ChannelActivityPeriodKey, purposes: readonly Purpose[], signal: AbortSignal, filters: ReportFilters = NO_FILTERS): Promise<RecentFinishedUnitsResult> {
   if (!CHANNEL_ACTIVITY_PERIODS.includes(period) || purposes.length < 1 || purposes.length > RUN_PURPOSES.length || new Set(purposes).size !== purposes.length || purposes.some(purpose => !RUN_PURPOSES.includes(purpose))) throw new RunActivityClientError('invalid_response');
   const query = new URLSearchParams({ period });
   purposes.forEach(purpose => query.append('purpose', purpose));
+  appendReportFilters(query, filters);
   const response = await fetch(`/api/v1/reporting/recent-finished-units?${query}`, { signal, headers: { Accept: 'application/json' } });
   const body = await readJson(response);
   if (response.status === 503) {
@@ -109,6 +111,6 @@ export async function loadRecentFinishedUnits(period: ChannelActivityPeriodKey, 
   }
   if (!response.ok) throw new RunActivityClientError(response.status >= 500 ? 'unreachable' : 'request_failed');
   if (isRecord(body) && exactKeys(body, ['data_source']) && body.data_source === 'not_connected') return { data_source: 'not_connected' };
-  if (!isRecentFinishedUnitsConnectedResponse(body) || body.period.key !== period || body.filters.purpose.length !== purposes.length || body.filters.purpose.some((purpose, index) => purpose !== purposes[index])) throw new RunActivityClientError('invalid_response');
+  if (!isRecentFinishedUnitsConnectedResponse(body) || body.period.key !== period || !filterEchoMatches(body.filters, purposes, filters)) throw new RunActivityClientError('invalid_response');
   return body;
 }

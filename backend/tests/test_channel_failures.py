@@ -79,7 +79,7 @@ def test_sql_reuses_failure_rate_population_and_binds_the_selected_period():
     start, end = window.start_utc.replace(tzinfo=None), window.end_utc.replace(tzinfo=None)
     assert sql == CHANNEL_FAILURES_SQL and limits_sql == FAILURE_RATE_LIMITS_SQL
     assert injection not in sql and injection in params
-    assert sql.count("?") == len(params) == 12
+    assert sql.count("?") == len(params) == 16
     expected_filters = (
         start,
         end,
@@ -87,10 +87,14 @@ def test_sql_reuses_failure_rate_population_and_binds_the_selected_period():
         "engineering",
         "engineering",
         "engineering",
-        "SM",
-        "SM",
         injection,
         injection,
+        "SM",
+        "SM",
+        None,
+        None,
+        None,
+        None,
     )
     assert params == (*expected_filters, start, end)
     assert limit_params == expected_filters

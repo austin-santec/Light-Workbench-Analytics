@@ -92,7 +92,7 @@ def test_sql_is_fixed_bounded_parameterized_read_only_and_ranks_before_windowing
     for (sql, params), windows in ((period, 4), (daily, 31)):
         assert sql in {FAILURE_RATE_PERIOD_SQL, FAILURE_RATE_DAILY_SQL}
         assert injection not in sql and injection in params
-        assert sql.count("?") == len(params) == windows * 3 + 10
+        assert sql.count("?") == len(params) == windows * 3 + 14
         assert f"TOP ({FAILURE_RATE_RUN_CAP})" in sql
         assert "PARTITION BY m.run_id, m.logical_channel" in sql
         assert "ORDER BY m.written_at_utc, m.measurement_id" in sql
@@ -110,7 +110,7 @@ def test_sql_is_fixed_bounded_parameterized_read_only_and_ranks_before_windowing
             re.I,
         )
     assert limits[0] == FAILURE_RATE_LIMITS_SQL
-    assert limits[0].count("?") == len(limits[1]) == 10
+    assert limits[0].count("?") == len(limits[1]) == 14
     assert f"TOP ({FAILURE_RATE_RUN_CAP + 1})" in limits[0]
 
 

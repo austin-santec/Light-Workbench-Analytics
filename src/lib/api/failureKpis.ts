@@ -1,6 +1,7 @@
 import type { Purpose } from '../../types';
 import { CHANNEL_ACTIVITY_PERIODS, type ChannelActivityPeriodKey } from './channelActivity';
 import { RUN_PURPOSES, RunActivityClientError } from './runActivity';
+import { appendReportFilters, filterEchoMatches, isReportFilterEcho, NO_FILTERS, type ReportFilterEcho, type ReportFilters } from './reportFilters';
 
 export interface FailureKpiUnits {
   finished: number;
@@ -19,7 +20,7 @@ export interface FailureKpisConnectedResponse {
   extracted_at_utc: string;
   timezone: 'America/Los_Angeles';
   period: { key: ChannelActivityPeriodKey; start_utc: string; end_utc: string; partial: boolean };
-  filters: { purpose: Purpose[] };
+  filters: ReportFilterEcho;
   units: FailureKpiUnits;
   retest: { active_run_channels: number; retested_run_channels: number };
   incomplete: boolean;
@@ -76,8 +77,7 @@ export function isFailureKpisConnectedResponse(value: unknown): value is Failure
     || !utcTimestamp(period.start_utc) || !utcTimestamp(period.end_utc)
     || typeof period.partial !== 'boolean'
     || Date.parse(period.start_utc) > Date.parse(period.end_utc)) return false;
-  const filters = value.filters;
-  if (!isRecord(filters) || !exactKeys(filters, ['purpose']) || !validPurposes(filters.purpose)) return false;
+  if (!isReportFilterEcho(value.filters)) return false;
   const retest = value.retest;
   if (!isRecord(retest) || !exactKeys(retest, ['active_run_channels', 'retested_run_channels'])
     || !nonnegativeInteger(retest.active_run_channels) || !nonnegativeInteger(retest.retested_run_channels)
@@ -93,12 +93,14 @@ export async function loadFailureKpis(
   period: ChannelActivityPeriodKey,
   purposes: readonly Purpose[],
   signal: AbortSignal,
+  filters: ReportFilters = NO_FILTERS,
 ): Promise<FailureKpisResult> {
   if (!CHANNEL_ACTIVITY_PERIODS.includes(period) || !validPurposes([...purposes])) {
     throw new RunActivityClientError('invalid_response');
   }
   const query = new URLSearchParams({ period });
   purposes.forEach(purpose => query.append('purpose', purpose));
+  appendReportFilters(query, filters);
   const response = await fetch(`/api/v1/reporting/failure-kpis?${query}`, {
     signal,
     headers: { Accept: 'application/json' },
@@ -117,8 +119,7 @@ export async function loadFailureKpis(
     return { data_source: 'not_connected' };
   }
   if (!isFailureKpisConnectedResponse(body) || body.period.key !== period
-    || body.filters.purpose.length !== purposes.length
-    || body.filters.purpose.some((purpose, index) => purpose !== purposes[index])) {
+    || !filterEchoMatches(body.filters, purposes, filters)) {
     throw new RunActivityClientError('invalid_response');
   }
   return body;

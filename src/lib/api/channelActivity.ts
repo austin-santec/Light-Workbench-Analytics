@@ -1,5 +1,6 @@
-import type { MeasurementMode, Purpose } from '../../types';
+import type { Purpose } from '../../types';
 import { RUN_PURPOSES, RunActivityClientError } from './runActivity';
+import { appendReportFilters, filterEchoMatches, isReportFilterEcho, type ReportFilterEcho, type ReportFilters } from './reportFilters';
 
 export const CHANNEL_ACTIVITY_PERIODS = ['today', 'yesterday', 'this_week', 'last_30_days'] as const;
 export type ChannelActivityPeriodKey = typeof CHANNEL_ACTIVITY_PERIODS[number];
@@ -28,11 +29,7 @@ export interface ChannelActivityConnectedResponse {
   tls: 'verified' | 'encrypted_unverified';
   extracted_at_utc: string;
   timezone: 'America/Los_Angeles';
-  filters: {
-    purpose: Purpose[];
-    wavelength_mode: MeasurementMode | null;
-    switch_model: string | null;
-  };
+  filters: ReportFilterEcho;
   periods: Record<ChannelActivityPeriodKey, ChannelActivityPeriod>;
   daily: ChannelActivityDay[];
   incomplete: boolean;
@@ -76,17 +73,7 @@ function isPeriod(value: unknown, day: boolean): value is ChannelActivityDay | C
   return !day || (typeof value.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value.date));
 }
 
-function isFilters(value: unknown): value is ChannelActivityConnectedResponse['filters'] {
-  return isRecord(value)
-    && hasExactKeys(value, ['purpose', 'wavelength_mode', 'switch_model'])
-    && Array.isArray(value.purpose)
-    && value.purpose.length >= 1
-    && value.purpose.length <= RUN_PURPOSES.length
-    && new Set(value.purpose).size === value.purpose.length
-    && value.purpose.every(item => typeof item === 'string' && RUN_PURPOSES.includes(item as Purpose))
-    && (value.wavelength_mode === null || value.wavelength_mode === 'SM' || value.wavelength_mode === 'MM')
-    && (value.switch_model === null || (typeof value.switch_model === 'string' && value.switch_model.length >= 1 && value.switch_model.length <= 30));
-}
+const isFilters = isReportFilterEcho;
 
 export function isChannelActivityConnectedResponse(value: unknown): value is ChannelActivityConnectedResponse {
   if (!isRecord(value) || !hasExactKeys(value, ['data_source', 'tls', 'extracted_at_utc', 'timezone', 'filters', 'periods', 'daily', 'incomplete'])) return false;
@@ -111,8 +98,7 @@ async function readJson(response: Response): Promise<unknown> {
 
 export async function loadChannelActivity(
   purposes: readonly Purpose[],
-  wavelengthMode: MeasurementMode | null,
-  switchModel: string | null,
+  filters: ReportFilters,
   signal: AbortSignal,
 ): Promise<ChannelActivityResult> {
   if (purposes.length < 1 || purposes.length > RUN_PURPOSES.length || new Set(purposes).size !== purposes.length || purposes.some(purpose => !RUN_PURPOSES.includes(purpose))) {
@@ -120,8 +106,7 @@ export async function loadChannelActivity(
   }
   const query = new URLSearchParams();
   purposes.forEach(purpose => query.append('purpose', purpose));
-  if (wavelengthMode !== null) query.set('wavelength_mode', wavelengthMode);
-  if (switchModel !== null) query.set('switch_model', switchModel);
+  appendReportFilters(query, filters);
   const response = await fetch(`/api/v1/reporting/channel-activity?${query}`, { signal, headers: { Accept: 'application/json' } });
   const body = await readJson(response);
   if (response.status === 503) {
@@ -132,7 +117,7 @@ export async function loadChannelActivity(
   if (!response.ok) throw new RunActivityClientError(response.status >= 500 ? 'unreachable' : 'request_failed');
   if (isRecord(body) && hasExactKeys(body, ['data_source']) && body.data_source === 'not_connected') return { data_source: 'not_connected' };
   if (!isChannelActivityConnectedResponse(body)) throw new RunActivityClientError('invalid_response');
-  if (body.filters.purpose.length !== purposes.length || body.filters.purpose.some((purpose, index) => purpose !== purposes[index]) || body.filters.wavelength_mode !== wavelengthMode || body.filters.switch_model !== switchModel) {
+  if (!filterEchoMatches(body.filters, purposes, filters)) {
     throw new RunActivityClientError('invalid_response');
   }
   return body;

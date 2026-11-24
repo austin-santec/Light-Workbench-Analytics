@@ -33,6 +33,7 @@ const recommendationUsageRequests = [];
 const channelFailuresRequests = [];
 const failureConcentrationRequests = [];
 const stationSummaryRequests = [];
+const filterOptionsRequests = [];
 const recentFinishedRequests = [];
 const failureWavelengthsRequests = [];
 const failureKpisRequests = [];
@@ -52,6 +53,24 @@ const failurePeriodTotals = {
   training: { today: [0, 0, 0], yesterday: [1, 10, 1], this_week: [1, 20, 1], last_30_days: [4, 70, 2] },
   calibration: { today: [0, 0, 0], yesterday: [0, 0, 0], this_week: [0, 5, 0], last_30_days: [1, 30, 0] },
 };
+// Echo of the shared report filters (docs/API_CONTRACTS.md): absent query values echo null.
+const filterEcho = (url, purpose) => {
+  const number = key => url.searchParams.has(key) ? Number(url.searchParams.get(key)) : null;
+  return {
+    purpose,
+    switch_model: url.searchParams.get('switch_model'),
+    wavelength_mode: url.searchParams.get('wavelength_mode'),
+    channel_count: number('channel_count'),
+    station: number('station'),
+  };
+};
+const filterOptionsFixture = url => ({
+  data_source: 'test_database', tls: 'encrypted_unverified', extracted_at_utc: '2026-11-13T20:00:00Z', timezone: 'America/Los_Angeles',
+  period: { key: 'last_30_days', start_utc: '2026-10-14T07:00:00Z', end_utc: '2026-11-13T08:00:00Z', partial: false },
+  filters: { purpose: url.searchParams.getAll('purpose') },
+  switch_models: ['DEMO-MODEL-A', 'DEMO-MODEL-B'], wavelength_modes: ['MM', 'SM'], channel_counts: [24, 48], stations: [1, 2],
+  incomplete: false,
+});
 const sampleState = n => n === 0 ? 'no_data' : n < 10 ? 'small_sample' : 'ok';
 const durationStatistics = (n, multiplier) => ({
   n,
@@ -151,7 +170,7 @@ const channelActivityFixture = url => {
   };
   return {
     data_source: 'test_database', tls: 'encrypted_unverified', extracted_at_utc: '2026-11-13T20:00:00Z', timezone: 'America/Los_Angeles',
-    filters: { purpose: selected, wavelength_mode: null, switch_model: null },
+    filters: filterEcho(url, selected),
     periods: {
       today: period('today', '2026-11-13T08:00:00Z', '2026-11-13T20:00:00Z', true),
       yesterday: period('yesterday', '2026-11-12T08:00:00Z', '2026-11-13T08:00:00Z', false),
@@ -184,7 +203,7 @@ const failureRateFixture = url => {
   const period = (key, start, end, partial) => ({ start_utc: start, end_utc: end, partial, ...counts(total(key)) });
   return {
     data_source: 'test_database', tls: 'encrypted_unverified', extracted_at_utc: '2026-11-13T20:00:00Z', timezone: 'America/Los_Angeles',
-    filters: { purpose: selected, wavelength_mode: null, switch_model: null },
+    filters: filterEcho(url, selected),
     classification_rule: 'strict >, run limit snapshot',
     periods: {
       today: period('today', '2026-11-13T08:00:00Z', '2026-11-13T20:00:00Z', true),
@@ -297,7 +316,7 @@ const unitStatusFixture = url => {
   units.forEach(unit => { counts[unit.status] += 1; });
   return {
     data_source: 'test_database', tls: 'encrypted_unverified', extracted_at_utc: '2026-11-13T20:00:00Z', timezone: 'America/Los_Angeles',
-    period: { key: period, start_utc, end_utc, partial }, filters: { purpose: purposes },
+    period: { key: period, start_utc, end_utc, partial }, filters: filterEcho(url, purposes),
     classification_rule: 'strict >, run limit snapshot',
     counts,
     units,
@@ -330,7 +349,7 @@ const unitTestTimeFixture = url => {
   return {
     data_source: 'test_database', tls: 'encrypted_unverified', extracted_at_utc: '2026-11-23T07:30:00Z', timezone: 'America/Los_Angeles',
     period: { key: period, start_utc: '2026-10-14T07:00:00Z', end_utc: '2026-11-13T08:00:00Z', partial: false },
-    filters: { purpose: purposes }, units, finished, excluded,
+    filters: filterEcho(url, purposes), units, finished, excluded,
     incomplete: unitTestTimeMode === 'incomplete',
   };
 };
@@ -386,7 +405,7 @@ const failureWavelengthsFixture = url => {
   const failed = pairs.reduce((sum, pair) => sum + pair.failed, 0);
   return {
     data_source: 'test_database', tls: 'encrypted_unverified', extracted_at_utc: '2026-11-23T20:00:00Z', timezone: 'America/Los_Angeles',
-    period: { key: period, start_utc, end_utc, partial }, filters: { purpose: purposes }, pairs,
+    period: { key: period, start_utc, end_utc, partial }, filters: filterEcho(url, purposes), pairs,
     totals: { failed, observed: failed + 400, unknown_criteria: failureWavelengthsMode === 'incomplete' ? 2 : 0, runs: 9 },
     incomplete: failureWavelengthsMode === 'incomplete',
   };
@@ -414,7 +433,7 @@ const recentFinishedFixture = url => {
     : baseUnits.filter(unit => Date.parse(unit.finished_at_utc) >= Date.parse(start_utc) && Date.parse(unit.finished_at_utc) < Date.parse(end_utc));
   return {
     data_source: 'test_database', tls: 'encrypted_unverified', extracted_at_utc: '2026-11-23T20:00:00Z', timezone: 'America/Los_Angeles',
-    period: { key: period, start_utc, end_utc, partial }, filters: { purpose: purposes }, units,
+    period: { key: period, start_utc, end_utc, partial }, filters: filterEcho(url, purposes), units,
     truncated: recentFinishedMode === 'truncated', incomplete: recentFinishedMode === 'incomplete',
   };
 };
@@ -455,7 +474,7 @@ const channelFailuresFixture = url => {
   return {
     data_source: 'test_database', tls: 'encrypted_unverified', extracted_at_utc: '2026-11-13T20:00:00Z', timezone: 'America/Los_Angeles',
     period: { key: period, start_utc, end_utc, partial },
-    filters: { purpose: purposes, wavelength_mode: null, switch_model: null },
+    filters: filterEcho(url, purposes),
     classification_rule: 'strict >, run limit snapshot',
     totals: { failed, observed, rate: observed ? failed / observed : null, unknown_criteria: sum('unknown_criteria') },
     runs: channelFailuresMode === 'zero' ? 1 : 4,
@@ -481,7 +500,7 @@ const failureKpisFixture = url => {
       : { finished: 4, passed_no_replacement: 2, passed_after_replacement: 1, unrecoverable: 1, replacement_units: 2, replaced_channels: 5, first_pass: 1, first_pass_unknown: 1 };
   return {
     data_source: 'test_database', tls: 'encrypted_unverified', extracted_at_utc: '2026-11-13T20:00:00Z', timezone: 'America/Los_Angeles',
-    period: { key: period, start_utc, end_utc, partial }, filters: { purpose: purposes }, units,
+    period: { key: period, start_utc, end_utc, partial }, filters: filterEcho(url, purposes), units,
     retest: failureKpisMode === 'zero' ? { active_run_channels: 0, retested_run_channels: 0 } : { active_run_channels: 110, retested_run_channels: 7 },
     incomplete: failureKpisMode === 'incomplete',
   };
@@ -549,8 +568,8 @@ const stationSummaryFixture = url => {
     : counts(0, 0, 0, 0, 0, 0, 0, null, 0);
   return {
     data_source: 'test_database', tls: 'encrypted_unverified', extracted_at_utc: '2026-11-13T20:00:00Z', timezone: 'America/Los_Angeles',
-    period: { key: 'last_30_days', start_utc: '2026-10-14T07:00:00Z', end_utc: '2026-11-13T08:00:00Z', partial: false },
-    filters: { purpose: purposes },
+    period: { key: url.searchParams.get('period') || 'last_30_days', start_utc: '2026-10-14T07:00:00Z', end_utc: '2026-11-13T08:00:00Z', partial: false },
+    filters: filterEcho(url, purposes),
     classification_rule: 'strict >, run limit snapshot',
     stations,
     totals,
@@ -722,6 +741,15 @@ await page.route('**/api/v1/reporting/failure-concentration?*', async route => {
     body: JSON.stringify(runActivityMode === 'not_connected' ? { data_source: 'not_connected' } : failureConcentrationFixture(url)),
   });
 });
+await page.route('**/api/v1/reporting/filter-options?*', async route => {
+  const url = new URL(route.request().url());
+  filterOptionsRequests.push(url);
+  await route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify(runActivityMode === 'not_connected' ? { data_source: 'not_connected' } : filterOptionsFixture(url)),
+  });
+});
 await page.route('**/api/v1/reporting/station-summary*', async route => {
   const url = new URL(route.request().url());
   stationSummaryRequests.push(url);
@@ -774,7 +802,7 @@ page.on('response', response => {
 });
 page.on('requestfailed', request => {
   const pathname = new URL(request.url()).pathname;
-  const expectedUnmountCancellation = ['/api/v1/reporting/run-activity', '/api/v1/reporting/test-time-by-configuration', '/api/v1/reporting/channel-activity', '/api/v1/reporting/failure-rate', '/api/v1/reporting/replacement-activity', '/api/v1/reporting/unit-status', '/api/v1/reporting/unit-test-time', '/api/v1/reporting/recent-finished-units', '/api/v1/reporting/failure-wavelengths', '/api/v1/reporting/unit-outcomes-weekly', '/api/v1/reporting/recommendation-usage', '/api/v1/reporting/channel-failures', '/api/v1/reporting/failure-concentration', '/api/v1/reporting/failure-kpis', '/api/v1/reporting/station-summary', '/api/v1/units/search', '/api/v1/query/schema', '/api/v1/query/execute'].includes(pathname) && request.failure()?.errorText === 'net::ERR_ABORTED';
+  const expectedUnmountCancellation = ['/api/v1/reporting/run-activity', '/api/v1/reporting/test-time-by-configuration', '/api/v1/reporting/channel-activity', '/api/v1/reporting/failure-rate', '/api/v1/reporting/replacement-activity', '/api/v1/reporting/unit-status', '/api/v1/reporting/unit-test-time', '/api/v1/reporting/recent-finished-units', '/api/v1/reporting/failure-wavelengths', '/api/v1/reporting/unit-outcomes-weekly', '/api/v1/reporting/recommendation-usage', '/api/v1/reporting/channel-failures', '/api/v1/reporting/failure-concentration', '/api/v1/reporting/failure-kpis', '/api/v1/reporting/station-summary', '/api/v1/reporting/filter-options', '/api/v1/units/search', '/api/v1/query/schema', '/api/v1/query/execute'].includes(pathname) && request.failure()?.errorText === 'net::ERR_ABORTED';
   if (!expectedUnmountCancellation) errors.push(`Request failed: ${request.url()} ${request.failure()?.errorText}`);
 });
 const check = label => { checks.push(label); console.log(`PASS ${label}`); };
@@ -786,7 +814,7 @@ const visit = async route => {
 const assertText = async (locator, text) => assert.ok((await locator.innerText()).includes(text), `Expected ${text}`);
 const assertFocus = async locator => assert.ok(await locator.evaluate(element => element === document.activeElement), 'Expected keyboard focus');
 const channelFailuresPanel = () => page.getByRole('heading', { name: 'Failures by logical channel', exact: true }).locator('..').locator('..').locator('..').locator('..');
-const stationPanel = () => page.getByRole('heading', { name: 'Stations, last 30 days', exact: true }).locator('..').locator('..').locator('..').locator('..');
+const stationPanel = () => page.getByRole('heading', { name: /^Stations, / }).locator('..').locator('..').locator('..').locator('..');
 const unitOutcomesPanel = () => page.getByRole('heading', { name: 'Unit outcomes', exact: true }).locator('..').locator('..').locator('..').locator('..');
 const unitTestTimePanel = (target = page) => target.locator('#unit-test-time-panel');
 const kpiTile = (label, target = page) => target.getByRole('region', { name: 'Key metrics' }).getByText(label, { exact: true }).locator('..').locator('..');
@@ -854,12 +882,11 @@ try {
   await assertText(demoStations, 'Station 2 fails 0.5 pts above the line average');
   assert.equal(await demoStations.getByText('Live · test database', { exact: true }).count(), 0);
   assert.equal(stationSummaryRequests.at(-1).searchParams.getAll('purpose').join(','), 'production');
-  assert.equal(stationSummaryRequests.at(-1).searchParams.has('period'), false);
+  assert.equal(stationSummaryRequests.at(-1).searchParams.get('period'), 'today');
   const demoUnitTestTime = unitTestTimePanel();
   await assertText(demoUnitTestTime, 'OSX-150 · SM · 48 channels · 412 units, last 30 days');
   assert.equal(await demoUnitTestTime.getByText('Live · test database', { exact: true }).count(), 0);
   assert.equal(await demoUnitTestTime.getByRole('button', { name: 'All', exact: true }).count(), 0);
-  assert.ok(unitTestTimeRequests.some(url => url.searchParams.get('period') === 'last_30_days' && url.searchParams.getAll('purpose').join(',') === 'production'));
   assert.ok(unitTestTimeRequests.some(url => url.searchParams.get('period') === 'today' && url.searchParams.getAll('purpose').join(',') === 'production'));
   await page.getByRole('heading', { name: 'Insertion-loss test time by configuration', exact: true }).waitFor();
   const demoRecent = page.getByRole('table', { name: 'Recently finished units' });
@@ -928,6 +955,7 @@ try {
   await downPage.route('**/api/v1/reporting/failure-concentration?*', route => route.abort('connectionrefused'));
   await downPage.route('**/api/v1/reporting/failure-kpis?*', route => route.abort('connectionrefused'));
   await downPage.route('**/api/v1/reporting/station-summary*', route => route.abort('connectionrefused'));
+  await downPage.route('**/api/v1/reporting/filter-options?*', route => route.abort('connectionrefused'));
   try {
     await downPage.goto(`${base}/#/`, { waitUntil: 'domcontentloaded' });
     await downPage.getByRole('region', { name: 'Run activity' }).getByText('Backend not reachable on 127.0.0.1:8000').first().waitFor();
@@ -1036,7 +1064,7 @@ try {
   check('Connected header and finished-unit KPIs cover Pacific rollover, missing duration, singular, Small Sample, No Data, incomplete, and Demo yield');
   const liveUnitTestTime = unitTestTimePanel();
   await liveUnitTestTime.getByText('Live · test database', { exact: true }).waitFor();
-  await liveUnitTestTime.getByText('4 finished units, last 30 days · Small Sample', { exact: true }).waitFor();
+  await liveUnitTestTime.getByText('4 finished units, today · Small Sample', { exact: true }).waitFor();
   assert.equal(await liveUnitTestTime.getByText('55m 00s', { exact: true }).count(), 2);
   await liveUnitTestTime.getByText('100m 00s+', { exact: true }).waitFor();
   assert.equal(await liveUnitTestTime.locator('svg rect').count(), 8);
@@ -1047,7 +1075,7 @@ try {
   await assertText(liveUnitTestTime, 'Not counted: 1 review required, 1 run in progress, 1 missing duration.');
   const testTimeOutcome = liveUnitTestTime.getByRole('group', { name: 'Unit test time outcome' });
   await testTimeOutcome.getByRole('button', { name: 'Passed', exact: true }).click();
-  await liveUnitTestTime.getByText('2 finished units, last 30 days · Small Sample', { exact: true }).waitFor();
+  await liveUnitTestTime.getByText('2 finished units, today · Small Sample', { exact: true }).waitFor();
   assert.equal(await liveUnitTestTime.getByText('15m 00s', { exact: true }).count(), 2);
   await liveUnitTestTime.getByText('20m 00s+', { exact: true }).waitFor();
   await testTimeOutcome.getByRole('button', { name: 'Unrecoverable', exact: true }).click();
@@ -1057,19 +1085,19 @@ try {
   const unitTestTimeRequestsBeforeRefresh = unitTestTimeRequests.length;
   await liveUnitTestTime.getByRole('button', { name: 'Refresh unit test time' }).click();
   assert.ok(unitTestTimeRequests.length > unitTestTimeRequestsBeforeRefresh);
-  assert.equal(unitTestTimeRequests.at(-1).searchParams.get('period'), 'last_30_days');
+  assert.equal(unitTestTimeRequests.at(-1).searchParams.get('period'), 'today');
   assert.equal(unitTestTimeRequests.at(-1).searchParams.getAll('purpose').join(','), 'production');
 
   unitTestTimeMode = 'no_data';
   await liveUnitTestTime.getByRole('button', { name: 'Refresh unit test time' }).click();
-  await liveUnitTestTime.getByText('0 finished units, last 30 days · No Data', { exact: true }).waitFor();
+  await liveUnitTestTime.getByText('0 finished units, today · No Data', { exact: true }).waitFor();
   await liveUnitTestTime.getByText('No finished units in this range.', { exact: true }).waitFor();
   assert.equal(await liveUnitTestTime.getByText('—', { exact: true }).count(), 3);
   assert.equal(await liveUnitTestTime.locator('svg rect').count(), 0);
 
   unitTestTimeMode = 'singular';
   await liveUnitTestTime.getByRole('button', { name: 'Refresh unit test time' }).click();
-  await liveUnitTestTime.getByText('1 finished unit, last 30 days · Small Sample', { exact: true }).waitFor();
+  await liveUnitTestTime.getByText('1 finished unit, today · Small Sample', { exact: true }).waitFor();
 
   unitTestTimeMode = 'incomplete';
   await liveUnitTestTime.getByRole('button', { name: 'Refresh unit test time' }).click();
@@ -1077,7 +1105,7 @@ try {
 
   unitTestTimeMode = 'values';
   await liveUnitTestTime.getByRole('button', { name: 'Refresh unit test time' }).click();
-  await liveUnitTestTime.getByText('4 finished units, last 30 days · Small Sample', { exact: true }).waitFor();
+  await liveUnitTestTime.getByText('4 finished units, today · Small Sample', { exact: true }).waitFor();
   check('Live unit test time covers connected stats, even median, nearest-rank P90, outcome filters, histogram, notes, refresh, Small Sample, No Data, singular wording, and incomplete state');
   await assertText(page.getByRole('button', { name: /^Engineering / }), '3');
   assert.ok((await page.getByRole('button', { name: /^Engineering / }).innerText()).includes('3'));
@@ -1185,7 +1213,7 @@ try {
   await liveStations.getByText('Run cap reached; results are incomplete.', { exact: true }).waitFor();
   stationMode = 'empty';
   await page.getByRole('button', { name: 'Refresh station summary' }).click();
-  await liveStations.getByText('No station activity in the last 30 days.', { exact: true }).waitFor();
+  await liveStations.getByText('No station activity this week.', { exact: true }).waitFor();
   assert.equal(await stationRows.count(), 1);
   stationMode = 'values';
   const stationRequestsBeforePurpose = stationSummaryRequests.length;
@@ -1196,6 +1224,34 @@ try {
   await page.getByRole('button', { name: /^Engineering / }).click();
   await page.getByRole('button', { name: /^Engineering / }).and(page.locator('[aria-pressed="false"]')).waitFor();
   check('Overview stations cover connected rows, totals, titles, relative bars, null station, notes, empty state, and purpose refresh');
+  await page.getByRole('heading', { name: 'Stations, this week', exact: true }).waitFor();
+  assert.ok(filterOptionsRequests.some(url => url.searchParams.getAll('purpose').join(',') === 'production'));
+  const filteredEndpoints = [channelActivityRequests, failureRateRequests, unitStatusRequests, unitTestTimeRequests, recentFinishedRequests, channelFailuresRequests, failureKpisRequests, failureWavelengthsRequests, stationSummaryRequests];
+  const lastRequestsMatch = async (expected, label) => {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if (filteredEndpoints.every(requests => Object.entries(expected).every(([key, value]) => requests.at(-1)?.searchParams.get(key) === value))) return;
+      await page.waitForTimeout(50);
+    }
+    assert.fail(`not every live Overview request sent ${label}`);
+  };
+  const modeSelect = page.getByLabel('Mode filter', { exact: true });
+  assert.deepEqual(await modeSelect.locator('option').allTextContents(), ['SM + MM', 'MM', 'SM']);
+  assert.deepEqual(await page.getByLabel('Station filter', { exact: true }).locator('option').allTextContents(), ['All stations', 'Station 1', 'Station 2']);
+  assert.deepEqual(await page.getByLabel('Model filter', { exact: true }).locator('option').allTextContents(), ['All models', 'DEMO-MODEL-A', 'DEMO-MODEL-B']);
+  assert.equal(await page.locator('label', { hasText: /^Operator/ }).locator('select').isDisabled(), true);
+  await modeSelect.selectOption('SM');
+  await lastRequestsMatch({ wavelength_mode: 'SM', station: null }, 'wavelength_mode=SM');
+  await page.getByLabel('Station filter', { exact: true }).selectOption('2');
+  await page.getByLabel('Channels filter', { exact: true }).selectOption('48');
+  await lastRequestsMatch({ wavelength_mode: 'SM', station: '2', channel_count: '48' }, 'mode, station and channel filters');
+  await stationPanel().getByText('Live · test database', { exact: true }).waitFor();
+  await page.getByRole('img', { name: /^Live daily first-observation run-channel failure rate/ }).locator('[data-selected-range="true"]').waitFor();
+  assert.ok(await page.getByRole('img', { name: /^Live bar chart of channels/ }).locator('rect[style*="opacity: 0.28"]').count() > 0);
+  await modeSelect.selectOption('');
+  await page.getByLabel('Station filter', { exact: true }).selectOption('');
+  await page.getByLabel('Channels filter', { exact: true }).selectOption('');
+  await lastRequestsMatch({ wavelength_mode: null, station: null, channel_count: null }, 'no filters after reset');
+  check('Overview filters come from filter-options, apply to every live panel, and the 31-day charts highlight the selected range');
   assert.equal(await page.getByRole('img', { name: /^Live bar chart of channels/ }).locator('rect').count(), 31);
   const liveFailureChart = page.getByRole('img', { name: /^Live daily first-observation run-channel failure rate/ });
   await liveFailureChart.waitFor();
@@ -1516,7 +1572,7 @@ try {
   assert.ok((await table.locator('tbody').innerText()).includes('OSX-100'));
   assert.ok(!(await table.locator('tbody').innerText()).includes('OSX-150'));
   await page.getByLabel('Activity model').selectOption({ label: 'All models' });
-  assert.deepEqual(await page.getByLabel('Activity station').locator('option').allInnerTexts(), ['All stations', 'St 1']);
+  assert.deepEqual(await page.getByLabel('Activity station').locator('option').allTextContents(), ['All stations', 'St 1']);
   await page.getByLabel('Activity station').selectOption({ label: 'St 1' });
   assert.equal(await table.locator('tbody tr').count(), 1);
   assert.ok(!(await table.locator('tbody').innerText()).includes('OSX-100'));

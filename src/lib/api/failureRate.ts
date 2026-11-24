@@ -1,6 +1,7 @@
-import type { MeasurementMode, Purpose } from '../../types';
+import type { Purpose } from '../../types';
 import { CHANNEL_ACTIVITY_PERIODS, type ChannelActivityPeriodKey } from './channelActivity';
 import { RUN_PURPOSES, RunActivityClientError } from './runActivity';
+import { appendReportFilters, filterEchoMatches, isReportFilterEcho, type ReportFilterEcho, type ReportFilters } from './reportFilters';
 
 export interface FailureRateCounts {
   failed: number;
@@ -24,11 +25,7 @@ export interface FailureRateConnectedResponse {
   tls: 'verified' | 'encrypted_unverified';
   extracted_at_utc: string;
   timezone: 'America/Los_Angeles';
-  filters: {
-    purpose: Purpose[];
-    wavelength_mode: MeasurementMode | null;
-    switch_model: string | null;
-  };
+  filters: ReportFilterEcho;
   classification_rule: 'strict >, run limit snapshot';
   periods: Record<ChannelActivityPeriodKey, FailureRatePeriod>;
   daily: FailureRateDay[];
@@ -81,17 +78,7 @@ function isPeriod(value: unknown, day: boolean): value is FailureRateDay | Failu
   return !day || (typeof value.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value.date));
 }
 
-function isFilters(value: unknown): value is FailureRateConnectedResponse['filters'] {
-  return isRecord(value)
-    && hasExactKeys(value, ['purpose', 'wavelength_mode', 'switch_model'])
-    && Array.isArray(value.purpose)
-    && value.purpose.length >= 1
-    && value.purpose.length <= RUN_PURPOSES.length
-    && new Set(value.purpose).size === value.purpose.length
-    && value.purpose.every(item => typeof item === 'string' && RUN_PURPOSES.includes(item as Purpose))
-    && (value.wavelength_mode === null || value.wavelength_mode === 'SM' || value.wavelength_mode === 'MM')
-    && (value.switch_model === null || (typeof value.switch_model === 'string' && value.switch_model.length >= 1 && value.switch_model.length <= 30));
-}
+const isFilters = isReportFilterEcho;
 
 function isFailureRateConnectedResponse(value: unknown): value is FailureRateConnectedResponse {
   if (!isRecord(value) || !hasExactKeys(value, ['data_source', 'tls', 'extracted_at_utc', 'timezone', 'filters', 'classification_rule', 'periods', 'daily', 'incomplete'])) return false;
@@ -121,8 +108,7 @@ async function readJson(response: Response): Promise<unknown> {
 
 export async function loadFailureRate(
   purposes: readonly Purpose[],
-  wavelengthMode: MeasurementMode | null,
-  switchModel: string | null,
+  filters: ReportFilters,
   signal: AbortSignal,
 ): Promise<FailureRateResult> {
   if (purposes.length < 1
@@ -133,8 +119,7 @@ export async function loadFailureRate(
   }
   const query = new URLSearchParams();
   purposes.forEach(purpose => query.append('purpose', purpose));
-  if (wavelengthMode !== null) query.set('wavelength_mode', wavelengthMode);
-  if (switchModel !== null) query.set('switch_model', switchModel);
+  appendReportFilters(query, filters);
   const response = await fetch(`/api/v1/reporting/failure-rate?${query}`, {
     signal,
     headers: { Accept: 'application/json' },
@@ -153,10 +138,7 @@ export async function loadFailureRate(
   if (!response.ok) throw new RunActivityClientError(response.status >= 500 ? 'unreachable' : 'request_failed');
   if (isRecord(body) && hasExactKeys(body, ['data_source']) && body.data_source === 'not_connected') return { data_source: 'not_connected' };
   if (!isFailureRateConnectedResponse(body)) throw new RunActivityClientError('invalid_response');
-  if (body.filters.purpose.length !== purposes.length
-    || body.filters.purpose.some((purpose, index) => purpose !== purposes[index])
-    || body.filters.wavelength_mode !== wavelengthMode
-    || body.filters.switch_model !== switchModel) {
+  if (!filterEchoMatches(body.filters, purposes, filters)) {
     throw new RunActivityClientError('invalid_response');
   }
   return body;

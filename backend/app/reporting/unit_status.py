@@ -12,6 +12,7 @@ from typing import Literal
 
 from app.reporting.adapter import ReportingError
 from app.reporting.channel_activity import ActivityWindow
+from app.reporting.filters import unit_matches_filters
 from app.reporting.models import UnitStatusQuery
 from app.reporting.unit_lookup import classify_losses, parse_limit_snapshot
 
@@ -69,7 +70,8 @@ ORDER BY newest_cohort_activity_utc DESC, a.assignment_id DESC
 _RUNS_PREFIX = f"""
 SELECT TOP ({UNIT_STATUS_RUN_CAP + 1}) r.run_id, r.assignment_id,
     r.run_started_at_utc, r.wavelength_mode, r.front_panel_channel_count,
-    r.analysis_status, r.superseded_by_run_id, r.limit_snapshot_json
+    r.analysis_status, r.superseded_by_run_id, r.limit_snapshot_json,
+    r.station_number
 FROM dbo.IL_RUNS AS r
 WHERE r.assignment_id IN ({{placeholders}})
 ORDER BY r.assignment_id, r.run_started_at_utc, r.run_id
@@ -159,6 +161,7 @@ class ProjectionRun:
     analysis_status: str
     superseded_by_run_id: int | None
     limits: dict | None
+    station_number: int | None = None
 
 
 @dataclass(frozen=True)
@@ -225,6 +228,7 @@ class UnitStatusProjection:
     latest_analysis: AnalysisSummary | None
     review_reasons: tuple[str, ...]
     wavelength_mode: str | None = None
+    station_number: int | None = None
     effective_readings: tuple[ProjectionMeasurement, ...] = ()
     fail_limit: Decimal | None = None
 
@@ -234,6 +238,22 @@ class UnitStatusMetrics:
     counts: dict[str, int]
     units: tuple[UnitStatusProjection, ...]
     incomplete: bool
+
+
+def filter_unit_status_projections(
+    projections: Sequence[UnitStatusProjection], query: UnitStatusQuery
+) -> tuple[UnitStatusProjection, ...]:
+    return tuple(
+        item
+        for item in projections
+        if unit_matches_filters(
+            query,
+            switch_model=item.switch_model,
+            wavelength_mode=item.wavelength_mode,
+            channel_count=item.channel_count,
+            station=item.station_number,
+        )
+    )
 
 
 def _id_query(template: str, identifiers: Sequence[int]) -> tuple[str, tuple[int, ...]]:
@@ -537,6 +557,7 @@ def project_unit_status(
         wavelength_mode=context.wavelength_mode,
         effective_readings=tuple(effective_readings),
         fail_limit=None if context.limits is None else context.limits["fail_above_db"],
+        station_number=context.station_number,
     )
 
 
@@ -583,7 +604,7 @@ def read_unit_status_projections(
     runs_by_assignment: dict[int, list[ProjectionRun]] = defaultdict(list)
     for row in run_rows:
         if (
-            len(row) != 8
+            len(row) != 9
             or row[3] not in {"SM", "MM"}
             or row[5]
             not in {
@@ -605,6 +626,7 @@ def read_unit_status_projections(
                 analysis_status=row[5],
                 superseded_by_run_id=_optional_positive_int(row[6]),
                 limits=_unit_status_limits(row[7], row[3]),
+                station_number=_optional_positive_int(row[8]),
             )
         )
 
@@ -722,6 +744,7 @@ def read_unit_status(cursor, query: UnitStatusQuery, window: ActivityWindow) -> 
         )
     projections, projection_incomplete = read_unit_status_projections(cursor, cohorts)
     incomplete = incomplete or projection_incomplete
+    projections = filter_unit_status_projections(projections, query)
     counts = Counter(item.status for item in projections)
     response_counts = {"cohort_units": len(projections)}
     response_counts.update({key: counts[key] for key in UNIT_STATUS_KEYS})

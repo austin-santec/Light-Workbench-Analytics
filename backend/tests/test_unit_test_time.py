@@ -413,7 +413,13 @@ def test_unit_test_time_response_rejects_inconsistent_finished_counts():
         "tls": "verified",
         "extracted_at_utc": EXTRACTED_AT,
         "period": {"key": "today", "start_utc": START, "end_utc": END, "partial": True},
-        "filters": {"purpose": ["production"]},
+        "filters": {
+            "purpose": ["production"],
+            "switch_model": None,
+            "wavelength_mode": None,
+            "channel_count": None,
+            "station": None,
+        },
         "units": [
             {
                 "unit_id": 1,

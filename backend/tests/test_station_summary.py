@@ -78,10 +78,14 @@ def test_sql_reuses_shared_ctes_and_binds_the_thirty_day_window():
         None,
         None,
         None,
+        None,
+        None,
+        None,
+        None,
     )
     assert sql == STATION_SUMMARY_SQL and limits_sql == FAILURE_RATE_LIMITS_SQL
     assert params == (start, end, *filters) and limit_params == filters
-    assert sql.count("?") == len(params) == 12
+    assert sql.count("?") == len(params) == 16
     shared = FAILURE_RATE_PERIOD_SQL.split("candidate_runs AS (", 1)[1].split(
         "windowed_observations AS (", 1
     )[0]
@@ -97,6 +101,18 @@ def test_sql_reuses_shared_ctes_and_binds_the_thirty_day_window():
     )
     for match in re.finditer(r"JSON_VALUE\(", sql):
         assert "ISJSON(" in sql[match.end() : match.end() + 80]
+
+    today_query, today_limits = build_station_summary_queries(
+        StationSummaryQuery(period="today", purposes=("production", "engineering")), boundaries
+    )
+    today = boundaries.periods["today"]
+    today_bounds = (
+        today.start_utc.replace(tzinfo=None),
+        today.end_utc.replace(tzinfo=None),
+    )
+    assert today_query[1][:2] == today_bounds
+    assert today_query[1][2:4] == today_bounds
+    assert today_limits[1][:2] == today_bounds
 
 
 def test_summary_groups_by_station_with_null_last_and_distinct_units():
@@ -258,7 +274,9 @@ def test_invalid_purpose_and_period_parameter_are_rejected(application):
             == 422
         )
         assert (
-            client.get("/api/v1/reporting/station-summary", params={"period": "today"}).status_code
+            client.get(
+                "/api/v1/reporting/station-summary", params={"period": "forever"}
+            ).status_code
             == 422
         )
     assert fake.calls == []

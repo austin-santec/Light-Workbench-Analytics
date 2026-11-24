@@ -31,6 +31,8 @@ import { loadStationSummary, stationTableRows, type StationSummaryConnectedRespo
 import { UNIT_STATUS_LABEL, UNIT_STATUS_OUTCOME_COLOR, UNIT_STATUS_OUTCOME_ORDER } from '../lib/unitStatusPresentation';
 import { loadUnitTestTime, summarizeUnitTestTime, UNIT_TEST_TIME_EXCLUDED_KEYS, type UnitTestTimeConnectedResponse, type UnitTestTimeOutcomeFilter } from '../lib/api/unitTestTime';
 import { loadRecentFinishedUnits, type RecentFinishedUnitsConnectedResponse } from '../lib/api/recentFinishedUnits';
+import { filterEchoMatches, NO_FILTERS, type ReportFilters } from '../lib/api/reportFilters';
+import { loadFilterOptions, type FilterOptionsConnectedResponse } from '../lib/api/filterOptions';
 import { firstPassYield, loadFailureKpis, type FailureKpisConnectedResponse } from '../lib/api/failureKpis';
 import { loadFailureWavelengths, wavelengthBars, wavelengthShare, type FailureWavelengthsConnectedResponse } from '../lib/api/failureWavelengths';
 
@@ -78,6 +80,17 @@ const LIVE_HEAT_RAMP: { bg: string; fg: string }[] = [
 const PERIOD_FOR_RANGE: Record<TimeRange, ChannelActivityPeriodKey> = {
   today: 'today', yesterday: 'yesterday', week: 'this_week', month: 'last_30_days',
 };
+const RANGE_PHRASE: Record<TimeRange, string> = {
+  today: 'today', yesterday: 'yesterday', week: 'this week', month: 'last 30 days',
+};
+const FILTER_SELECT_STYLE = "min-height:40px;padding:0 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel);font-size:13.5px;font-weight:500";
+
+// Daily-series indexes inside the selected period, for highlighting the 31-day charts.
+function daysInPeriod(daily: readonly { start_utc: string; end_utc: string }[], period: { start_utc: string; end_utc: string } | undefined): Set<number> {
+  if (!period) return new Set();
+  const start = Date.parse(period.start_utc), end = Date.parse(period.end_utc);
+  return new Set(daily.flatMap((day, index) => Date.parse(day.start_utc) >= start && Date.parse(day.end_utc) <= end && Date.parse(day.start_utc) < end ? [index] : []));
+}
 
 const PURPOSE_LABELS: Record<Purpose, string> = {
   production: 'Production', engineering: 'Engineering', training: 'Training', calibration: 'Calibration',
@@ -94,7 +107,7 @@ const UNIT_TEST_TIME_EXCLUDED_LABELS: Record<typeof UNIT_TEST_TIME_EXCLUDED_KEYS
   outside_period: 'finish date outside the range',
 };
 
-function liveThroughputChart(data: ChannelActivityConnectedResponse) {
+function liveThroughputChart(data: ChannelActivityConnectedResponse, selected: Set<number>) {
   const maximum = Math.max(1, ...data.daily.map(day => day.channels_tested));
   const gridMaximum = Math.max(4, Math.ceil(maximum / 4) * 4);
   const x0 = 52, x1 = 624, y1 = 172, height = 146;
@@ -110,7 +123,7 @@ function liveThroughputChart(data: ChannelActivityConnectedResponse) {
       h: barHeight.toFixed(1), w: width.toFixed(1), vy: (y1 - barHeight - 5).toFixed(1),
       value: day.channels_tested ? day.channels_tested.toLocaleString('en-US') : '',
       wd: showLabel ? new Intl.DateTimeFormat('en-US', { weekday: 'narrow', timeZone: 'UTC' }).format(localDate) : '',
-      day: showLabel ? day.date.slice(5) : '', date: day.date, partial: day.partial,
+      day: showLabel ? day.date.slice(5) : '', date: day.date, partial: day.partial, dim: selected.size > 0 && !selected.has(index),
       fill: day.partial ? 'color-mix(in srgb,var(--accent) 35%,var(--panel))' : 'var(--accent)',
     };
   });
@@ -148,7 +161,7 @@ function liveFailureSparkline(data: FailureRateConnectedResponse) {
   return { segments: lineSegments(values, x, y), points };
 }
 
-function liveFailureRateChart(data: FailureRateConnectedResponse) {
+function liveFailureRateChart(data: FailureRateConnectedResponse, selected: Set<number>) {
   const values = data.daily.map(day => day.rate === null ? null : day.rate * 100);
   const maximumValue = Math.max(1, ...values.filter((value): value is number => value !== null));
   const maximum = Math.max(1, Math.ceil(maximumValue));
@@ -164,7 +177,10 @@ function liveFailureRateChart(data: FailureRateConnectedResponse) {
     const value = maximum * part / 4;
     return { y: y(value), label: `${Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1)}%` };
   });
-  return { segments: lineSegments(values, x, y), points, labels, grid };
+  const chosen = [...selected].sort((a, b) => a - b);
+  const half = values.length > 1 ? (x1 - x0) / (values.length - 1) / 2 : 8;
+  const band = chosen.length && chosen.length < values.length ? { x: Math.max(x0 - half, x(chosen[0]) - half), width: Math.min(x1 + half, x(chosen.at(-1) ?? chosen[0]) + half) - Math.max(x0 - half, x(chosen[0]) - half) } : null;
+  return { segments: lineSegments(values, x, y), points, labels, grid, band, y0, y1 };
 }
 
 // Live histogram is drawn in real pixels (viewBox = measured width) so text stays 11-12px at any card width.
@@ -246,98 +262,111 @@ export default function Overview() {
  const { accent, d, kpis, purposes, scope, cfgRows, sel, hist, meanX, meanLX, outSegs, outLegend, linePath, areaPath, lineGrid, dots, avgY, lastX, lastY, bars, barGrid, stations, cells, legendCells, runs } = values;
  const selectedPurposes = useMemo(() => PURPOSES.filter(purpose => state.purp[purpose]), [state.purp]);
  const purposeKey = selectedPurposes.join(',');
+ const [filters, setFilters] = useState<ReportFilters>(NO_FILTERS);
+ const [filterOptions, setFilterOptions] = useState<FilterOptionsConnectedResponse | null>(null);
+ const setFilter = <K extends keyof ReportFilters>(key: K, value: ReportFilters[K]) => setFilters(current => ({ ...current, [key]: value }));
  useEffect(() => {
    const controller = new AbortController();
-   loadChannelActivity(selectedPurposes, null, null, controller.signal)
+   loadFilterOptions(selectedPurposes, controller.signal)
+     .then(result => setFilterOptions(result.data_source === 'test_database' ? result : null))
+     .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setFilterOptions(null); });
+   return () => controller.abort();
+ }, [purposeKey, selectedPurposes]);
+ useEffect(() => {
+   const controller = new AbortController();
+   loadChannelActivity(selectedPurposes, filters, controller.signal)
      .then(result => setChannelActivity(result.data_source === 'test_database' ? { kind: 'connected', data: result } : { kind: 'demo' }))
      .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setChannelActivity({ kind: 'error' }); });
    return () => controller.abort();
- }, [channelRefresh, purposeKey, state.range, selectedPurposes]);
+ }, [channelRefresh, filters, purposeKey, state.range, selectedPurposes]);
  useEffect(() => {
    const controller = new AbortController();
-   loadFailureRate(selectedPurposes, null, null, controller.signal)
+   loadFailureRate(selectedPurposes, filters, controller.signal)
      .then(result => setFailureRate(result.data_source === 'test_database' ? { kind: 'connected', data: result } : { kind: 'demo' }))
      .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setFailureRate({ kind: 'error' }); });
    return () => controller.abort();
- }, [failureRefresh, purposeKey, selectedPurposes]);
+ }, [failureRefresh, filters, purposeKey, selectedPurposes]);
  useEffect(() => {
    const controller = new AbortController();
-   loadUnitStatus(PERIOD_FOR_RANGE[state.range], selectedPurposes, controller.signal)
+   loadUnitStatus(PERIOD_FOR_RANGE[state.range], selectedPurposes, controller.signal, filters)
      .then(result => setUnitStatus(result.data_source === 'test_database' ? { kind: 'connected', data: result } : { kind: 'demo' }))
      .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setUnitStatus({ kind: 'error' }); });
    return () => controller.abort();
- }, [purposeKey, selectedPurposes, state.range, unitStatusRefresh]);
+ }, [filters, purposeKey, selectedPurposes, state.range, unitStatusRefresh]);
  useEffect(() => {
    const controller = new AbortController();
-   loadUnitTestTime('last_30_days', ['production'], controller.signal)
+   loadUnitTestTime(PERIOD_FOR_RANGE[state.range], selectedPurposes, controller.signal, filters)
      .then(result => setUnitTestTime(result.data_source === 'test_database' ? { kind: 'connected', data: result } : { kind: 'demo' }))
      .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setUnitTestTime({ kind: 'error' }); });
    return () => controller.abort();
- }, [unitTestTimeRefresh]);
+ }, [filters, purposeKey, selectedPurposes, state.range, unitTestTimeRefresh]);
  useEffect(() => {
    const controller = new AbortController();
-   loadUnitTestTime(PERIOD_FOR_RANGE[state.range], selectedPurposes, controller.signal)
+   loadUnitTestTime(PERIOD_FOR_RANGE[state.range], selectedPurposes, controller.signal, filters)
      .then(result => setKpiUnitTestTime(result.data_source === 'test_database' ? { kind: 'connected', data: result } : { kind: 'demo' }))
      .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setKpiUnitTestTime({ kind: 'error' }); });
    return () => controller.abort();
- }, [purposeKey, selectedPurposes, state.range]);
+ }, [filters, purposeKey, selectedPurposes, state.range]);
  useEffect(() => {
    const controller = new AbortController();
-   loadRecentFinishedUnits(PERIOD_FOR_RANGE[state.range], selectedPurposes, controller.signal)
+   loadRecentFinishedUnits(PERIOD_FOR_RANGE[state.range], selectedPurposes, controller.signal, filters)
      .then(result => setRecentFinishedUnits(result.data_source === 'test_database' ? { kind: 'connected', data: result } : { kind: 'demo' }))
      .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setRecentFinishedUnits({ kind: 'error' }); });
    return () => controller.abort();
- }, [purposeKey, selectedPurposes, state.range]);
+ }, [filters, purposeKey, selectedPurposes, state.range]);
  useEffect(() => {
    const controller = new AbortController();
-   loadChannelFailures(PERIOD_FOR_RANGE[state.range], selectedPurposes, controller.signal)
+   loadChannelFailures(PERIOD_FOR_RANGE[state.range], selectedPurposes, controller.signal, filters)
      .then(result => setChannelFailures(result.data_source === 'test_database' ? { kind: 'connected', data: result } : { kind: 'demo' }))
      .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setChannelFailures({ kind: 'error' }); });
    return () => controller.abort();
- }, [channelFailuresRefresh, purposeKey, selectedPurposes, state.range]);
+ }, [channelFailuresRefresh, filters, purposeKey, selectedPurposes, state.range]);
  useEffect(() => {
    const controller = new AbortController();
-   loadFailureKpis(PERIOD_FOR_RANGE[state.range], selectedPurposes, controller.signal)
+   loadFailureKpis(PERIOD_FOR_RANGE[state.range], selectedPurposes, controller.signal, filters)
      .then(result => setFirstPassKpis(result.data_source === 'test_database' ? result : null))
      .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setFirstPassKpis(null); });
    return () => controller.abort();
- }, [purposeKey, selectedPurposes, state.range]);
+ }, [filters, purposeKey, selectedPurposes, state.range]);
  useEffect(() => {
    const controller = new AbortController();
-   loadFailureWavelengths(PERIOD_FOR_RANGE[state.range], selectedPurposes, controller.signal)
+   loadFailureWavelengths(PERIOD_FOR_RANGE[state.range], selectedPurposes, controller.signal, filters)
      .then(result => setFailureWavelengths(result.data_source === 'test_database' ? { kind: 'connected', data: result } : { kind: 'demo' }))
      .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setFailureWavelengths({ kind: 'error' }); });
    return () => controller.abort();
- }, [purposeKey, selectedPurposes, state.range, unitStatusRefresh]);
+ }, [filters, purposeKey, selectedPurposes, state.range, unitStatusRefresh]);
  useEffect(() => {
    const controller = new AbortController();
-   loadStationSummary(selectedPurposes, controller.signal)
+   loadStationSummary(PERIOD_FOR_RANGE[state.range], selectedPurposes, controller.signal, filters)
      .then(result => setStationSummary(result.data_source === 'test_database' ? { kind: 'connected', data: result } : { kind: 'demo' }))
      .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setStationSummary({ kind: 'error' }); });
    return () => controller.abort();
- }, [purposeKey, selectedPurposes, stationRefresh]);
+ }, [filters, purposeKey, selectedPurposes, state.range, stationRefresh]);
  const liveChannelData = channelActivity.kind === 'connected' ? channelActivity.data : null;
  const livePeriod = liveChannelData?.periods[PERIOD_FOR_RANGE[state.range]];
  const liveSpark = liveChannelData ? sparkline(liveChannelData.daily.map(day => day.channels_tested), 160, 34) : null;
- const liveChart = liveChannelData ? liveThroughputChart(liveChannelData) : null;
+ const liveChart = liveChannelData ? liveThroughputChart(liveChannelData, daysInPeriod(liveChannelData.daily, livePeriod)) : null;
  const liveFailureData = failureRate.kind === 'connected' ? failureRate.data : null;
  const liveFailurePeriod = liveFailureData?.periods[PERIOD_FOR_RANGE[state.range]];
  const liveFailureSpark = liveFailureData ? liveFailureSparkline(liveFailureData) : null;
- const liveFailureChart = liveFailureData ? liveFailureRateChart(liveFailureData) : null;
+ const liveFailureChart = liveFailureData ? liveFailureRateChart(liveFailureData, daysInPeriod(liveFailureData.daily, liveFailurePeriod)) : null;
  const liveUnitData = unitStatus.kind === 'connected' ? unitStatus.data : null;
  const liveWavelengths = failureWavelengths.kind === 'connected'
    && failureWavelengths.data.period.key === PERIOD_FOR_RANGE[state.range]
-   && failureWavelengths.data.filters.purpose.join(',') === purposeKey
+   && filterEchoMatches(failureWavelengths.data.filters, selectedPurposes, filters)
    ? failureWavelengths.data : null;
  const liveFirstPass = firstPassKpis
    && firstPassKpis.period.key === PERIOD_FOR_RANGE[state.range]
-   && firstPassKpis.filters.purpose.join(',') === purposeKey
+   && filterEchoMatches(firstPassKpis.filters, selectedPurposes, filters)
    ? firstPassKpis : null;
  const liveWavelengthBars = useMemo(() => liveWavelengths ? wavelengthBars(liveWavelengths) : [], [liveWavelengths]);
- const liveUnitTestTime = unitTestTime.kind === 'connected' ? unitTestTime.data : null;
+ const liveUnitTestTime = unitTestTime.kind === 'connected'
+   && unitTestTime.data.period.key === PERIOD_FOR_RANGE[state.range]
+   && filterEchoMatches(unitTestTime.data.filters, selectedPurposes, filters)
+   ? unitTestTime.data : null;
  const liveKpiUnitTestTime = kpiUnitTestTime.kind === 'connected'
    && kpiUnitTestTime.data.period.key === PERIOD_FOR_RANGE[state.range]
-   && kpiUnitTestTime.data.filters.purpose.join(',') === purposeKey
+   && filterEchoMatches(kpiUnitTestTime.data.filters, selectedPurposes, filters)
    ? kpiUnitTestTime.data : null;
  const liveKpiUnitTestTimeSummary = useMemo(
    () => liveKpiUnitTestTime ? summarizeUnitTestTime(liveKpiUnitTestTime.units, 'all') : null,
@@ -406,21 +435,25 @@ export default function Overview() {
       </div>
     </header>
 
-    <p id="overview-scope" className="preview-note">{liveKpiUnitTestTime ? 'Summary range/purpose: live tiles and panels follow the selected range and Run purpose unless they say otherwise. Model, Mode, Channels, Station and Operator are disabled previews and are not applied. Tiles marked Demo are synthetic.' : 'Summary range/purpose: counts, yields, outcomes and activity. Live channel activity and first-observation failure rate follow the selected range and Run purpose. Model, Mode, Channels, Station and Operator are disabled previews and are not applied to them. Other historical charts and sparklines stay fixed.'}</p>
+    <p id="overview-scope" className="preview-note">{liveKpiUnitTestTime ? 'Summary range/purpose: live tiles and panels follow the selected range and Run purpose unless they say otherwise. Model, Mode, Channels and Station apply to every live panel; Operator is a disabled preview. The 31-day charts highlight the selected range, and the run activity card keeps its own window. Tiles marked Demo are synthetic.' : 'Summary range/purpose: counts, yields, outcomes and activity. Live channel activity and first-observation failure rate follow the selected range and Run purpose. Model, Mode, Channels, Station and Operator are disabled previews and are not applied to them. Other historical charts and sparklines stay fixed.'}</p>
     <section aria-label="Summary filters and global previews" aria-describedby="overview-scope" style={css("display:flex;flex-wrap:wrap;align-items:center;gap:10px 12px;padding:10px;background:var(--panel);border:1px solid var(--line);border-radius:14px")}>
       <SegmentedControl label="Time range" options={TIME_RANGES} value={state.range} onChange={range => setState(current => ({ ...current, range }))} size="summary" describedBy="overview-scope" />
       <span aria-hidden="true" style={css("width:1px;height:28px;background:var(--line)")}></span>
       <label style={css("display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);font-weight:500")}>Model
-        <PreviewSelect style={css("min-height:40px;padding:0 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel);font-size:13.5px;font-weight:500")}><option >All models</option><option >OSX-150</option><option >OSX-100</option></PreviewSelect>
+        {filterOptions ? <select aria-label="Model filter" value={filters.switch_model ?? ''} onChange={event => setFilter('switch_model', event.target.value || null)} style={css(FILTER_SELECT_STYLE)}><option value="">All models</option>{filterOptions.switch_models.map(model => <option key={model} value={model}>{model}</option>)}</select>
+          : <PreviewSelect style={css(FILTER_SELECT_STYLE)}><option >All models</option><option >OSX-150</option><option >OSX-100</option></PreviewSelect>}
       </label>
       <label style={css("display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);font-weight:500")}>Mode
-        <PreviewSelect style={css("min-height:40px;padding:0 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel);font-size:13.5px;font-weight:500")}><option >SM + MM</option><option >SM</option><option >MM</option></PreviewSelect>
+        {filterOptions ? <select aria-label="Mode filter" value={filters.wavelength_mode ?? ''} onChange={event => setFilter('wavelength_mode', event.target.value === 'SM' || event.target.value === 'MM' ? event.target.value : null)} style={css(FILTER_SELECT_STYLE)}><option value="">SM + MM</option>{filterOptions.wavelength_modes.map(mode => <option key={mode} value={mode}>{mode}</option>)}</select>
+          : <PreviewSelect style={css(FILTER_SELECT_STYLE)}><option >SM + MM</option><option >SM</option><option >MM</option></PreviewSelect>}
       </label>
       <label style={css("display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);font-weight:500")}>Channels
-        <PreviewSelect style={css("min-height:40px;padding:0 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel);font-size:13.5px;font-weight:500")}><option >All</option><option >48</option><option >36</option><option >24</option></PreviewSelect>
+        {filterOptions ? <select aria-label="Channels filter" value={filters.channel_count ?? ''} onChange={event => setFilter('channel_count', event.target.value ? Number(event.target.value) : null)} style={css(FILTER_SELECT_STYLE)}><option value="">All</option>{filterOptions.channel_counts.map(count => <option key={count} value={count}>{count}</option>)}</select>
+          : <PreviewSelect style={css(FILTER_SELECT_STYLE)}><option >All</option><option >48</option><option >36</option><option >24</option></PreviewSelect>}
       </label>
       <label style={css("display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);font-weight:500")}>Station
-        <PreviewSelect style={css("min-height:40px;padding:0 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel);font-size:13.5px;font-weight:500")}><option >All stations</option><option >Station 1</option><option >Station 2</option><option >Station 3</option><option >Station 4</option></PreviewSelect>
+        {filterOptions ? <select aria-label="Station filter" value={filters.station ?? ''} onChange={event => setFilter('station', event.target.value ? Number(event.target.value) : null)} style={css(FILTER_SELECT_STYLE)}><option value="">All stations</option>{filterOptions.stations.map(station => <option key={station} value={station}>Station {station}</option>)}</select>
+          : <PreviewSelect style={css(FILTER_SELECT_STYLE)}><option >All stations</option><option >Station 1</option><option >Station 2</option><option >Station 3</option><option >Station 4</option></PreviewSelect>}
       </label>
       <label style={css("display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);font-weight:500")}>Operator
         <PreviewSelect style={css("min-height:40px;padding:0 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel);font-size:13.5px;font-weight:500")}><option >Anyone</option><option >Demo operator A</option><option >Demo operator B</option><option >Demo operator C</option></PreviewSelect>
@@ -569,7 +602,7 @@ export default function Overview() {
                 <h2 style={css("margin:0;font-size:16px;font-weight:600")}>Time to test one unit</h2>
                 <span className="live-unit-badge">Live · test database</span>
               </span>
-              <span style={css("font-size:12.5px;color:var(--muted)")}>{liveUnitTestTimeSummary.n} finished {liveUnitTestTimeSummary.n === 1 ? 'unit' : 'units'}, last 30 days{liveUnitTestTimeSummary.sampleLabel ? ` · ${liveUnitTestTimeSummary.sampleLabel}` : ''}</span>
+              <span style={css("font-size:12.5px;color:var(--muted)")}>{liveUnitTestTimeSummary.n} finished {liveUnitTestTimeSummary.n === 1 ? 'unit' : 'units'}, {RANGE_PHRASE[state.range]}{liveUnitTestTimeSummary.sampleLabel ? ` · ${liveUnitTestTimeSummary.sampleLabel}` : ''}</span>
             </div>
             <button type="button" aria-label="Refresh unit test time" onClick={() => setUnitTestTimeRefresh(value => value + 1)} style={css("align-self:flex-start;min-height:28px;padding:0 8px;border-radius:6px;border:1px solid var(--line);background:var(--panel);color:var(--ink2);font-size:10.5px;font-weight:600")}>Refresh</button>
           </div>
@@ -583,7 +616,7 @@ export default function Overview() {
               <div style={css("padding:9px 12px;border-radius:9px;background:var(--panel2);display:flex;justify-content:space-between;align-items:baseline;gap:10px")}><span style={css("font-size:12px;color:var(--muted)")}>Slowest 10%</span><span style={css("font-size:18px;font-weight:650;font-variant-numeric:tabular-nums")}>{liveUnitTestTimeSummary.p90Ms === null ? '—' : `${formatDuration(liveUnitTestTimeSummary.p90Ms / 1000)}+`}</span></div>
             </div>
             <div ref={unitTimeChartRef} style={css("flex:3 1 360px;min-width:0;display:flex;align-items:center")}>
-              <svg id="configuration-histogram" data-source="live-unit-test-time" width={unitTimeChartWidth} height={UNIT_TIME_CHART.height} viewBox={`0 0 ${unitTimeChartWidth} ${UNIT_TIME_CHART.height}`} role="img" aria-label={`Histogram of ${liveUnitTestTimeSummary.n} finished units, ${unitTestTimeOutcome} outcomes, last 30 days${liveUnitTestTimeSummary.meanMs === null ? '' : `, average ${formatDuration(liveUnitTestTimeSummary.meanMs / 1000)}`}`} style={css("display:block;max-width:100%")}>
+              <svg id="configuration-histogram" data-source="live-unit-test-time" width={unitTimeChartWidth} height={UNIT_TIME_CHART.height} viewBox={`0 0 ${unitTimeChartWidth} ${UNIT_TIME_CHART.height}`} role="img" aria-label={`Histogram of ${liveUnitTestTimeSummary.n} finished units, ${unitTestTimeOutcome} outcomes, ${RANGE_PHRASE[state.range]}${liveUnitTestTimeSummary.meanMs === null ? '' : `, average ${formatDuration(liveUnitTestTimeSummary.meanMs / 1000)}`}`} style={css("display:block;max-width:100%")}>
                 <line x1={UNIT_TIME_CHART.inset} x2={unitTimeChartWidth - UNIT_TIME_CHART.inset} y1={UNIT_TIME_CHART.baseline} y2={UNIT_TIME_CHART.baseline} style={css("stroke:var(--line);stroke-width:1")}></line>
                 {liveUnitTestTimeChart?.bars.map((bar, index4) => <g key={index4} data-mean-bin={bar.holdsMean ? 'true' : undefined}>
                   <rect x={bar.x} y={bar.y} width={bar.width} height={bar.height} rx="3" style={css("fill:" + (bar.holdsMean ? String(accent) : 'color-mix(in srgb,var(--accent) 38%,var(--panel))'))}></rect>
@@ -638,7 +671,7 @@ export default function Overview() {
         <div style={css("display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;gap:10px")}>
           <div style={css("display:flex;flex-direction:column;gap:3px")}>
             <h2 style={css("margin:0;font-size:16px;font-weight:600")}>Daily channel failure rate</h2>
-            <span style={css("font-size:12.5px;color:var(--muted)")}>{liveFailureData ? 'First observation per run-channel; retest runs have their own first observations. Thirty complete Pacific dates plus today, partial.' : 'First-pass channels over the fail limit at either wavelength, last 20 workdays.'}</span>
+            <span style={css("font-size:12.5px;color:var(--muted)")}>{liveFailureData ? `First observation per run-channel; retest runs have their own first observations. Thirty complete Pacific dates plus today, partial.${state.range === 'month' ? '' : ` Shaded: ${RANGE_PHRASE[state.range]}.`}` : 'First-pass channels over the fail limit at either wavelength, last 20 workdays.'}</span>
             <span style={css(liveFailureData
               ? "align-self:flex-start;font-size:10px;font-weight:650;letter-spacing:.04em;text-transform:uppercase;padding:3px 7px;border-radius:999px;background:color-mix(in srgb,var(--accent) 10%,var(--panel));color:var(--accent-ink)"
               : "align-self:flex-start;font-size:10px;font-weight:650;letter-spacing:.04em;text-transform:uppercase;padding:3px 7px;border-radius:999px;background:var(--panel2);color:var(--muted)")}>{liveFailureData ? `Live · test database · ${includedPurposes}` : 'Demo'}</span>
@@ -669,6 +702,7 @@ export default function Overview() {
         </svg>}
         {liveFailureData && liveFailureChart && <svg viewBox="0 0 640 220" role="img" aria-label={`Live daily first-observation run-channel failure rate using strict greater-than each run's saved limit snapshot, Pacific dates ${liveFailureData.daily[0].date} through ${liveFailureData.daily.at(-1)?.date}; null-rate dates are gaps and today is partial`} style={css("width:100%;height:auto;display:block")}>
           <desc>Q02 first-observation failure fraction by Pacific local date. Retest runs have their own first observations. Equality at a saved run limit passes; only strict greater-than fails.</desc>
+          {liveFailureChart.band && <rect data-selected-range="true" x={liveFailureChart.band.x} y={liveFailureChart.y0} width={liveFailureChart.band.width} height={liveFailureChart.y1 - liveFailureChart.y0} style={css("fill:var(--accent);fill-opacity:0.07")}></rect>}
           {liveFailureChart.grid.map((grid, index) => <g key={index}>
             <line x1="44" x2="624" y1={grid.y} y2={grid.y} style={css("stroke:var(--grid);stroke-width:1")} />
             <text x="36" y={grid.y + 4} style={css("font-size:11px;fill:var(--muted);text-anchor:end;font-family:'Geist Mono',monospace")}>{grid.label}</text>
@@ -685,7 +719,7 @@ export default function Overview() {
         <div style={css("display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;gap:10px")}>
           <div style={css("display:flex;flex-direction:column;gap:3px")}>
             <h2 style={css("margin:0;font-size:16px;font-weight:600")}>Channels tested per day</h2>
-            <span style={css("font-size:12.5px;color:var(--muted)")}>{liveChannelData ? 'Thirty complete local dates plus today in Pacific time; today is partial.' : 'Last 14 days. Today is partial, as of 08:27.'}</span>
+            <span style={css("font-size:12.5px;color:var(--muted)")}>{liveChannelData ? `Thirty complete local dates plus today in Pacific time; today is partial.${state.range === 'month' ? '' : ` Full bars are ${RANGE_PHRASE[state.range]}.`}` : 'Last 14 days. Today is partial, as of 08:27.'}</span>
             <span style={css(liveChannelData
               ? "align-self:flex-start;font-size:10px;font-weight:650;letter-spacing:.04em;text-transform:uppercase;padding:3px 7px;border-radius:999px;background:color-mix(in srgb,var(--accent) 10%,var(--panel));color:var(--accent-ink)"
               : "align-self:flex-start;font-size:10px;font-weight:650;letter-spacing:.04em;text-transform:uppercase;padding:3px 7px;border-radius:999px;background:var(--panel2);color:var(--muted)")}>{liveChannelData ? `Live · test database · ${includedPurposes}` : 'Demo'}</span>
@@ -706,7 +740,7 @@ export default function Overview() {
           {(liveChart?.bars ?? bars).map((b, index8) => <Fragment key={index8}>
             <g >
               {'date' in b && <title>{`${String(b.date)}: ${b.value || '0'} channels with test activity${'partial' in b && b.partial === true ? ' (partial)' : ''}`}</title>}
-              <rect x={b.x} y={b.y} width={'w' in b ? String(b.w) : '28'} height={b.h} rx="4" style={css("fill:" + String(b.fill) + ('partial' in b && b.partial === true ? ';stroke:var(--accent);stroke-width:1;stroke-dasharray:2 2' : ''))}></rect>
+              <rect x={b.x} y={b.y} width={'w' in b ? String(b.w) : '28'} height={b.h} rx="4" style={css("fill:" + String(b.fill) + ('partial' in b && b.partial === true ? ';stroke:var(--accent);stroke-width:1;stroke-dasharray:2 2' : '') + ('dim' in b && b.dim ? ';opacity:0.28' : ''))}></rect>
               {!liveChannelData && <text x={b.cx} y={b.vy} style={css("font-size:10px;fill:var(--ink2);text-anchor:middle;font-family:'Geist Mono',monospace")}>{b.value}</text>}
               <text x={b.cx} y="190" style={css("font-size:10.5px;fill:var(--muted);text-anchor:middle")}>{b.wd}</text>
               <text x={b.cx} y="206" style={css("font-size:11px;fill:var(--ink2);text-anchor:middle;font-weight:500")}>{b.day}</text>
@@ -782,7 +816,7 @@ export default function Overview() {
         <div style={css("display:flex;flex-direction:column;gap:3px")}>
           <div style={css("display:flex;justify-content:space-between;align-items:flex-start;gap:10px")}>
             <span style={css("display:flex;align-items:center;flex-wrap:wrap;gap:7px")}>
-              <h2 style={css("margin:0;font-size:16px;font-weight:600")}>Stations, last 30 days</h2>
+              <h2 style={css("margin:0;font-size:16px;font-weight:600")}>{liveStations ? `Stations, ${RANGE_PHRASE[state.range]}` : 'Stations, last 30 days'}</h2>
               {liveStations && <span className="live-unit-badge">Live · test database</span>}
             </span>
             {liveStations && <button type="button" aria-label="Refresh station summary" onClick={() => setStationRefresh(value => value + 1)} style={css("min-height:28px;padding:0 8px;border-radius:6px;border:1px solid var(--line);background:var(--panel);color:var(--ink2);font-size:10.5px;font-weight:600")}>Refresh</button>}
@@ -816,7 +850,7 @@ export default function Overview() {
           </div>
         </div>
         {liveStations ? <div style={css("display:flex;flex-direction:column;gap:4px;font-size:11.5px;color:var(--muted)")}>
-          {liveStations.stations.length === 0 && <span style={css("font-size:12.5px")}>No station activity in the last 30 days.</span>}
+          {liveStations.stations.length === 0 && <span style={css("font-size:12.5px")}>No station activity {state.range === 'month' ? 'in the last 30 days' : RANGE_PHRASE[state.range]}.</span>}
           <span>Station-level only. Rates pool first observations; a station with few runs can swing widely.</span>
           {liveStations.totals.unknown_criteria > 0 && <span>{liveStations.totals.unknown_criteria.toLocaleString('en-US')} observations with unknown limits not counted.</span>}
           {liveStations.incomplete && <span style={css("color:var(--warn-fg)")}>Run cap reached; results are incomplete.</span>}

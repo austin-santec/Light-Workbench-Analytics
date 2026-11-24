@@ -84,11 +84,15 @@ def test_sql_binds_selected_period_and_preserves_shared_sql_text():
         None,
         None,
         None,
+        None,
+        None,
+        None,
+        None,
     )
     assert sql == FAILURE_CONCENTRATION_SQL and limits_sql == FAILURE_RATE_LIMITS_SQL
     assert params == (*expected_filters, start, end)
     assert limit_params == expected_filters
-    assert sql.count("?") == len(params) == 12
+    assert sql.count("?") == len(params) == 16
     assert FIRST_OBSERVATION_CTES in sql
     assert "JOIN dbo.IL_MEASUREMENTS AS m ON m.measurement_id = f.measurement_id" in sql
     assert "m.physical_port" in sql
@@ -106,17 +110,17 @@ def test_sql_binds_selected_period_and_preserves_shared_sql_text():
         "FIRST_OBSERVATION_CTES": (
             "fad6bc803b49cf1a5670f30287178f074145a8f7c24467cfa6b960bc968e9114"
         ),
-        "CHANNEL_FAILURES_SQL": "39f8a3e653de8a7b529860545d8740114e90acaddad1cab1c56abfd32947f6a7",
+        "CHANNEL_FAILURES_SQL": "69f9c53465ffa77f573cc6bd08656821d38ec7916137e10ba78db9b8fb984b85",
         "FAILURE_CONCENTRATION_SQL": (
-            "a29348ddeda5342a32d505ef698fa81714e43b6f069f64008e516abf760be0cd"
+            "bdcd425683b8e529c0498a33b0da0a25103015a3ab6aa4f564d9fedec11f2460"
         ),
         "FAILURE_RATE_PERIOD_SQL": (
-            "8afcbef833380698f973fbbac42558705c42bd06ccb5d94c5c6ba5a386fd059a"
+            "d5462d9a6434a6f2224cb223e423abf92ebf89e86ede57687c42cc7fdded060e"
         ),
         "FAILURE_RATE_DAILY_SQL": (
-            "ceb9ea85f70cb29fc033278e1a3782dd445930926d15a1731f4e3845aacf1571"
+            "3d04c32ca9b35adb991abb01e40cf6d7da08406b0e857f92932d2ceb05a81be5"
         ),
-        "STATION_SUMMARY_SQL": "a1f94cdcb5006b8fa3e42dfd52eda82623e88b3c0e1e1c5ab21301df8c210977",
+        "STATION_SUMMARY_SQL": "f02c88a029f97fb1c9a8165f616efb6f84c98c9816228d32cd72505dbe0da8ce",
     }
     actual = {
         name: hashlib.sha256(value.encode()).hexdigest()

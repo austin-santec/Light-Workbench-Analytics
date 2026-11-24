@@ -83,8 +83,12 @@ def test_sql_is_bound_read_only_and_preserves_shared_statement_hashes():
         None,
         None,
         None,
+        None,
+        None,
+        None,
+        None,
     )
-    assert sql.count("?") == len(params) == 12
+    assert sql.count("?") == len(params) == 16
     assert "PARTITION BY m.run_id, m.logical_channel" in sql
     assert "observation_rank > 1" in sql
     assert f"SELECT TOP ({FAILURE_KPI_RUN_CAP}) run_id" in sql
@@ -97,7 +101,7 @@ def test_sql_is_bound_read_only_and_preserves_shared_statement_hashes():
         re.I,
     )
     assert hashlib.sha256(STATION_SUMMARY_SQL.encode()).hexdigest() == (
-        "a1f94cdcb5006b8fa3e42dfd52eda82623e88b3c0e1e1c5ab21301df8c210977"
+        "f02c88a029f97fb1c9a8165f616efb6f84c98c9816228d32cd72505dbe0da8ce"
     )
     assert hashlib.sha256(UNIT_TEST_TIME_COHORT_SQL.encode()).hexdigest() == (
         "7b2858dc9b3eed765201dcbed242d45faf8fb1889b19dd7728f79403162c0f7c"

@@ -63,25 +63,18 @@ class RunQuery(BaseModel):
         return self
 
 
-class ChannelActivityQuery(BaseModel):
+class ReportingFilterQuery(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
 
-    purposes: tuple[RunPurpose, ...] = (RunPurpose.PRODUCTION,)
-    wavelength_mode: Literal["SM", "MM"] | None = None
     switch_model: str | None = Field(default=None, min_length=1, max_length=30)
-
-    @field_validator("purposes")
-    @classmethod
-    def selected_purposes(cls, value: tuple[RunPurpose, ...]) -> tuple[RunPurpose, ...]:
-        if not 1 <= len(value) <= len(RunPurpose) or len(set(value)) != len(value):
-            raise ValueError("One to four unique purposes are required")
-        return value
+    wavelength_mode: Literal["SM", "MM"] | None = None
+    channel_count: int | None = Field(default=None, ge=1, le=200, strict=True)
+    station: int | None = Field(default=None, ge=1, strict=True)
 
 
-class UnitStatusQuery(BaseModel):
+class PurposeQuery(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
 
-    period: Literal["today", "yesterday", "this_week", "last_30_days"] = "last_30_days"
     purposes: tuple[RunPurpose, ...] = (RunPurpose.PRODUCTION,)
 
     @field_validator("purposes")
@@ -92,18 +85,18 @@ class UnitStatusQuery(BaseModel):
         return value
 
 
-class UnitTestTimeQuery(BaseModel):
+class ChannelActivityQuery(ReportingFilterQuery, PurposeQuery):
+    pass
+
+
+class UnitStatusQuery(ReportingFilterQuery, PurposeQuery):
     model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
 
     period: Literal["today", "yesterday", "this_week", "last_30_days"] = "last_30_days"
-    purposes: tuple[RunPurpose, ...] = (RunPurpose.PRODUCTION,)
 
-    @field_validator("purposes")
-    @classmethod
-    def selected_purposes(cls, value: tuple[RunPurpose, ...]) -> tuple[RunPurpose, ...]:
-        if not 1 <= len(value) <= len(RunPurpose) or len(set(value)) != len(value):
-            raise ValueError("One to four unique purposes are required")
-        return value
+
+class UnitTestTimeQuery(ReportingFilterQuery, PurposeQuery):
+    period: Literal["today", "yesterday", "this_week", "last_30_days"] = "last_30_days"
 
 
 class RecentFinishedUnitsQuery(UnitTestTimeQuery):
@@ -323,20 +316,8 @@ class FailureRateMetrics(BaseModel):
     incomplete: bool
 
 
-class ChannelFailuresQuery(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
-
+class ChannelFailuresQuery(ReportingFilterQuery, PurposeQuery):
     period: Literal["today", "yesterday", "this_week", "last_30_days"] = "last_30_days"
-    purposes: tuple[RunPurpose, ...] = (RunPurpose.PRODUCTION,)
-    wavelength_mode: Literal["SM", "MM"] | None = None
-    switch_model: str | None = Field(default=None, min_length=1, max_length=30)
-
-    @field_validator("purposes")
-    @classmethod
-    def selected_purposes(cls, value: tuple[RunPurpose, ...]) -> tuple[RunPurpose, ...]:
-        if not 1 <= len(value) <= len(RunPurpose) or len(set(value)) != len(value):
-            raise ValueError("One to four unique purposes are required")
-        return value
 
 
 class FailureConcentrationQuery(BaseModel):
@@ -353,20 +334,12 @@ class FailureConcentrationQuery(BaseModel):
         return value
 
 
-class StationSummaryQuery(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
+class StationSummaryQuery(ReportingFilterQuery, PurposeQuery):
+    period: Literal["today", "yesterday", "this_week", "last_30_days"] = "last_30_days"
 
-    purposes: tuple[RunPurpose, ...] = (RunPurpose.PRODUCTION,)
-    # Fixed to the existing candidate-run filters; mode/model stay unset for this panel.
-    wavelength_mode: None = None
-    switch_model: None = None
 
-    @field_validator("purposes")
-    @classmethod
-    def selected_purposes(cls, value: tuple[RunPurpose, ...]) -> tuple[RunPurpose, ...]:
-        if not 1 <= len(value) <= len(RunPurpose) or len(set(value)) != len(value):
-            raise ValueError("One to four unique purposes are required")
-        return value
+class FilterOptionsQuery(PurposeQuery):
+    """Purpose selection for the last-30-day reporting filter options."""
 
 
 class StationSecondsPerChannel(BaseModel):
@@ -430,18 +403,8 @@ class FailureConcentrationMetrics(BaseModel):
     incomplete: bool
 
 
-class FailureWavelengthsQuery(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
-
+class FailureWavelengthsQuery(ReportingFilterQuery, PurposeQuery):
     period: Literal["today", "yesterday", "this_week", "last_30_days"] = "last_30_days"
-    purposes: tuple[RunPurpose, ...] = (RunPurpose.PRODUCTION,)
-
-    @field_validator("purposes")
-    @classmethod
-    def selected_purposes(cls, value: tuple[RunPurpose, ...]) -> tuple[RunPurpose, ...]:
-        if not 1 <= len(value) <= len(RunPurpose) or len(set(value)) != len(value):
-            raise ValueError("One to four unique purposes are required")
-        return value
 
 
 class FailureWavelengthPair(BaseModel):

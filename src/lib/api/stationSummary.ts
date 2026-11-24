@@ -1,5 +1,7 @@
 import type { Purpose } from '../../types';
+import { CHANNEL_ACTIVITY_PERIODS, type ChannelActivityPeriodKey } from './channelActivity';
 import { RUN_PURPOSES, RunActivityClientError } from './runActivity';
+import { appendReportFilters, filterEchoMatches, isReportFilterEcho, NO_FILTERS, type ReportFilterEcho, type ReportFilters } from './reportFilters';
 
 export interface StationSecondsPerChannel {
   median: string | null;
@@ -28,8 +30,8 @@ export interface StationSummaryConnectedResponse {
   tls: 'verified' | 'encrypted_unverified';
   extracted_at_utc: string;
   timezone: 'America/Los_Angeles';
-  period: { key: 'last_30_days'; start_utc: string; end_utc: string; partial: boolean };
-  filters: { purpose: Purpose[] };
+  period: { key: ChannelActivityPeriodKey; start_utc: string; end_utc: string; partial: boolean };
+  filters: ReportFilterEcho;
   classification_rule: 'strict >, run limit snapshot';
   stations: StationRow[];
   totals: StationCounts;
@@ -81,9 +83,8 @@ export function isStationSummaryConnectedResponse(value: unknown): value is Stat
   ])) return false;
   if (value.data_source !== 'test_database' || !['verified', 'encrypted_unverified'].includes(value.tls as string) || !utcTimestamp(value.extracted_at_utc) || value.timezone !== 'America/Los_Angeles' || value.classification_rule !== 'strict >, run limit snapshot' || typeof value.incomplete !== 'boolean') return false;
   const period = value.period;
-  if (!isRecord(period) || !exactKeys(period, ['key', 'start_utc', 'end_utc', 'partial']) || period.key !== 'last_30_days' || !utcTimestamp(period.start_utc) || !utcTimestamp(period.end_utc) || typeof period.partial !== 'boolean' || Date.parse(period.start_utc) > Date.parse(period.end_utc)) return false;
-  const filters = value.filters;
-  if (!isRecord(filters) || !exactKeys(filters, ['purpose']) || !Array.isArray(filters.purpose) || filters.purpose.length < 1 || filters.purpose.length > RUN_PURPOSES.length || new Set(filters.purpose).size !== filters.purpose.length || !filters.purpose.every(purpose => RUN_PURPOSES.includes(purpose as Purpose))) return false;
+  if (!isRecord(period) || !exactKeys(period, ['key', 'start_utc', 'end_utc', 'partial']) || !CHANNEL_ACTIVITY_PERIODS.includes(period.key as ChannelActivityPeriodKey) || !utcTimestamp(period.start_utc) || !utcTimestamp(period.end_utc) || typeof period.partial !== 'boolean' || Date.parse(period.start_utc) > Date.parse(period.end_utc)) return false;
+  if (!isReportFilterEcho(value.filters)) return false;
   if (!isCounts(value.totals) || !Array.isArray(value.stations)) return false;
   const stations = value.stations;
   const isStationNumber = (value: unknown) => value === null || (Number.isInteger(value) && (value as number) > 0);
@@ -105,12 +106,13 @@ async function readJson(response: Response): Promise<unknown> {
   try { return await response.json(); } catch { throw new RunActivityClientError('invalid_response'); }
 }
 
-export async function loadStationSummary(purposes: readonly Purpose[], signal: AbortSignal): Promise<StationSummaryResult> {
-  if (purposes.length < 1 || purposes.length > RUN_PURPOSES.length || new Set(purposes).size !== purposes.length || purposes.some(purpose => !RUN_PURPOSES.includes(purpose))) {
+export async function loadStationSummary(period: ChannelActivityPeriodKey, purposes: readonly Purpose[], signal: AbortSignal, filters: ReportFilters = NO_FILTERS): Promise<StationSummaryResult> {
+  if (!CHANNEL_ACTIVITY_PERIODS.includes(period) || purposes.length < 1 || purposes.length > RUN_PURPOSES.length || new Set(purposes).size !== purposes.length || purposes.some(purpose => !RUN_PURPOSES.includes(purpose))) {
     throw new RunActivityClientError('invalid_response');
   }
-  const query = new URLSearchParams();
+  const query = new URLSearchParams({ period });
   purposes.forEach(purpose => query.append('purpose', purpose));
+  appendReportFilters(query, filters);
   const response = await fetch(`/api/v1/reporting/station-summary?${query}`, { signal, headers: { Accept: 'application/json' } });
   const body = await readJson(response);
   if (response.status === 503) {
@@ -120,7 +122,7 @@ export async function loadStationSummary(purposes: readonly Purpose[], signal: A
   }
   if (!response.ok) throw new RunActivityClientError(response.status >= 500 ? 'unreachable' : 'request_failed');
   if (isRecord(body) && exactKeys(body, ['data_source']) && body.data_source === 'not_connected') return { data_source: 'not_connected' };
-  if (!isStationSummaryConnectedResponse(body) || body.filters.purpose.length !== purposes.length || body.filters.purpose.some((purpose, index) => purpose !== purposes[index])) throw new RunActivityClientError('invalid_response');
+  if (!isStationSummaryConnectedResponse(body) || body.period.key !== period || !filterEchoMatches(body.filters, purposes, filters)) throw new RunActivityClientError('invalid_response');
   return body;
 }
 

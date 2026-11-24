@@ -8,6 +8,7 @@ from decimal import Decimal
 
 from app.reporting.adapter import ReportingError
 from app.reporting.channel_activity import ActivityWindow
+from app.reporting.filters import run_filter_parameters, run_filter_predicate
 from app.reporting.first_observations import FIRST_OBSERVATION_CTES
 from app.reporting.models import (
     FailureKpiRetestCounts,
@@ -44,8 +45,7 @@ def _candidate_runs_sql(run_cap: int, name: str) -> str:
         AND r.run_purpose IN (?, ?, ?, ?)
         AND r.front_panel_channel_count IS NOT NULL
         AND r.front_panel_channel_count > 0
-        AND (? IS NULL OR r.wavelength_mode = ?)
-        AND (? IS NULL OR s.switch_model = ?)
+        {run_filter_predicate()}
     GROUP BY r.run_id, r.wavelength_mode,
         r.limit_snapshot_json, r.front_panel_channel_count
     ORDER BY r.run_id
@@ -85,7 +85,7 @@ def build_failure_kpi_retest_query(
     purposes = [purpose.value for purpose in query.purposes]
     purposes.extend([purposes[-1]] * (_PURPOSE_SLOTS - len(purposes)))
     bounds = (window.start_utc.replace(tzinfo=None), window.end_utc.replace(tzinfo=None))
-    filters = (*bounds, *purposes, None, None, None, None)
+    filters = (*bounds, *purposes, *run_filter_parameters(query))
     return FAILURE_KPI_RETEST_SQL, (*bounds, *filters)
 
 

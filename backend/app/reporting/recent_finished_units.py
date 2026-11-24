@@ -12,31 +12,17 @@ from app.reporting.channel_activity import ActivityWindow
 from app.reporting.first_observations import FIRST_OBSERVATION_CTES
 from app.reporting.models import RecentFinishedUnitsQuery
 from app.reporting.unit_status import UNIT_STATUS_COHORT_CAP, UNIT_STATUS_RUN_CAP, _positive_int
-from app.reporting.unit_test_time import FinishedUnitRecord, read_finished_unit_cohort
+from app.reporting.unit_test_time import (
+    FinishedUnitRecord,
+    build_latest_station_query,
+    parse_latest_stations,
+    read_finished_unit_cohort,
+)
+from app.schemas import RunPurpose
 
 RECENT_FINISHED_UNIT_CAP = 100
 RECENT_FAILURE_ROW_CAP = UNIT_STATUS_RUN_CAP
 _PURPOSE_SLOTS = 4
-
-_STATION_SQL = f"""
-WITH ranked_runs AS (
-    SELECT a.unit_id, r.station_number,
-        ROW_NUMBER() OVER (
-            PARTITION BY a.unit_id
-            ORDER BY r.run_started_at_utc DESC, r.run_id DESC
-        ) AS run_rank
-    FROM dbo.UNIT_SWITCH_ASSIGNMENTS AS a
-    JOIN dbo.IL_RUNS AS r ON r.assignment_id = a.assignment_id
-    WHERE a.unit_id IN ({{placeholders}})
-        AND r.run_purpose IN ({", ".join("?" for _ in range(_PURPOSE_SLOTS))})
-        AND r.analysis_status NOT IN ('excluded', 'superseded')
-        AND r.superseded_by_run_id IS NULL
-)
-SELECT TOP ({UNIT_STATUS_COHORT_CAP + 1}) unit_id, station_number
-FROM ranked_runs
-WHERE run_rank = 1
-ORDER BY unit_id
-"""
 
 _FAILURES_SQL = f"""
 WITH candidate_runs AS (
@@ -120,14 +106,10 @@ def build_recent_finished_unit_queries(
     unit_ids: Sequence[int], purposes: Sequence[str]
 ) -> tuple[tuple[str, tuple], tuple[str, tuple], tuple[str, tuple]]:
     return (
-        _id_query(_STATION_SQL, unit_ids, purposes),
+        build_latest_station_query(unit_ids, tuple(RunPurpose(purpose) for purpose in purposes)),
         _id_query(_FAILURES_SQL, unit_ids, purposes),
         _id_query(_REPLACEMENTS_SQL, unit_ids),
     )
-
-
-def _optional_station(value: object) -> int | None:
-    return None if value is None else _positive_int(value)
 
 
 def replacement_counts(rows: Sequence[Sequence[object]], unit_ids: set[int]) -> dict[int, int]:
@@ -250,14 +232,7 @@ def summarize_recent_finished_units(
     truncated = len(ordered) > RECENT_FINISHED_UNIT_CAP
     listed = ordered[:RECENT_FINISHED_UNIT_CAP]
     unit_ids = {record.unit_id for record in listed}
-    stations: dict[int, int | None] = {}
-    for row in station_rows:
-        if len(row) != 2:
-            raise ReportingError("schema_incompatible")
-        unit_id = _positive_int(row[0])
-        if unit_id not in unit_ids or unit_id in stations:
-            raise ReportingError("schema_incompatible")
-        stations[unit_id] = _optional_station(row[1])
+    stations = parse_latest_stations(station_rows, unit_ids)
     replacements = replacement_counts(replacement_rows, unit_ids)
     if failure_counts is None:
         failures, limits_incomplete = _failure_counts(

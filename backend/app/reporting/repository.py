@@ -17,6 +17,13 @@ from app.reporting.channel_activity import (
 )
 from app.reporting.console_guard import StatementRejected, validate_console_statement
 from app.reporting.failure_kpis import FailureKpisMetrics, read_failure_kpis
+from app.reporting.filter_options import (
+    FILTER_OPTION_CAP,
+    FilterOptionsMetrics,
+    build_filter_options_query,
+    summarize_filter_options,
+)
+from app.reporting.filters import run_filter_parameters, run_filter_predicate
 from app.reporting.first_observations import FIRST_OBSERVATION_CTES
 from app.reporting.models import (
     ChannelActivityCounts,
@@ -39,6 +46,7 @@ from app.reporting.models import (
     FailureWavelengthsMetrics,
     FailureWavelengthsQuery,
     FailureWavelengthTotals,
+    FilterOptionsQuery,
     RecentFinishedUnitsQuery,
     RecommendationUsageMetrics,
     RecommendationUsageQuery,
@@ -229,8 +237,7 @@ measurement_population AS (
         AND r.analysis_status NOT IN ('excluded', 'superseded')
         AND r.superseded_by_run_id IS NULL
         AND r.run_purpose IN (?, ?, ?, ?)
-        AND (? IS NULL OR r.wavelength_mode = ?)
-        AND (? IS NULL OR s.switch_model = ?)
+        {run_filter_predicate()}
 ),
 valid_logical AS (
     SELECT window_ordinal, measurement_id, logical_channel, run_id, unit_id
@@ -337,8 +344,7 @@ candidate_runs AS (
         AND r.run_purpose IN (?, ?, ?, ?)
         AND r.front_panel_channel_count IS NOT NULL
         AND r.front_panel_channel_count > 0
-        AND (? IS NULL OR r.wavelength_mode = ?)
-        AND (? IS NULL OR s.switch_model = ?)
+        {run_filter_predicate()}
     GROUP BY r.run_id, r.wavelength_mode,
         r.limit_snapshot_json, r.front_panel_channel_count
     ORDER BY r.run_id
@@ -779,10 +785,7 @@ def build_channel_activity_queries(
         boundaries.periods["last_30_days"].start_utc.replace(tzinfo=None),
         boundaries.extracted_at_utc.replace(tzinfo=None),
         *padded_purposes,
-        query.wavelength_mode,
-        query.wavelength_mode,
-        query.switch_model,
-        query.switch_model,
+        *run_filter_parameters(query),
     )
     period_params = (*_window_parameters(period_windows), *filters)
     daily_params = (*_window_parameters(boundaries.daily), *filters)
@@ -828,7 +831,9 @@ def summarize_channel_activity(
 
 
 def _candidate_run_parameters(
-    query: ChannelActivityQuery | ChannelFailuresQuery, seed_start: datetime, seed_end: datetime
+    query: ChannelActivityQuery | ChannelFailuresQuery | StationSummaryQuery,
+    seed_start: datetime,
+    seed_end: datetime,
 ) -> tuple:
     purposes = tuple(str(purpose) for purpose in query.purposes)
     padded_purposes = purposes + (purposes[-1],) * (len(RunPurpose) - len(purposes))
@@ -836,10 +841,7 @@ def _candidate_run_parameters(
         seed_start.replace(tzinfo=None),
         seed_end.replace(tzinfo=None),
         *padded_purposes,
-        query.wavelength_mode,
-        query.wavelength_mode,
-        query.switch_model,
-        query.switch_model,
+        *run_filter_parameters(query),
     )
 
 
@@ -1145,7 +1147,14 @@ def build_failure_wavelengths_queries(
 ) -> tuple[tuple[str, tuple], tuple[str, tuple]]:
     query = FailureWavelengthsQuery.model_validate(query.model_dump())
     window = boundaries.periods[query.period]
-    candidate_query = ChannelFailuresQuery(period=query.period, purposes=query.purposes)
+    candidate_query = ChannelFailuresQuery(
+        period=query.period,
+        purposes=query.purposes,
+        switch_model=query.switch_model,
+        wavelength_mode=query.wavelength_mode,
+        channel_count=query.channel_count,
+        station=query.station,
+    )
     filters = _candidate_run_parameters(candidate_query, window.start_utc, window.end_utc)
     bounds = (window.start_utc.replace(tzinfo=None), window.end_utc.replace(tzinfo=None))
     return (FAILURE_WAVELENGTHS_SQL, (*filters, *bounds)), (FAILURE_RATE_LIMITS_SQL, filters)
@@ -1260,7 +1269,7 @@ def build_station_summary_queries(
     query: StationSummaryQuery, boundaries: ChannelActivityBoundaries
 ) -> tuple[tuple[str, tuple], tuple[str, tuple]]:
     query = StationSummaryQuery.model_validate(query.model_dump())
-    window = boundaries.periods["last_30_days"]
+    window = boundaries.periods[query.period]
     filters = _candidate_run_parameters(query, window.start_utc, window.end_utc)
     bounds = (window.start_utc.replace(tzinfo=None), window.end_utc.replace(tzinfo=None))
     return (STATION_SUMMARY_SQL, (*bounds, *filters)), (FAILURE_RATE_LIMITS_SQL, filters)
@@ -1648,6 +1657,9 @@ class ReportingRepository(Protocol):
     def get_failure_kpis(
         self, query: FailureKpisQuery, boundaries: ChannelActivityBoundaries
     ) -> FailureKpisMetrics: ...
+    def get_filter_options(
+        self, query: FilterOptionsQuery, boundaries: ChannelActivityBoundaries
+    ) -> FilterOptionsMetrics: ...
     def get_station_summary(
         self, query: StationSummaryQuery, boundaries: ChannelActivityBoundaries
     ) -> StationSummaryMetrics: ...
@@ -1865,6 +1877,18 @@ class SqlServerReportingRepository:
                 validated_failure_limits=_validated_failure_limits,
                 normalized_sql_limit=_normalized_sql_limit,
             )
+
+    def get_filter_options(
+        self, query: FilterOptionsQuery, boundaries: ChannelActivityBoundaries
+    ) -> FilterOptionsMetrics:
+        query = FilterOptionsQuery.model_validate(query.model_dump())
+        sql, params = build_filter_options_query(query, boundaries.periods["last_30_days"])
+        with self._adapter.cursor() as cursor:
+            self._preflight(cursor)
+            rows = cursor.execute(sql, params).fetchmany(4 * (FILTER_OPTION_CAP + 1) + 1)
+            if len(rows) > 4 * (FILTER_OPTION_CAP + 1):
+                raise ReportingError("schema_incompatible")
+            return summarize_filter_options(rows)
 
     def get_replacement_activity(
         self, query: ReplacementActivityQuery, boundaries: ChannelActivityBoundaries
