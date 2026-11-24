@@ -9,6 +9,12 @@
 - Optional reporting dependency: 64-bit pyodbc and Microsoft ODBC Driver 18. Keep it lazy, disabled by default and separate from FastAPI startup. Real database data is not sensitive (owner decision 2026-11-11). Reporting endpoints and the React app may show it, including row-level records, unit/switch serials and run details, so the app can look up one unit and show everything about it. Data still flows React → loopback FastAPI → read-only SQL; the browser never connects to SQL Server. Keep the frontend independently runnable on its synthetic fixtures.
 - No final production metrics, authentication, deployment/hosting, advanced reports, ORM, migrations or background workers in Milestone 3. Never run the source application's connection, migration, seeding, reset, or writer utilities.
 
+## Work split (owner decision 2026-11-23)
+
+- **Codex: backend only.** Owns `backend/**`, `docs/API_CONTRACTS.md`, `docs/REPORTING_DATABASE.md` and the implementation notes in `docs/METRICS.md`. Implement exactly the API contract section of the brief (JSON shape, types, nullability, errors). Do not edit `src/**`, `scripts/browser-check.mjs`, `docs/DESIGN_REFERENCE.md` or `docs/STATUS.md`. If the contract looks wrong or incomplete, stop and report instead of changing it. Never commit or push. Report changed files, the exact checks run and their results, and anything not verified.
+- **Claude: everything else.** Writes the briefs and owns the API contract. Does all frontend work (`src/**`, browser checks, design reference, status) against synthetic contract fixtures. Reviews the backend diff, verifies against the live test database, then commits and pushes one audited change per slice.
+- **Owner:** approves slices and restarts the local backend with credentials. Contract changes go through Claude, never directly between the agents.
+
 ## Visual authority
 
 - The supplied `Claude-generated analytics dashboard sample/` is the primary design reference. Read `docs/DESIGN_REFERENCE.md` before changing the UI.
