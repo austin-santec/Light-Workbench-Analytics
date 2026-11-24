@@ -1,3 +1,12 @@
+# Stage B sanitized failure check
+
+Updated November 23, 2026. Owner-run check against the authorized non-production test server, documentation only; no code changed.
+
+- **Wrong password:** the owner started the backend with a deliberately wrong password. Every reporting endpoint checked (unit status, unit test time, weekly unit outcomes, channel activity) and the Query console returned HTTP 503 with only `{"code":"authentication_failed"}` in about 0.2–0.3 s. Each failure logged one line with the code, phase, exception type, SQLSTATE and native error number only; no server, database, login, driver message or query text appeared in responses, logs or screens. Overview and Failures showed "Database check failed (authentication_failed)" on run panels and the labeled demo elsewhere; Unit lookup and the Query console showed the same code.
+- **Lockout found:** about 30 failed sign-ins (each panel connects separately) locked the read-only SQL login under SQL Server password policy, so the next start with the correct password also failed with the same sanitized code. The owner unlocked it manually; after a restart all endpoints returned 200 and both screens showed every live panel with no failure. Operational note: a wrong password on start-up can lock the login within seconds; stop the backend and fix the password rather than reloading the app.
+- **Not checked:** a stopped SQL Server service.
+- **Query-plan review remains open:** the Query console accepts one `SELECT`/`WITH` statement only and the diagnostic has no plan option, the read-only login is not known to hold SHOWPLAN, and the test database is too small for realistic cost evidence. It needs a DBA-granted SHOWPLAN read and a larger dataset; no grant was changed.
+
 # Live Failures weekly unit outcomes
 
 Updated November 17, 2026. Implemented the approved connected **Unit outcomes by week** slice without connecting to SQL Server. `GET /api/v1/reporting/unit-outcomes-weekly` reuses the unchanged D17 cohort and timing SQL plus the shared D16/finished-outcome pipeline across eight Pacific Monday-start weeks, then performs one bounded replacement-count read for finished passed units across all historical assignments. Missing duration still counts; open runs and unfinished/currently uncertain outcomes do not. The response validates contiguous weeks, unit ordering and exact bucket/unit equality.
@@ -397,7 +406,7 @@ The server's TCP port is configured static.
 
 A bounded run read (`--verify --runs`, window 2026-10-12 to 2026-11-12 UTC, 31 days) returned `compatible` with `returned_count: 4` and `has_more: false`. The parameterized, historical-assignment run query works against the real schema. Only sanitized counts were printed.
 
-Still pending for full Stage B acceptance: query plan/cost review on realistic volume and sanitized failure behavior against the real server (e.g. a wrong password or a stopped service). Neither blocks local development against the test database.
+Still pending for full Stage B acceptance: query plan/cost review on realistic volume. The wrong-password sanitized failure check passed on November 23, 2026 (see the top of this file); a stopped-service check was not run. Neither blocks local development against the test database.
 
 # Non-production certificate-trust opt-in
 
