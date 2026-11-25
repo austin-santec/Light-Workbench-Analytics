@@ -1,5 +1,6 @@
 import type { Purpose } from '../../types';
 import { RUN_PURPOSES, RunActivityClientError } from './runActivity';
+import { appendReportFilters, filterEchoMatches, isReportFilterEcho, NO_FILTERS, type ReportFilterEcho, type ReportFilters } from './reportFilters';
 
 export const UNIT_OUTCOMES_EXCLUDED_KEYS = [
   'review_required',
@@ -36,7 +37,7 @@ export interface UnitOutcomesWeeklyConnectedResponse {
   tls: 'verified' | 'encrypted_unverified';
   extracted_at_utc: string;
   timezone: 'America/Los_Angeles';
-  filters: { purpose: Purpose[] };
+  filters: ReportFilterEcho;
   weeks: UnitOutcomeWeek[];
   units: UnitOutcomeItem[];
   excluded: Record<UnitOutcomesExcludedKey, number>;
@@ -119,7 +120,7 @@ function isUnit(value: unknown): value is UnitOutcomeItem {
 export function isUnitOutcomesWeeklyConnectedResponse(value: unknown): value is UnitOutcomesWeeklyConnectedResponse {
   if (!isRecord(value) || !exactKeys(value, ['data_source', 'tls', 'extracted_at_utc', 'timezone', 'filters', 'weeks', 'units', 'excluded', 'incomplete'])) return false;
   if (value.data_source !== 'test_database' || !['verified', 'encrypted_unverified'].includes(value.tls as string) || !utcTimestamp(value.extracted_at_utc) || value.timezone !== 'America/Los_Angeles' || typeof value.incomplete !== 'boolean') return false;
-  if (!isRecord(value.filters) || !exactKeys(value.filters, ['purpose']) || !Array.isArray(value.filters.purpose) || value.filters.purpose.length < 1 || value.filters.purpose.length > RUN_PURPOSES.length || new Set(value.filters.purpose).size !== value.filters.purpose.length || !value.filters.purpose.every(purpose => typeof purpose === 'string' && RUN_PURPOSES.includes(purpose as Purpose))) return false;
+  if (!isReportFilterEcho(value.filters)) return false;
   if (!Array.isArray(value.weeks) || value.weeks.length !== 8 || !value.weeks.every(isWeek)) return false;
   const weeks = value.weeks as UnitOutcomeWeek[];
   if (weeks.some((week, index) => week.partial !== (index === 7))) return false;
@@ -157,10 +158,12 @@ async function readJson(response: Response): Promise<unknown> {
 export async function loadUnitOutcomesWeekly(
   purposes: readonly Purpose[],
   signal: AbortSignal,
+  filters: ReportFilters = NO_FILTERS,
 ): Promise<UnitOutcomesWeeklyResult> {
   if (purposes.length < 1 || purposes.length > RUN_PURPOSES.length || new Set(purposes).size !== purposes.length || purposes.some(purpose => !RUN_PURPOSES.includes(purpose))) throw new RunActivityClientError('invalid_response');
   const query = new URLSearchParams();
   purposes.forEach(purpose => query.append('purpose', purpose));
+  appendReportFilters(query, filters);
   const response = await fetch(`/api/v1/reporting/unit-outcomes-weekly?${query}`, { signal, headers: { Accept: 'application/json' } });
   const body = await readJson(response);
   if (response.status === 503) {
@@ -170,7 +173,7 @@ export async function loadUnitOutcomesWeekly(
   }
   if (!response.ok) throw new RunActivityClientError(response.status >= 500 ? 'unreachable' : 'request_failed');
   if (isRecord(body) && exactKeys(body, ['data_source']) && body.data_source === 'not_connected') return { data_source: 'not_connected' };
-  if (!isUnitOutcomesWeeklyConnectedResponse(body) || body.filters.purpose.length !== purposes.length || body.filters.purpose.some((purpose, index) => purpose !== purposes[index])) throw new RunActivityClientError('invalid_response');
+  if (!isUnitOutcomesWeeklyConnectedResponse(body) || !filterEchoMatches(body.filters, purposes, filters)) throw new RunActivityClientError('invalid_response');
   return body;
 }
 

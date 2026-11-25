@@ -385,7 +385,7 @@ const unitOutcomesWeeklyFixture = url => {
   ].map((key, index) => [key, unitOutcomesWeeklyMode === 'empty' ? 0 : index === 0 ? 2 : index === 5 ? 1 : 0]));
   return {
     data_source: 'test_database', tls: 'encrypted_unverified', extracted_at_utc: '2026-11-17T20:00:00Z', timezone: 'America/Los_Angeles',
-    filters: { purpose: purposes }, weeks, units, excluded,
+    filters: filterEcho(url, purposes), weeks, units, excluded,
     incomplete: unitOutcomesWeeklyMode === 'incomplete',
   };
 };
@@ -540,7 +540,7 @@ const failureConcentrationFixture = url => {
   const observed = sum(channels, 'observed');
   return {
     data_source: 'test_database', tls: 'encrypted_unverified', extracted_at_utc: '2026-11-13T20:00:00Z', timezone: 'America/Los_Angeles',
-    period: { key: period, start_utc, end_utc, partial }, filters: { purpose: purposes },
+    period: { key: period, start_utc, end_utc, partial }, filters: filterEcho(url, purposes),
     classification_rule: 'strict >, run limit snapshot',
     totals: { failed, observed, rate: observed ? failed / observed : null, unknown_criteria: sum(channels, 'unknown_criteria') },
     runs: empty ? 0 : 4,
@@ -589,7 +589,7 @@ const recommendationUsageFixture = url => {
   const empty = recommendationUsageMode === 'nulls';
   return {
     data_source: 'test_database', tls: 'encrypted_unverified', extracted_at_utc: '2026-11-13T20:00:00Z', timezone: 'America/Los_Angeles',
-    period: { key: period, start_utc, end_utc, partial }, filters: { purpose: purposes },
+    period: { key: period, start_utc, end_utc, partial }, filters: filterEcho(url, purposes),
     analyses: { cohort: empty ? 0 : 4, with_recommendations: empty ? 0 : 3, on_invalid_runs: empty ? 0 : 2 },
     recommendations: { total: empty ? 0 : 5, required: empty ? 0 : 2, optional: empty ? 0 : 2, other: empty ? 0 : 1 },
     linked: { total: empty ? 0 : 3, required: empty ? 0 : 2, optional: empty ? 0 : 1, other: 0 },
@@ -1505,6 +1505,46 @@ try {
   await recommendationPanel.getByText('3 60.0%', { exact: true }).waitFor();
   assert.ok(replacementActivityRequests.length >= 3);
   check('Replacement activity, recommendation usage, and current unit status cover shared range, connected/null values, notes, and refresh');
+  {
+    const failureEndpoints = [unitStatusRequests, recommendationUsageRequests, failureConcentrationRequests, failureKpisRequests, unitOutcomesWeeklyRequests];
+    const lastFailuresRequestsMatch = async (expected, label) => {
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        if (failureEndpoints.every(requests => Object.entries(expected).every(([key, value]) => key === 'purpose'
+          ? requests.at(-1)?.searchParams.getAll('purpose').join(',') === value
+          : requests.at(-1)?.searchParams.get(key) === value))) return;
+        await page.waitForTimeout(50);
+      }
+      assert.fail(`not every live Failures request sent ${label}`);
+    };
+    const periodSelect = page.getByLabel('Period filter', { exact: true });
+    await periodSelect.waitFor();
+    assert.deepEqual(await periodSelect.locator('option').allTextContents(), ['Last 30 days', 'This week', 'Yesterday', 'Today']);
+    assert.deepEqual(await page.getByLabel('Run purpose filter', { exact: true }).locator('option').allTextContents(), ['Production', 'Engineering', 'Production + engineering', 'Training', 'Calibration', 'All purposes']);
+    assert.deepEqual(await page.getByLabel('Station filter', { exact: true }).locator('option').allTextContents(), ['All stations', 'Station 1', 'Station 2']);
+    assert.equal(await page.getByRole('button', { name: /Export CSV/ }).isDisabled(), true);
+    await periodSelect.selectOption('week');
+    await page.getByRole('group', { name: 'Live replacement range' }).getByRole('button', { name: 'This week', exact: true }).and(page.locator('[aria-pressed="true"]')).waitFor();
+    await page.getByRole('group', { name: 'Live replacement range' }).getByRole('button', { name: 'Last 30 days', exact: true }).click();
+    assert.equal(await periodSelect.inputValue(), 'month');
+    await page.getByLabel('Run purpose filter', { exact: true }).selectOption('production_engineering');
+    await page.getByLabel('Mode filter', { exact: true }).selectOption('SM');
+    await page.getByLabel('Station filter', { exact: true }).selectOption('2');
+    await lastFailuresRequestsMatch({ purpose: 'production,engineering', wavelength_mode: 'SM', station: '2', switch_model: null }, 'purpose, mode and station');
+    await page.getByText('Production + engineering units finished', { exact: false }).waitFor();
+    const replacementBefore = replacementActivityRequests.length;
+    await page.getByLabel('Model filter', { exact: true }).selectOption('DEMO-MODEL-A');
+    await lastFailuresRequestsMatch({ switch_model: 'DEMO-MODEL-A' }, 'the model');
+    for (let attempt = 0; attempt < 100 && replacementActivityRequests.length === replacementBefore; attempt += 1) await page.waitForTimeout(50);
+    assert.equal(replacementActivityRequests.at(-1).searchParams.get('switch_model'), 'DEMO-MODEL-A');
+    assert.equal(replacementActivityRequests.at(-1).searchParams.has('purpose'), false);
+    await page.getByRole('region', { name: 'Replacement activity' }).getByText('DEMO-MODEL-A only', { exact: false }).waitFor();
+    await page.getByLabel('Model filter', { exact: true }).selectOption('');
+    await page.getByLabel('Mode filter', { exact: true }).selectOption('');
+    await page.getByLabel('Station filter', { exact: true }).selectOption('');
+    await page.getByLabel('Run purpose filter', { exact: true }).selectOption('production');
+    await lastFailuresRequestsMatch({ purpose: 'production', wavelength_mode: null, station: null, switch_model: null }, 'the reset filters');
+    check('Failures header Period, Run purpose and filters are live, stay in sync with the replacement range, and apply to every live panel');
+  }
   await visit('/');
 
   await page.reload();

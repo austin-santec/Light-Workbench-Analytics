@@ -1,6 +1,7 @@
 import type { Purpose } from '../../types';
 import { CHANNEL_ACTIVITY_PERIODS, type ChannelActivityPeriodKey } from './channelActivity';
 import { RUN_PURPOSES, RunActivityClientError } from './runActivity';
+import { appendReportFilters, filterEchoMatches, isReportFilterEcho, NO_FILTERS, type ReportFilterEcho, type ReportFilters } from './reportFilters';
 
 export interface RecommendationUsageCounts {
   total: number;
@@ -25,7 +26,7 @@ export interface RecommendationUsageConnectedResponse {
     end_utc: string;
     partial: boolean;
   };
-  filters: { purpose: Purpose[] };
+  filters: ReportFilterEcho;
   analyses: { cohort: number; with_recommendations: number; on_invalid_runs: number };
   recommendations: RecommendationUsageCounts;
   linked: RecommendationUsageCounts;
@@ -79,7 +80,7 @@ export function isRecommendationUsageConnectedResponse(value: unknown): value is
   ])) return false;
   if (value.data_source !== 'test_database' || !['verified', 'encrypted_unverified'].includes(value.tls as string) || !utcTimestamp(value.extracted_at_utc) || value.timezone !== 'America/Los_Angeles') return false;
   if (!isRecord(value.period) || !exactKeys(value.period, ['key', 'start_utc', 'end_utc', 'partial']) || typeof value.period.key !== 'string' || !CHANNEL_ACTIVITY_PERIODS.includes(value.period.key as ChannelActivityPeriodKey) || !utcTimestamp(value.period.start_utc) || !utcTimestamp(value.period.end_utc) || typeof value.period.partial !== 'boolean' || Date.parse(value.period.start_utc) > Date.parse(value.period.end_utc)) return false;
-  if (!isRecord(value.filters) || !exactKeys(value.filters, ['purpose']) || !Array.isArray(value.filters.purpose) || value.filters.purpose.length < 1 || value.filters.purpose.length > RUN_PURPOSES.length || new Set(value.filters.purpose).size !== value.filters.purpose.length || !value.filters.purpose.every(purpose => typeof purpose === 'string' && RUN_PURPOSES.includes(purpose as Purpose))) return false;
+  if (!isReportFilterEcho(value.filters)) return false;
   if (!isRecord(value.analyses)) return false;
   const analyses = value.analyses;
   if (!exactKeys(analyses, ['cohort', 'with_recommendations', 'on_invalid_runs']) || !['cohort', 'with_recommendations', 'on_invalid_runs'].every(key => nonnegativeInteger(analyses[key])) || (analyses.with_recommendations as number) > (analyses.cohort as number)) return false;
@@ -97,12 +98,14 @@ export async function loadRecommendationUsage(
   period: ChannelActivityPeriodKey,
   purposes: readonly Purpose[],
   signal: AbortSignal,
+  filters: ReportFilters = NO_FILTERS,
 ): Promise<RecommendationUsageResult> {
   if (!CHANNEL_ACTIVITY_PERIODS.includes(period) || purposes.length < 1 || purposes.length > RUN_PURPOSES.length || new Set(purposes).size !== purposes.length || purposes.some(purpose => !RUN_PURPOSES.includes(purpose))) {
     throw new RunActivityClientError('invalid_response');
   }
   const query = new URLSearchParams({ period });
   purposes.forEach(purpose => query.append('purpose', purpose));
+  appendReportFilters(query, filters);
   const response = await fetch(`/api/v1/reporting/recommendation-usage?${query}`, { signal, headers: { Accept: 'application/json' } });
   const body = await readJson(response);
   if (response.status === 503) {
@@ -112,6 +115,6 @@ export async function loadRecommendationUsage(
   }
   if (!response.ok) throw new RunActivityClientError(response.status >= 500 ? 'unreachable' : 'request_failed');
   if (isRecord(body) && exactKeys(body, ['data_source']) && body.data_source === 'not_connected') return { data_source: 'not_connected' };
-  if (!isRecommendationUsageConnectedResponse(body) || body.period.key !== period || body.filters.purpose.length !== purposes.length || body.filters.purpose.some((purpose, index) => purpose !== purposes[index])) throw new RunActivityClientError('invalid_response');
+  if (!isRecommendationUsageConnectedResponse(body) || body.period.key !== period || !filterEchoMatches(body.filters, purposes, filters)) throw new RunActivityClientError('invalid_response');
   return body;
 }

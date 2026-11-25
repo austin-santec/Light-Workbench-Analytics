@@ -11,7 +11,13 @@ from app.reporting.adapter import ReportingError
 from app.reporting.channel_activity import ActivityWindow, WeeklyOutcomeBoundaries
 from app.reporting.models import UnitOutcomesWeeklyQuery
 from app.reporting.unit_status import UNIT_STATUS_COHORT_CAP, _positive_int
-from app.reporting.unit_test_time import FinishedUnitRecord, read_finished_unit_cohort
+from app.reporting.unit_test_time import (
+    FinishedUnitRecord,
+    build_latest_station_query,
+    filter_finished_unit_records,
+    parse_latest_stations,
+    read_finished_unit_cohort,
+)
 
 EXCLUDED_KEYS = (
     "review_required",
@@ -177,7 +183,26 @@ def read_unit_outcomes_weekly(
         partial=True,
     )
     cohort = read_finished_unit_cohort(cursor, query, overall)
-    eligible, _ = _eligible_records(cohort.records)
+    station_incomplete = False
+    stations: dict[int, int | None] = {}
+    if query.station is not None:
+        station_unit_ids = tuple(
+            record.unit_id
+            for record in cohort.records
+            if record.outcome is not None
+            and record.exclusion_reason != "run_in_progress"
+            and record.finished_at_utc is not None
+            and not record.outside_period
+        )
+        if station_unit_ids:
+            station_query = build_latest_station_query(station_unit_ids, query.purposes)
+            station_rows = cursor.execute(*station_query).fetchmany(UNIT_STATUS_COHORT_CAP + 1)
+            station_incomplete = len(station_rows) > UNIT_STATUS_COHORT_CAP
+            stations = parse_latest_stations(
+                station_rows[:UNIT_STATUS_COHORT_CAP], set(station_unit_ids)
+            )
+    records = filter_finished_unit_records(cohort.records, query, stations)
+    eligible, _ = _eligible_records(records)
     passed_ids = tuple(record.unit_id for record in eligible if record.outcome == "passed")
     replacement_rows: Sequence[Sequence[object]] = ()
     if passed_ids:
@@ -185,8 +210,8 @@ def read_unit_outcomes_weekly(
             UNIT_STATUS_COHORT_CAP + 1
         )
     return summarize_unit_outcomes_weekly(
-        cohort.records,
+        records,
         boundaries,
         replacement_rows,
-        incomplete=cohort.incomplete,
+        incomplete=cohort.incomplete or station_incomplete,
     )

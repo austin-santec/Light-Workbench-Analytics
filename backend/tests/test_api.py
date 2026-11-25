@@ -593,9 +593,33 @@ def test_openapi_matches_error_and_query_contracts(client):
         "$ref": "#/components/schemas/ReportingFailureResponse"
     }
     unit_outcomes = spec["paths"]["/api/v1/reporting/unit-outcomes-weekly"]["get"]
-    assert {parameter["name"] for parameter in unit_outcomes["parameters"]} == {"purpose"}
+    assert {parameter["name"] for parameter in unit_outcomes["parameters"]} == {
+        "purpose",
+        "switch_model",
+        "wavelength_mode",
+        "channel_count",
+        "station",
+    }
     assert unit_outcomes["responses"]["503"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/ReportingFailureResponse"
+    }
+    failure_concentration = spec["paths"]["/api/v1/reporting/failure-concentration"]["get"]
+    assert {parameter["name"] for parameter in failure_concentration["parameters"]} == {
+        "period",
+        "purpose",
+        "switch_model",
+        "wavelength_mode",
+        "channel_count",
+        "station",
+    }
+    recommendation_usage = spec["paths"]["/api/v1/reporting/recommendation-usage"]["get"]
+    assert {parameter["name"] for parameter in recommendation_usage["parameters"]} == {
+        "period",
+        "purpose",
+        "switch_model",
+        "wavelength_mode",
+        "channel_count",
+        "station",
     }
     configuration = spec["paths"]["/api/v1/reporting/test-time-by-configuration"]["get"]
     assert {parameter["name"] for parameter in configuration["parameters"]} == {

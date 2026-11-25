@@ -1055,7 +1055,7 @@ def build_failure_concentration_queries(
 ) -> tuple[tuple[str, tuple], tuple[str, tuple]]:
     query = FailureConcentrationQuery.model_validate(query.model_dump())
     window = boundaries.periods[query.period]
-    candidate_query = ChannelFailuresQuery(period=query.period, purposes=query.purposes)
+    candidate_query = ChannelFailuresQuery.model_validate(query.model_dump())
     filters = _candidate_run_parameters(candidate_query, window.start_utc, window.end_utc)
     bounds = (window.start_utc.replace(tzinfo=None), window.end_utc.replace(tzinfo=None))
     return (FAILURE_CONCENTRATION_SQL, (*filters, *bounds)), (FAILURE_RATE_LIMITS_SQL, filters)

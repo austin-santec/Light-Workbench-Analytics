@@ -6,6 +6,7 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from app.reporting.adapter import ReportingError
 from app.reporting.channel_activity import ActivityWindow, ChannelActivityBoundaries
+from app.reporting.filters import run_filter_parameters, run_filter_predicate
 from app.reporting.models import (
     RecommendationUsageAverage,
     RecommendationUsageCounts,
@@ -17,7 +18,7 @@ from app.schemas import RunPurpose
 _PURPOSE_SLOTS = len(RunPurpose)
 _FOUR_PLACES = Decimal("0.0001")
 
-RECOMMENDATION_USAGE_SQL = """
+RECOMMENDATION_USAGE_SQL = f"""
 WITH period_bounds(start_utc, end_utc) AS (
     SELECT ?, ?
 ),
@@ -30,14 +31,19 @@ extraction_bound(extracted_at_utc) AS (
     SELECT ?
 ),
 analysis_population AS (
-    SELECT a.analysis_id,
+    SELECT analysis.analysis_id,
         CASE WHEN r.analysis_status NOT IN ('excluded', 'superseded')
             AND r.superseded_by_run_id IS NULL THEN 1 ELSE 0 END AS is_valid
-    FROM dbo.REPLACEMENT_ANALYSES AS a
-    JOIN dbo.IL_RUNS AS r ON r.run_id = a.run_id
+    FROM dbo.REPLACEMENT_ANALYSES AS analysis
+    JOIN dbo.IL_RUNS AS r ON r.run_id = analysis.run_id
+    JOIN dbo.UNIT_SWITCH_ASSIGNMENTS AS assignment
+        ON assignment.assignment_id = r.assignment_id
+    JOIN dbo.SWITCHES AS s ON s.switch_id = assignment.switch_id
     JOIN selected_purposes AS p ON p.run_purpose = r.run_purpose
     CROSS JOIN period_bounds AS w
-    WHERE a.analyzed_at_utc >= w.start_utc AND a.analyzed_at_utc < w.end_utc
+    WHERE analysis.analyzed_at_utc >= w.start_utc
+        AND analysis.analyzed_at_utc < w.end_utc
+        {run_filter_predicate()}
 ),
 valid_analyses AS (
     SELECT DISTINCT analysis_id
@@ -140,6 +146,7 @@ def recommendation_usage_parameters(
         window.end_utc.replace(tzinfo=None),
         *padded,
         boundaries.extracted_at_utc.replace(tzinfo=None),
+        *run_filter_parameters(query),
     )
 
 

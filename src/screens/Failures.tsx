@@ -12,6 +12,9 @@ import { loadFailureConcentration, topConcentration, type FailureConcentrationCo
 import { UNIT_STATUS_LABEL } from '../lib/unitStatusPresentation';
 import { groupFailingUnitReasons } from '../lib/failingUnitReasons';
 import { failureKpiTiles, loadFailureKpis, type FailureKpisConnectedResponse } from '../lib/api/failureKpis';
+import { loadFilterOptions, type FilterOptionsConnectedResponse } from '../lib/api/filterOptions';
+import { NO_FILTERS, type ReportFilters } from '../lib/api/reportFilters';
+import type { Purpose } from '../types';
 import { loadUnitOutcomesWeekly, unitOutcomeGeometry, UNIT_OUTCOMES_EXCLUDED_KEYS, type UnitOutcomesExcludedKey, type UnitOutcomesWeeklyConnectedResponse } from '../lib/api/unitOutcomesWeekly';
 
 const STATUS_PERIOD: Record<LiveReplacementRange, 'today' | 'yesterday' | 'this_week' | 'last_30_days'> = {
@@ -23,6 +26,20 @@ const RANGE_LABEL: Record<LiveReplacementRange, string> = {
 const HISTOGRAM_RANGE_LABEL: Record<LiveReplacementRange, string> = {
   today: 'today', yesterday: 'yesterday', week: 'this week', month: 'in the last 30 days',
 };
+const PURPOSE_CHOICES = [
+  { key: 'production', label: 'Production', purposes: ['production'] },
+  { key: 'engineering', label: 'Engineering', purposes: ['engineering'] },
+  { key: 'production_engineering', label: 'Production + engineering', purposes: ['production', 'engineering'] },
+  { key: 'training', label: 'Training', purposes: ['training'] },
+  { key: 'calibration', label: 'Calibration', purposes: ['calibration'] },
+  { key: 'all', label: 'All purposes', purposes: ['production', 'engineering', 'training', 'calibration'] },
+] as const satisfies readonly { key: string; label: string; purposes: readonly Purpose[] }[];
+type PurposeChoice = typeof PURPOSE_CHOICES[number]['key'];
+const PERIOD_CHOICES: { value: LiveReplacementRange; label: string }[] = [
+  { value: 'month', label: 'Last 30 days' }, { value: 'week', label: 'This week' },
+  { value: 'yesterday', label: 'Yesterday' }, { value: 'today', label: 'Today' },
+];
+const HEADER_SELECT_STYLE = "min-height:44px;padding:0 10px;border-radius:9px;border:1px solid var(--line);background:var(--panel);font-size:13.5px;font-weight:500";
 const PACIFIC_DATE = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Los_Angeles', month: 'short', day: 'numeric' });
 const PACIFIC_YEAR = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Los_Angeles', year: 'numeric' });
 
@@ -71,11 +88,24 @@ export default function Failures() {
  const [unitOutcomesRefresh, setUnitOutcomesRefresh] = useState(0);
  const [failureKpis, setFailureKpis] = useState<FailureKpisConnectedResponse | null>(null);
  const [failureKpisRefresh, setFailureKpisRefresh] = useState(0);
+ const [purposeChoice, setPurposeChoice] = useState<PurposeChoice>('production');
+ const [filters, setFilters] = useState<ReportFilters>(NO_FILTERS);
+ const [filterOptions, setFilterOptions] = useState<FilterOptionsConnectedResponse | null>(null);
+ const choice = PURPOSE_CHOICES.find(item => item.key === purposeChoice) ?? PURPOSE_CHOICES[0];
+ const purposes = choice.purposes;
+ const purposeText = choice.label;
+ useEffect(() => {
+   const controller = new AbortController();
+   loadFilterOptions(purposes, controller.signal)
+     .then(result => setFilterOptions(result.data_source === 'test_database' ? result : null))
+     .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setFilterOptions(null); });
+   return () => controller.abort();
+ }, [purposes]);
  const values = getFailuresValues(state);
  const { accent, kpis, weeks: demoWeeks, wGrid: demoWeekGrid, reasons, fbars, fp, topCh, topPort, units } = values;
  useEffect(() => {
    const controller = new AbortController();
-   loadUnitStatus(STATUS_PERIOD[liveRange], ['production'], controller.signal)
+   loadUnitStatus(STATUS_PERIOD[liveRange], purposes, controller.signal, filters)
      .then(result => {
        if (result.data_source !== 'test_database') {
          setUnitStatus(null);
@@ -86,44 +116,56 @@ export default function Failures() {
      })
      .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setUnitStatus(null); });
    return () => controller.abort();
- }, [liveRange, unitStatusRefresh]);
+ }, [filters, liveRange, purposes, unitStatusRefresh]);
  useEffect(() => {
    const controller = new AbortController();
-   loadRecommendationUsage(STATUS_PERIOD[liveRange], ['production'], controller.signal)
+   loadRecommendationUsage(STATUS_PERIOD[liveRange], purposes, controller.signal, filters)
      .then(result => setRecommendationUsage(result.data_source === 'test_database' ? result : null))
      .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setRecommendationUsage(null); });
    return () => controller.abort();
- }, [liveRange, recommendationUsageRefresh]);
+ }, [filters, liveRange, purposes, recommendationUsageRefresh]);
  useEffect(() => {
    const controller = new AbortController();
-   loadFailureConcentration(STATUS_PERIOD[liveRange], ['production'], controller.signal)
+   loadFailureConcentration(STATUS_PERIOD[liveRange], purposes, controller.signal, filters)
      .then(result => setFailureConcentration(result.data_source === 'test_database' ? result : null))
      .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setFailureConcentration(null); });
    return () => controller.abort();
- }, [failureConcentrationRefresh, liveRange]);
+ }, [failureConcentrationRefresh, filters, liveRange, purposes]);
  useEffect(() => {
    const controller = new AbortController();
-   loadFailureKpis(STATUS_PERIOD[liveRange], ['production'], controller.signal)
+   loadFailureKpis(STATUS_PERIOD[liveRange], purposes, controller.signal, filters)
      .then(result => setFailureKpis(result.data_source === 'test_database' ? result : null))
      .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setFailureKpis(null); });
    return () => controller.abort();
- }, [failureKpisRefresh, liveRange]);
+ }, [failureKpisRefresh, filters, liveRange, purposes]);
  useEffect(() => {
    const controller = new AbortController();
-   loadUnitOutcomesWeekly(['production'], controller.signal)
+   loadUnitOutcomesWeekly(purposes, controller.signal, filters)
      .then(result => setUnitOutcomes(result.data_source === 'test_database' ? result : null))
      .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setUnitOutcomes(null); });
    return () => controller.abort();
- }, [unitOutcomesRefresh]);
+ }, [filters, purposes, unitOutcomesRefresh]);
  const liveKpis = failureKpis && failureKpis.period.key === STATUS_PERIOD[liveRange] ? failureKpis : null;
  const liveKpiTiles = liveKpis ? failureKpiTiles(liveKpis, String(accent)) : null;
  const headerPeriod = liveKpis?.period ?? (failureConcentration?.period.key === STATUS_PERIOD[liveRange] ? failureConcentration.period : null);
- const changeLiveRange = (range: LiveReplacementRange) => {
+ const clearLive = (outcomes: boolean) => {
    setUnitStatus(null);
    setRecommendationUsage(null);
    setFailureConcentration(null);
    setFailureKpis(null);
+   if (outcomes) setUnitOutcomes(null);
+ };
+ const changeLiveRange = (range: LiveReplacementRange) => {
+   clearLive(false);
    setLiveRange(range);
+ };
+ const changePurpose = (key: PurposeChoice) => {
+   clearLive(true);
+   setPurposeChoice(key);
+ };
+ const setFilter = <K extends keyof ReportFilters>(key: K, value: ReportFilters[K]) => {
+   clearLive(true);
+   setFilters(current => ({ ...current, [key]: value }));
  };
  const refreshUnitStatus = () => {
    setUnitStatus(null);
@@ -213,14 +255,28 @@ export default function Failures() {
       </div>
       <div style={css("display:flex;flex-wrap:wrap;align-items:center;gap:8px")}>
         <label style={css("display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);font-weight:500")}>Period
-          <PreviewSelect style={css("min-height:44px;padding:0 10px;border-radius:9px;border:1px solid var(--line);background:var(--panel);font-size:13.5px;font-weight:500")}><option >Last 30 days</option><option >This week</option><option >Yesterday</option><option >Today</option></PreviewSelect>
+          {filterOptions ? <select aria-label="Period filter" value={liveRange} onChange={event => changeLiveRange(event.target.value as LiveReplacementRange)} style={css(HEADER_SELECT_STYLE)}>{PERIOD_CHOICES.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select>
+            : <PreviewSelect style={css(HEADER_SELECT_STYLE)}><option >Last 30 days</option><option >This week</option><option >Yesterday</option><option >Today</option></PreviewSelect>}
         </label>
         <label style={css("display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);font-weight:500")}>Run purpose
-          <PreviewSelect style={css("min-height:44px;padding:0 10px;border-radius:9px;border:1px solid var(--line);background:var(--panel);font-size:13.5px;font-weight:500")}><option >Production</option><option >Engineering</option><option >Production + engineering</option><option >Training</option><option >Calibration</option><option >All purposes</option></PreviewSelect>
+          {filterOptions ? <select aria-label="Run purpose filter" value={purposeChoice} onChange={event => changePurpose(event.target.value as PurposeChoice)} style={css(HEADER_SELECT_STYLE)}>{PURPOSE_CHOICES.map(item => <option key={item.key} value={item.key}>{item.label}</option>)}</select>
+            : <PreviewSelect style={css(HEADER_SELECT_STYLE)}><option >Production</option><option >Engineering</option><option >Production + engineering</option><option >Training</option><option >Calibration</option><option >All purposes</option></PreviewSelect>}
         </label>
         <label style={css("display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);font-weight:500")}>Model
-          <PreviewSelect style={css("min-height:44px;padding:0 10px;border-radius:9px;border:1px solid var(--line);background:var(--panel);font-size:13.5px;font-weight:500")}><option >All models</option><option >OSX-150</option><option >OSX-100</option></PreviewSelect>
+          {filterOptions ? <select aria-label="Model filter" value={filters.switch_model ?? ''} onChange={event => setFilter('switch_model', event.target.value || null)} style={css(HEADER_SELECT_STYLE)}><option value="">All models</option>{filterOptions.switch_models.map(model => <option key={model} value={model}>{model}</option>)}</select>
+            : <PreviewSelect style={css(HEADER_SELECT_STYLE)}><option >All models</option><option >OSX-150</option><option >OSX-100</option></PreviewSelect>}
         </label>
+        {filterOptions && <>
+          <label style={css("display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);font-weight:500")}>Mode
+            <select aria-label="Mode filter" value={filters.wavelength_mode ?? ''} onChange={event => setFilter('wavelength_mode', event.target.value === 'SM' || event.target.value === 'MM' ? event.target.value : null)} style={css(HEADER_SELECT_STYLE)}><option value="">SM + MM</option>{filterOptions.wavelength_modes.map(mode => <option key={mode} value={mode}>{mode}</option>)}</select>
+          </label>
+          <label style={css("display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);font-weight:500")}>Channels
+            <select aria-label="Channels filter" value={filters.channel_count ?? ''} onChange={event => setFilter('channel_count', event.target.value ? Number(event.target.value) : null)} style={css(HEADER_SELECT_STYLE)}><option value="">All</option>{filterOptions.channel_counts.map(count => <option key={count} value={count}>{count}</option>)}</select>
+          </label>
+          <label style={css("display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);font-weight:500")}>Station
+            <select aria-label="Station filter" value={filters.station ?? ''} onChange={event => setFilter('station', event.target.value ? Number(event.target.value) : null)} style={css(HEADER_SELECT_STYLE)}><option value="">All stations</option>{filterOptions.stations.map(station => <option key={station} value={station}>Station {station}</option>)}</select>
+          </label>
+        </>}
         <PreviewButton type="button" style={css("min-height:44px;padding:0 14px;border-radius:9px;border:1px solid var(--line);background:var(--panel);font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:8px")}>
           <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true" style={css("fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round")}><path d="M12 4v11M7 10l5 5 5-5M5 20h14"></path></svg>
           Export CSV
@@ -228,13 +284,13 @@ export default function Failures() {
       </div>
     </header>
 
-    <LiveReplacementActivityPanel range={liveRange} onRangeChange={changeLiveRange} />
+    <LiveReplacementActivityPanel range={liveRange} onRangeChange={changeLiveRange} switchModel={filters.switch_model} />
 
     {liveKpiTiles ? <>
-    <p className="preview-note">The header filters and export are disabled previews.</p>
+    <p className="preview-note">{filterOptions ? 'Header Period, Run purpose and filters apply to every live panel; Replacement activity follows Period and Model only. Export CSV is a disabled preview.' : 'The header filters and export are disabled previews.'}</p>
     <section aria-label="Key metrics" id="failure-kpis" data-source="live-failure-kpis" style={css("display:flex;flex-direction:column;gap:8px")}>
       <div style={css("display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px")}>
-        <span style={css("display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:12.5px;color:var(--muted)")}><span className="live-unit-badge">Live · test database</span>Production units finished {HISTOGRAM_RANGE_LABEL[liveRange]}; retests are run-channels with activity in the range.{liveKpis?.incomplete && <span style={css("color:var(--warn-fg)")}>Bounded cohort is incomplete.</span>}</span>
+        <span style={css("display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:12.5px;color:var(--muted)")}><span className="live-unit-badge">Live · test database</span>{purposeText} units finished {HISTOGRAM_RANGE_LABEL[liveRange]}; retests are run-channels with activity in the range.{liveKpis?.incomplete && <span style={css("color:var(--warn-fg)")}>Bounded cohort is incomplete.</span>}</span>
         <button type="button" aria-label="Refresh key metrics" onClick={() => setFailureKpisRefresh(value => value + 1)} style={css("min-height:28px;padding:0 8px;border-radius:6px;border:1px solid var(--line);background:var(--panel);color:var(--ink2);font-size:10.5px;font-weight:600")}>Refresh</button>
       </div>
       <div style={css("display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px")}>
@@ -439,7 +495,7 @@ export default function Failures() {
       <div style={css("display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;gap:10px")}>
         <div style={css("display:flex;flex-direction:column;gap:3px")}>
           <h2 style={css("margin:0;font-size:16px;font-weight:600")} title={unitStatus ? 'Current measured status; this is not a scrap or reject record.' : undefined}>Unrecoverable units</h2>
-          <span style={css("font-size:12.5px;color:var(--muted)")}>{unitStatus ? `Currently failing units · ${liveFailingUnits.length.toLocaleString('en-US')} in the bounded production cohort.` : 'Showing 7 of 27, newest first. Usable extras pass at both wavelengths and are not already in use.'}</span>
+          <span style={css("font-size:12.5px;color:var(--muted)")}>{unitStatus ? `Currently failing units · ${liveFailingUnits.length.toLocaleString('en-US')} in the bounded cohort.` : 'Showing 7 of 27, newest first. Usable extras pass at both wavelengths and are not already in use.'}</span>
           {unitStatus && <span style={css("align-self:flex-start;font-size:10px;font-weight:650;letter-spacing:.05em;text-transform:uppercase;padding:3px 8px;border-radius:999px;background:color-mix(in srgb,var(--accent) 10%,var(--panel));color:var(--accent-ink)")}>Live · test database</span>}
           {unitStatus && <span style={css("font-size:11.5px;color:var(--muted)")}>{unitStatus.counts.review_required.toLocaleString('en-US')} review required · {unitStatus.counts.not_evaluated.toLocaleString('en-US')} not evaluated{unitStatus.incomplete ? ' · bounded result incomplete' : ''}</span>}
         </div>

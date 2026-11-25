@@ -67,7 +67,14 @@ ROWS = [
 
 def test_sql_binds_selected_period_and_preserves_shared_sql_text():
     boundaries = compute_channel_activity_boundaries(EXTRACTED_AT)
-    query = FailureConcentrationQuery(period="this_week", purposes=("production", "engineering"))
+    query = FailureConcentrationQuery(
+        period="this_week",
+        purposes=("production", "engineering"),
+        switch_model="DEMO-MODEL-A",
+        wavelength_mode="SM",
+        channel_count=36,
+        station=2,
+    )
     (sql, params), (limits_sql, limit_params) = build_failure_concentration_queries(
         query, boundaries
     )
@@ -80,14 +87,14 @@ def test_sql_binds_selected_period_and_preserves_shared_sql_text():
         "engineering",
         "engineering",
         "engineering",
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
+        "DEMO-MODEL-A",
+        "DEMO-MODEL-A",
+        "SM",
+        "SM",
+        36,
+        36,
+        2,
+        2,
     )
     assert sql == FAILURE_CONCENTRATION_SQL and limits_sql == FAILURE_RATE_LIMITS_SQL
     assert params == (*expected_filters, start, end)
@@ -134,6 +141,41 @@ def test_sql_binds_selected_period_and_preserves_shared_sql_text():
         }.items()
     }
     assert actual == expected_hashes
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected_pair"),
+    [
+        ("switch_model", "DEMO-MODEL-A", ("DEMO-MODEL-A",) * 2),
+        ("wavelength_mode", "MM", ("MM",) * 2),
+        ("channel_count", 64, (64,) * 2),
+        ("station", 3, (3,) * 2),
+    ],
+)
+def test_each_shared_filter_is_bound_before_the_candidate_run_cap(field, value, expected_pair):
+    boundaries = compute_channel_activity_boundaries(EXTRACTED_AT)
+    query = FailureConcentrationQuery(**{field: value})
+    (sql, params), (_, limit_params) = build_failure_concentration_queries(query, boundaries)
+    filter_values = params[6:14]
+    offset = {"switch_model": 0, "wavelength_mode": 2, "channel_count": 4, "station": 6}[field]
+    assert filter_values[offset : offset + 2] == expected_pair
+    assert all(
+        item is None
+        for index, item in enumerate(filter_values)
+        if index not in {offset, offset + 1}
+    )
+    assert limit_params[6:14] == filter_values
+    assert sql.index("AND (? IS NULL OR s.switch_model = ?)") < sql.index("ORDER BY r.run_id")
+
+
+def test_unfiltered_query_keeps_all_shared_filter_parameters_null():
+    boundaries = compute_channel_activity_boundaries(EXTRACTED_AT)
+    (sql, params), (_, limit_params) = build_failure_concentration_queries(
+        FailureConcentrationQuery(), boundaries
+    )
+    assert params[6:14] == (None,) * 8
+    assert limit_params[6:14] == (None,) * 8
+    assert "AND (? IS NULL OR r.station_number = ?)" in sql
 
 
 def test_summary_splits_same_port_by_extra_and_matches_channel_failures_totals():
@@ -291,12 +333,22 @@ def test_connected_contract_period_filters_and_order(application):
                 ("period", "yesterday"),
                 ("purpose", "production"),
                 ("purpose", "engineering"),
+                ("switch_model", "DEMO-MODEL-A"),
+                ("wavelength_mode", "SM"),
+                ("channel_count", "36"),
+                ("station", "2"),
             ],
         )
     assert response.status_code == 200
     result = FailureConcentrationConnectedResponse.model_validate(response.json())
     assert result.period.key == "yesterday" and result.period.partial is False
-    assert result.filters.purpose == ["production", "engineering"]
+    assert result.filters.model_dump(mode="json") == {
+        "purpose": ["production", "engineering"],
+        "switch_model": "DEMO-MODEL-A",
+        "wavelength_mode": "SM",
+        "channel_count": 36,
+        "station": 2,
+    }
     assert [item.logical_channel for item in result.channels] == [1, 2, 3]
     assert [(item.physical_port, item.extra) for item in result.ports][-2:] == [
         (50, False),
@@ -304,7 +356,7 @@ def test_connected_contract_period_filters_and_order(application):
     ]
     assert result.totals.failed == 3 and result.runs == 4
     query, _ = fake.calls[0]
-    assert query.period == "yesterday" and query.purposes == ("production", "engineering")
+    assert query.period == "yesterday" and query.station == 2
 
 
 @pytest.mark.parametrize(
@@ -312,7 +364,10 @@ def test_connected_contract_period_filters_and_order(application):
     [
         {"period": "forever"},
         [("purpose", "production"), ("purpose", "production")],
-        {"wavelength_mode": "SM"},
+        {"switch_model": "x" * 31},
+        {"wavelength_mode": "INVALID"},
+        {"channel_count": 0},
+        {"station": 0},
         {"unknown": "value"},
     ],
 )

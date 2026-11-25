@@ -77,16 +77,16 @@ function Connected({ data, range }: { data: ReplacementActivityConnectedResponse
   </div>;
 }
 
-export function LiveReplacementActivityPanel({ range, onRangeChange }: { range: LiveReplacementRange; onRangeChange: (range: LiveReplacementRange) => void }) {
+export function LiveReplacementActivityPanel({ range, onRangeChange, switchModel = null }: { range: LiveReplacementRange; onRangeChange: (range: LiveReplacementRange) => void; switchModel?: string | null }) {
   const [refresh, setRefresh] = useState(0);
   const [state, setState] = useState<State>({ kind: 'loading' });
   useEffect(() => {
     const controller = new AbortController();
-    loadReplacementActivity(null, controller.signal)
+    loadReplacementActivity(switchModel, controller.signal)
       .then(result => setState(result.data_source === 'test_database' ? { kind: 'connected', data: result } : { kind: 'not_connected' }))
       .catch(error => { if (!(error instanceof DOMException && error.name === 'AbortError')) setState(statusFor(error)); });
     return () => controller.abort();
-  }, [refresh]);
+  }, [refresh, switchModel]);
   const refreshPanel = () => {
     setState({ kind: 'loading' });
     setRefresh(value => value + 1);
@@ -96,7 +96,7 @@ export function LiveReplacementActivityPanel({ range, onRangeChange }: { range: 
       <div style={css('display:flex;flex-direction:column;gap:4px')}>
         <span style={css('align-self:flex-start;font-size:10px;font-weight:650;letter-spacing:.05em;text-transform:uppercase;padding:3px 8px;border-radius:999px;background:color-mix(in srgb,var(--accent) 10%,var(--panel));color:var(--accent-ink)')}>Live · test database</span>
         <h2 style={css('margin:0;font-size:16px;font-weight:600')}>Replacement activity</h2>
-        <span style={css('font-size:12.5px;color:var(--muted)')}>Recorded replacement events and exact distinct assignment/channel counts across all attributions.</span>
+        <span style={css('font-size:12.5px;color:var(--muted)')}>Recorded replacement events and exact distinct assignment/channel counts across all attributions{switchModel ? `, ${switchModel} only` : ''}. Follows the page Period and Model.</span>
       </div>
       <div style={css('display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:8px')}>
         <SegmentedControl label="Live replacement range" options={RANGE_OPTIONS} value={range} onChange={onRangeChange} />
@@ -109,6 +109,7 @@ export function LiveReplacementActivityPanel({ range, onRangeChange }: { range: 
     {state.kind === 'database_error' && <Status>Database check failed (<code>{state.code}</code>)</Status>}
     {state.kind === 'invalid_response' && <Status>The backend returned an unexpected response.</Status>}
     {state.kind === 'request_failed' && <Status>Live replacement activity could not be loaded.</Status>}
-    {state.kind === 'connected' && <Connected data={state.data} range={range} />}
+    {state.kind === 'connected' && state.data.filters.switch_model !== switchModel && <Status>Loading live test data…</Status>}
+    {state.kind === 'connected' && state.data.filters.switch_model === switchModel && <Connected data={state.data} range={range} />}
   </section>;
 }

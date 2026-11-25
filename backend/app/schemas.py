@@ -148,15 +148,11 @@ class FailureKpisQueryParams(UnitTestTimeQueryParams):
     pass
 
 
-class UnitOutcomesWeeklyQueryParams(BaseModel):
-    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
-
+class UnitOutcomesWeeklyQueryParams(ReportingFilterQueryParams):
     purpose: list[RunPurpose] = Field(default_factory=lambda: [RunPurpose.PRODUCTION])
 
 
-class RecommendationUsageQueryParams(BaseModel):
-    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
-
+class RecommendationUsageQueryParams(ReportingFilterQueryParams):
     period: Literal["today", "yesterday", "this_week", "last_30_days"] = "last_30_days"
     purpose: list[RunPurpose] = Field(default_factory=lambda: [RunPurpose.PRODUCTION])
 
@@ -171,9 +167,7 @@ class ChannelFailuresQueryParams(ReportingFilterQueryParams):
     purpose: list[RunPurpose] = Field(default_factory=lambda: [RunPurpose.PRODUCTION])
 
 
-class FailureConcentrationQueryParams(BaseModel):
-    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
-
+class FailureConcentrationQueryParams(ReportingFilterQueryParams):
     period: Literal["today", "yesterday", "this_week", "last_30_days"] = "last_30_days"
     purpose: list[RunPurpose] = Field(default_factory=lambda: [RunPurpose.PRODUCTION])
 
@@ -463,8 +457,8 @@ class UnitStatusPeriodResponse(BaseModel):
     partial: bool
 
 
-class UnitStatusFilters(BaseModel):
-    purpose: list[RunPurpose]
+class UnitStatusFilters(ChannelActivityFilters):
+    model_config = ConfigDict(extra="forbid")
 
 
 class UnitStatusCounts(BaseModel):
@@ -719,10 +713,8 @@ class UnitOutcomesWeeklyItemResponse(BaseModel):
         return self
 
 
-class UnitOutcomesWeeklyFilters(BaseModel):
+class UnitOutcomesWeeklyFilters(ChannelActivityFilters):
     model_config = ConfigDict(extra="forbid")
-
-    purpose: list[RunPurpose]
 
 
 class UnitOutcomesWeeklyExcludedResponse(BaseModel):

@@ -215,7 +215,7 @@ def parse_latest_stations(
 
 def filter_finished_unit_records(
     records: Sequence[FinishedUnitRecord],
-    query: UnitTestTimeQuery,
+    query: UnitTestTimeQuery | UnitOutcomesWeeklyQuery,
     stations: dict[int, int | None],
 ) -> tuple[FinishedUnitRecord, ...]:
     return tuple(

@@ -17,7 +17,11 @@ from app.reporting.unit_outcomes_weekly import (
     read_unit_outcomes_weekly,
     summarize_unit_outcomes_weekly,
 )
-from app.reporting.unit_test_time import FinishedUnitCohort, FinishedUnitRecord
+from app.reporting.unit_test_time import (
+    FinishedUnitCohort,
+    FinishedUnitRecord,
+    filter_finished_unit_records,
+)
 from app.schemas import UnitOutcomesWeeklyConnectedResponse
 
 EXTRACTED_AT = datetime(2026, 11, 17, 20, 30, 45, 123456, tzinfo=UTC)
@@ -32,6 +36,9 @@ def record(
     reason=None,
     outside=False,
     missing_duration=False,
+    switch_model="DEMO-MODEL-A",
+    wavelength_mode="SM",
+    channel_count=36,
 ):
     return FinishedUnitRecord(
         unit_id=unit_id,
@@ -45,6 +52,9 @@ def record(
         run_count=1,
         active_run_count=0 if missing_duration else 1,
         fallback_run_count=0,
+        switch_model=switch_model,
+        wavelength_mode=wavelength_mode,
+        channel_count=channel_count,
     )
 
 
@@ -164,6 +174,76 @@ def test_empty_finished_window_skips_replacement_query(monkeypatch):
     )
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("switch_model", "DEMO-MODEL-A"),
+        ("wavelength_mode", "SM"),
+        ("channel_count", 36),
+        ("station", 7),
+    ],
+)
+def test_each_unit_filter_matches_context_and_null_never_matches(field, value):
+    matching = record(1)
+    null_record = record(
+        2,
+        switch_model=None,
+        wavelength_mode=None,
+        channel_count=None,
+    )
+    query = UnitOutcomesWeeklyQuery(**{field: value})
+    stations = {1: 7, 2: None} if field == "station" else {}
+    assert filter_finished_unit_records((matching, null_record), query, stations) == (matching,)
+
+
+def test_combined_unit_filters_and_unfiltered_identity():
+    records = (record(1), record(2, wavelength_mode="MM"))
+    combined = UnitOutcomesWeeklyQuery(
+        switch_model="DEMO-MODEL-A", wavelength_mode="SM", channel_count=36, station=7
+    )
+    assert filter_finished_unit_records(records, combined, {1: 7, 2: 7}) == (records[0],)
+    assert filter_finished_unit_records(records, UnitOutcomesWeeklyQuery(), {}) == records
+
+
+class RowsResult:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def fetchmany(self, _size):
+        return self.rows
+
+
+class RecordingCursor:
+    def __init__(self, station_rows):
+        self.station_rows = station_rows
+        self.calls = []
+
+    def execute(self, sql, params):
+        self.calls.append((sql, params))
+        return RowsResult(self.station_rows)
+
+
+def test_weekly_station_lookup_runs_only_when_station_filter_is_set(monkeypatch):
+    finished = record(1, outcome="unrecoverable")
+    monkeypatch.setattr(
+        "app.reporting.unit_outcomes_weekly.read_finished_unit_cohort",
+        lambda cursor, query, window: FinishedUnitCohort((finished,), False),
+    )
+
+    unfiltered_cursor = RecordingCursor([])
+    unfiltered = read_unit_outcomes_weekly(unfiltered_cursor, UnitOutcomesWeeklyQuery(), BOUNDARIES)
+    assert [item.unit_id for item in unfiltered.units] == [1]
+    assert unfiltered_cursor.calls == []
+
+    filtered_cursor = RecordingCursor([(1, 7)])
+    filtered = read_unit_outcomes_weekly(
+        filtered_cursor, UnitOutcomesWeeklyQuery(station=7), BOUNDARIES
+    )
+    assert [item.unit_id for item in filtered.units] == [1]
+    assert len(filtered_cursor.calls) == 1
+    assert "ROW_NUMBER() OVER" in filtered_cursor.calls[0][0]
+
+
 class FakeRepository:
     def __init__(self, result=None, error=None):
         self.result = result
@@ -195,11 +275,23 @@ def test_not_connected_connected_and_sanitized_503(client, application):
     with TestClient(application) as connected_client:
         response = connected_client.get(
             "/api/v1/reporting/unit-outcomes-weekly",
-            params=[("purpose", "production")],
+            params=[
+                ("purpose", "production"),
+                ("switch_model", "DEMO-MODEL-A"),
+                ("wavelength_mode", "SM"),
+                ("channel_count", "36"),
+                ("station", "2"),
+            ],
         )
     assert response.status_code == 200
     parsed = UnitOutcomesWeeklyConnectedResponse.model_validate(response.json())
-    assert parsed.filters.purpose == ["production"]
+    assert parsed.filters.model_dump(mode="json") == {
+        "purpose": ["production"],
+        "switch_model": "DEMO-MODEL-A",
+        "wavelength_mode": "SM",
+        "channel_count": 36,
+        "station": 2,
+    }
     assert parsed.units[0].main_board_serial == "DEMO-UNIT-001"
     assert fake.calls[0][0].purposes == ("production",)
 
@@ -218,6 +310,10 @@ def test_not_connected_connected_and_sanitized_503(client, application):
         {"period": "last_30_days"},
         [("purpose", "production"), ("purpose", "production")],
         {"purpose": "unknown"},
+        {"switch_model": "x" * 31},
+        {"wavelength_mode": "INVALID"},
+        {"channel_count": 0},
+        {"station": 0},
         {"unexpected": "DEMO"},
     ],
 )

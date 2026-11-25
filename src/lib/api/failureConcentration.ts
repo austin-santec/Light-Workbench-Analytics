@@ -1,6 +1,7 @@
 import type { Purpose } from '../../types';
 import { CHANNEL_ACTIVITY_PERIODS, type ChannelActivityPeriodKey } from './channelActivity';
 import { RUN_PURPOSES, RunActivityClientError } from './runActivity';
+import { appendReportFilters, filterEchoMatches, isReportFilterEcho, NO_FILTERS, type ReportFilterEcho, type ReportFilters } from './reportFilters';
 
 export interface FailureConcentrationCounts {
   failed: number;
@@ -29,7 +30,7 @@ export interface FailureConcentrationConnectedResponse {
     end_utc: string;
     partial: boolean;
   };
-  filters: { purpose: Purpose[] };
+  filters: ReportFilterEcho;
   classification_rule: 'strict >, run limit snapshot';
   totals: FailureConcentrationCounts;
   runs: number;
@@ -104,8 +105,7 @@ export function isFailureConcentrationConnectedResponse(
     || !utcTimestamp(period.start_utc) || !utcTimestamp(period.end_utc)
     || typeof period.partial !== 'boolean'
     || Date.parse(period.start_utc) > Date.parse(period.end_utc)) return false;
-  const filters = value.filters;
-  if (!isRecord(filters) || !exactKeys(filters, ['purpose']) || !validPurposes(filters.purpose)) return false;
+  if (!isReportFilterEcho(value.filters)) return false;
   if (!isRecord(value.totals) || !exactKeys(value.totals, COUNT_KEYS) || !isCounts(value.totals)) return false;
   if (!nonnegativeInteger(value.runs) || typeof value.incomplete !== 'boolean') return false;
   if (!Array.isArray(value.channels) || !value.channels.every(isChannel)
@@ -137,12 +137,14 @@ export async function loadFailureConcentration(
   period: ChannelActivityPeriodKey,
   purposes: readonly Purpose[],
   signal: AbortSignal,
+  filters: ReportFilters = NO_FILTERS,
 ): Promise<FailureConcentrationResult> {
   if (!CHANNEL_ACTIVITY_PERIODS.includes(period) || !validPurposes([...purposes])) {
     throw new RunActivityClientError('invalid_response');
   }
   const query = new URLSearchParams({ period });
   purposes.forEach(purpose => query.append('purpose', purpose));
+  appendReportFilters(query, filters);
   const response = await fetch(`/api/v1/reporting/failure-concentration?${query}`, {
     signal,
     headers: { Accept: 'application/json' },
@@ -161,8 +163,7 @@ export async function loadFailureConcentration(
     return { data_source: 'not_connected' };
   }
   if (!isFailureConcentrationConnectedResponse(body) || body.period.key !== period
-    || body.filters.purpose.length !== purposes.length
-    || body.filters.purpose.some((purpose, index) => purpose !== purposes[index])) {
+    || !filterEchoMatches(body.filters, purposes, filters)) {
     throw new RunActivityClientError('invalid_response');
   }
   return body;

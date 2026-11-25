@@ -1,5 +1,6 @@
 """Offline R06 recommendation-usage tests. No test opens a database connection."""
 
+import hashlib
 import re
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -70,7 +71,14 @@ class FakeCursor:
 
 def test_parameter_order_window_binding_and_purpose_slots():
     boundaries = compute_channel_activity_boundaries(EXTRACTED_AT)
-    query = RecommendationUsageQuery(period="today", purposes=("production", "engineering"))
+    query = RecommendationUsageQuery(
+        period="today",
+        purposes=("production", "engineering"),
+        switch_model="DEMO-MODEL-A",
+        wavelength_mode="SM",
+        channel_count=36,
+        station=2,
+    )
     sql, params = build_recommendation_usage_query(query, boundaries)
     assert sql == RECOMMENDATION_USAGE_SQL
     assert params == (
@@ -81,17 +89,34 @@ def test_parameter_order_window_binding_and_purpose_slots():
         "engineering",
         "engineering",
         datetime(2026, 11, 13, 20),
+        "DEMO-MODEL-A",
+        "DEMO-MODEL-A",
+        "SM",
+        "SM",
+        36,
+        36,
+        2,
+        2,
     )
-    assert sql.count("?") == len(params) == 7
+    assert sql.count("?") == len(params) == 15
 
 
 def test_sql_is_fixed_read_only_and_uses_distinct_ids_and_safe_json_rules():
     sql = RECOMMENDATION_USAGE_SQL
+    assert hashlib.sha256(sql.encode()).hexdigest() == (
+        "1513da7ae1a28097d398aa0c093019e0458f1120ec7ed437647d7639c992b358"
+    )
     assert "SELECT DISTINCT analysis_id" in sql
     assert "SELECT DISTINCT rr.recommendation_id" in sql
     assert "WHERE EXISTS" in sql
     assert "x.replaced_at_utc <= t.extracted_at_utc" in sql
     assert "AVG(CAST(improvement_db AS DECIMAL(19,6)))" in sql
+    assert "JOIN dbo.UNIT_SWITCH_ASSIGNMENTS AS assignment" in sql
+    assert "JOIN dbo.SWITCHES AS s" in sql
+    assert "s.switch_model = ?" in sql
+    assert "r.wavelength_mode = ?" in sql
+    assert "r.front_panel_channel_count = ?" in sql
+    assert "r.station_number = ?" in sql
     assert "vw_ReplacementRecommendationUsage" not in sql
     assert "JSON_VALUE" not in sql
     assert "SELECT *" not in sql.upper() and " INTO " not in sql.upper()
@@ -101,6 +126,59 @@ def test_sql_is_fixed_read_only_and_uses_distinct_ids_and_safe_json_rules():
         unquoted,
         re.I,
     )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected_pair"),
+    [
+        ("switch_model", "DEMO-MODEL-A", ("DEMO-MODEL-A",) * 2),
+        ("wavelength_mode", "MM", ("MM",) * 2),
+        ("channel_count", 64, (64,) * 2),
+        ("station", 3, (3,) * 2),
+    ],
+)
+def test_each_shared_filter_is_bound_on_the_analysed_run(field, value, expected_pair):
+    boundaries = compute_channel_activity_boundaries(EXTRACTED_AT)
+    _, params = build_recommendation_usage_query(
+        RecommendationUsageQuery(**{field: value}), boundaries
+    )
+    filter_values = params[7:15]
+    offset = {"switch_model": 0, "wavelength_mode": 2, "channel_count": 4, "station": 6}[field]
+    assert filter_values[offset : offset + 2] == expected_pair
+    assert all(
+        item is None
+        for index, item in enumerate(filter_values)
+        if index not in {offset, offset + 1}
+    )
+
+
+def test_unfiltered_parameters_are_null_and_filtering_one_analysis_removes_its_counts():
+    boundaries = compute_channel_activity_boundaries(EXTRACTED_AT)
+    _, params = build_recommendation_usage_query(RecommendationUsageQuery(), boundaries)
+    assert params[7:15] == (None,) * 8
+
+    analyses = [
+        (1, "DEMO-MODEL-A", True),
+        (2, "DEMO-MODEL-B", True),
+        (3, None, False),
+    ]
+    recommendations = [(101, 1), (102, 2), (103, 3)]
+    linked_ids = {101, 102, 103}
+    selected_analysis_ids = {
+        analysis_id for analysis_id, model, _ in analyses if model == "DEMO-MODEL-A"
+    }
+    valid_ids = {
+        analysis_id for analysis_id, model, valid in analyses if model == "DEMO-MODEL-A" and valid
+    }
+    cohort_recommendations = [
+        recommendation_id
+        for recommendation_id, analysis_id in recommendations
+        if analysis_id in valid_ids
+    ]
+    assert selected_analysis_ids == {1}
+    assert valid_ids == {1}
+    assert cohort_recommendations == [101]
+    assert [item for item in cohort_recommendations if item in linked_ids] == [101]
 
 
 def test_fake_cursor_returns_splits_invalid_count_and_decimal_rounding():
@@ -245,12 +323,25 @@ def test_not_connected_connected_and_sanitized_503(client, application):
     with TestClient(application) as connected_client:
         response = connected_client.get(
             "/api/v1/reporting/recommendation-usage",
-            params=[("period", "today"), ("purpose", "production")],
+            params=[
+                ("period", "today"),
+                ("purpose", "production"),
+                ("switch_model", "DEMO-MODEL-A"),
+                ("wavelength_mode", "SM"),
+                ("channel_count", "36"),
+                ("station", "2"),
+            ],
         )
     assert response.status_code == 200
     result = RecommendationUsageConnectedResponse.model_validate(response.json())
     assert result.period.key == "today"
-    assert result.filters.purpose == ["production"]
+    assert result.filters.model_dump(mode="json") == {
+        "purpose": ["production"],
+        "switch_model": "DEMO-MODEL-A",
+        "wavelength_mode": "SM",
+        "channel_count": 36,
+        "station": 2,
+    }
     assert result.linked_share == "0.6667"
     assert result.avg_improvement_linked_db.value == "0.4250"
     assert fake.calls[0][1].extracted_at_utc == EXTRACTED_AT
@@ -271,6 +362,10 @@ def test_not_connected_connected_and_sanitized_503(client, application):
         {"period": "all_time"},
         [("purpose", "production"), ("purpose", "production")],
         {"purpose": "unknown"},
+        {"switch_model": "x" * 31},
+        {"wavelength_mode": "INVALID"},
+        {"channel_count": 0},
+        {"station": 0},
         {"unexpected": "DEMO"},
     ],
 )

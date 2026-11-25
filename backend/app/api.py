@@ -278,7 +278,9 @@ def validated_unit_outcomes_weekly_query(
     params: Annotated[UnitOutcomesWeeklyQueryParams, Query()],
 ) -> UnitOutcomesWeeklyQuery:
     try:
-        return UnitOutcomesWeeklyQuery(purposes=tuple(params.purpose))
+        return UnitOutcomesWeeklyQuery(
+            purposes=tuple(params.purpose), **_reporting_filter_values(params)
+        )
     except ValidationError as exc:
         errors = [
             item | {"loc": ("query", *item["loc"])}
@@ -311,7 +313,9 @@ def validated_failure_concentration_query(
     params: Annotated[FailureConcentrationQueryParams, Query()],
 ) -> FailureConcentrationQuery:
     try:
-        return FailureConcentrationQuery(period=params.period, purposes=tuple(params.purpose))
+        return FailureConcentrationQuery(
+            period=params.period, purposes=tuple(params.purpose), **_reporting_filter_values(params)
+        )
     except ValidationError as exc:
         errors = [
             item | {"loc": ("query", *item["loc"])}
@@ -354,7 +358,9 @@ def validated_recommendation_usage_query(
     params: Annotated[RecommendationUsageQueryParams, Query()],
 ) -> RecommendationUsageQuery:
     try:
-        return RecommendationUsageQuery(period=params.period, purposes=tuple(params.purpose))
+        return RecommendationUsageQuery(
+            period=params.period, purposes=tuple(params.purpose), **_reporting_filter_values(params)
+        )
     except ValidationError as exc:
         errors = [
             item | {"loc": ("query", *item["loc"])}
@@ -771,7 +777,7 @@ def failure_concentration(
             end_utc=window.end_utc,
             partial=window.partial,
         ),
-        filters=UnitStatusFilters(purpose=list(query.purposes)),
+        filters=UnitStatusFilters(**_reporting_filter_echo(query)),
         totals=FailureRateCountsResponse(**metrics.totals.model_dump()),
         runs=metrics.runs,
         channels=[
@@ -1090,7 +1096,7 @@ def unit_outcomes_weekly(
         tls=access.tls,
         extracted_at_utc=boundaries.extracted_at_utc,
         timezone=PACIFIC_TIMEZONE_NAME,
-        filters=UnitOutcomesWeeklyFilters(purpose=list(query.purposes)),
+        filters=UnitOutcomesWeeklyFilters(**_reporting_filter_echo(query)),
         weeks=[asdict(week) for week in metrics.weeks],
         units=[asdict(unit) for unit in metrics.units],
         excluded=metrics.excluded,
@@ -1127,7 +1133,7 @@ def recommendation_usage(
             end_utc=window.end_utc,
             partial=window.partial,
         ),
-        filters=UnitStatusFilters(purpose=list(query.purposes)),
+        filters=UnitStatusFilters(**_reporting_filter_echo(query)),
         analyses=RecommendationUsageAnalyses(
             cohort=metrics.analyses_cohort,
             with_recommendations=metrics.analyses_with_recommendations,
